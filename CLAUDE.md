@@ -1,4 +1,87 @@
 <laravel-boost-guidelines>
+=== .ai/docker-runtime rules ===
+
+# Docker Runtime
+
+This project runs entirely inside Docker. Host PHP must never be used: its version and extensions differ from the container runtime, and service hostnames (`db`, `redis`) only resolve inside the compose network.
+
+## Required commands
+
+Run every PHP, Composer, and Node command inside the containers:
+
+```bash
+make artisan artisan_args="route:list"   # php artisan ...
+
+make composer composer_args="install"    # composer ...
+
+make npm npm_args="run build"            # npm ...
+
+make test                                # php artisan test
+
+make shell                               # shell in the app container
+
+```
+
+For anything not covered by the Makefile, use `docker exec` with the app container:
+
+```bash
+docker exec sala-app-1 php artisan tinker --execute='...'
+```
+
+## MCP servers
+
+MCP servers such as Laravel Boost are launched through `docker exec -i` in `.mcp.json`. The stack must be running (`make up`) before an MCP client connects.
+
+## Never do
+
+- `php artisan ...`, `composer ...`, `vendor/bin/pint`, `vendor/bin/pest` directly on the host.
+- Starting the app with `php artisan serve` or `composer run dev` — use `make up` / `make build`.
+
+=== .ai/laravel-docker-template rules ===
+
+# Laravel Docker Template
+
+The `laravel-docker-template` directory is the reusable source template for this project's Docker setup.
+
+When changing Docker, runtime, or local development configuration in the project root, make the equivalent generic change in `laravel-docker-template` during the same task.
+
+Application containers load the project's `.env` through `env_file`, so new environment variables reach `app`, queue, and scheduler containers after a recreate/redeploy without compose changes. Only add a variable to the `x-app-environment` block when its value must be overridden inside Docker (for example `DB_HOST`, `REDIS_HOST`). Never copy project-specific variables or secrets into `laravel-docker-template`.
+
+This applies to:
+
+- `.dockerignore`
+- `.env.docker.example`
+- `Dockerfile`
+- `Makefile`
+- `docker-compose.yml`
+- `docker-compose.override.yml`
+- `docker/app/*`
+- Docker-related README instructions
+
+Keep the template reusable. Do not copy project-specific secrets, local machine paths, app names, generated files, or one-off values into `laravel-docker-template` unless the change is intentionally part of the reusable template.
+
+=== .ai/project-ai-design rules ===
+
+## Project AI Design Rules
+
+- Never propose or implement phrase-level hardcoding as the primary solution for AI intent detection, conversation follow-ups, language handling, or catalog/search behavior. Do not solve ambiguous context by checking for specific customer phrases or wording variants. Prefer explicit conversation state, structured intent classification, typed tool parameters, semantic constraints, or changes to the tool contract. If a keyword guard is truly unavoidable as a temporary production safety patch, state that it is a stopgap and ask for approval before implementing it.
+
+=== .ai/storefront-design-preview rules ===
+
+# Storefront Design Preview
+
+Any change to storefront UI or storefront-facing visual design MUST be reflected in:
+
+resources/views/storefront-design-preview.blade.php
+
+Do this even when the actual implementation also changes another Blade view, Livewire component, Vue/React component, or CSS/Tailwind classes.
+
+This applies to product pages, category pages, product cards, storefront homepage sections, mobile layouts, responsive states, and visual mockups.
+
+The preview update must be a close visual match to the production UI, not just a short mention or rough approximation of the new feature. Match the relevant Blade/component structure, layout, controls, labels, spacing, and states closely enough that the preview can be used for design review.
+
+When a storefront page has both mobile and desktop preview states, update every relevant viewport/state shown in `storefront-design-preview.blade.php`. Do not update only mobile or only desktop unless the changed screen exists in the preview for only that viewport.
+
 === foundation rules ===
 
 # Laravel Boost Guidelines
@@ -9,8 +92,9 @@ The Laravel Boost guidelines are specifically curated by Laravel maintainers for
 
 This application is a Laravel application and its main Laravel ecosystems package & versions are below. You are an expert with them all. Ensure you abide by these specific packages & versions.
 
-- php - 8.5
+- php - 8.4
 - laravel/framework (LARAVEL) - v13
+- laravel/octane (OCTANE) - v2
 - laravel/prompts (PROMPTS) - v0
 - laravel/boost (BOOST) - v2
 - laravel/mcp (MCP) - v0
@@ -135,6 +219,18 @@ This project has domain-specific skills available in `**/skills/**`. You MUST ac
 ## Vite Error
 
 - If you receive an "Illuminate\Foundation\ViteException: Unable to locate file in Vite manifest" error, you can run `npm run build` or ask the user to run `npm run dev` or `composer run dev`.
+
+=== octane/core rules ===
+
+# Laravel Octane
+
+This application uses Laravel Octane, a long-running PHP server. The application bootstraps once and handles many requests within the same process.
+
+- Never store request-specific state in singletons or static properties, because it can leak across requests.
+- Use `config('octane.server')` to detect the active driver (`swoole`, `roadrunner`, or `frankenphp`).
+- Prefer scoped bindings (`$this->app->scoped()`) over singletons for per-request services.
+
+When working on Octane-specific features (concurrency, shared tables, memory, driver configuration, testing), invoke `octane-development` for detailed rules.
 
 === pint/core rules ===
 

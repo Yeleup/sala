@@ -100,6 +100,23 @@ make import
 
 `make dump` writes the app database to `docker/db/dump.sql.gz`. `make import` recreates the database from that file.
 
+## MCP servers (Laravel Boost)
+
+Run MCP servers inside the app container so PHP, extensions, and service hostnames match the runtime. In `.mcp.json` use `docker exec -i` with the project's app container name (`<DOCKER_PROJECT_NAME>-app-1`):
+
+```json
+{
+    "mcpServers": {
+        "laravel-boost": {
+            "command": "docker",
+            "args": ["exec", "-i", "your-project-app-1", "php", "artisan", "boost:mcp"]
+        }
+    }
+}
+```
+
+The stack must be running (`make up`) before the MCP client connects. The same applies to artisan and composer in general: run them through `make artisan` / `make composer` / `docker exec`, not with host PHP.
+
 ## Troubleshooting
 
 If the Vite container restarts with `ENOSPC: System limit for number of file watchers reached`, exclude heavy directories from the Vite watcher in the project's `vite.config.js`:

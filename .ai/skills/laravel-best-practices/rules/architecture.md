@@ -9,7 +9,7 @@ class CreateOrderAction
 {
     public function __construct(private InventoryService $inventory) {}
 
-    public function handle(array $data): Order
+    public function execute(array $data): Order
     {
         $order = Order::create($data);
         $this->inventory->reserve($order);

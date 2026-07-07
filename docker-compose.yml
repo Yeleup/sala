@@ -1,0 +1,111 @@
+name: ${DOCKER_PROJECT_NAME:-laravel-app}
+
+x-app-environment: &app-environment
+  APP_DEBUG: ${APP_DEBUG:-false}
+  APP_ENV: ${APP_ENV:-production}
+  APP_KEY: ${APP_KEY:-}
+  APP_NAME: ${APP_NAME:-Laravel App}
+  APP_OPTIMIZE: ${APP_OPTIMIZE:-1}
+  APP_URL: ${APP_URL:-http://localhost:8500}
+  CACHE_DRIVER: ${CACHE_DRIVER:-redis}
+  CACHE_STORE: ${CACHE_STORE:-redis}
+  DB_CONNECTION: ${DB_CONNECTION:-pgsql}
+  DB_DATABASE: ${DB_DATABASE:-laravel_app}
+  DB_HOST: ${DOCKER_DB_HOST:-db}
+  DB_PASSWORD: ${DB_PASSWORD:-laravel}
+  DB_PORT: ${DOCKER_DB_PORT:-5432}
+  DB_USERNAME: ${DB_USERNAME:-laravel}
+  HEALTHCHECK_PATH: ${HEALTHCHECK_PATH:-/up}
+  QUEUE_CONNECTION: ${QUEUE_CONNECTION:-redis}
+  REDIS_CLIENT: ${REDIS_CLIENT:-phpredis}
+  REDIS_HOST: ${DOCKER_REDIS_HOST:-redis}
+  REDIS_PASSWORD: ${REDIS_PASSWORD:-null}
+  REDIS_PORT: ${DOCKER_REDIS_PORT:-6379}
+  SESSION_DRIVER: ${SESSION_DRIVER:-redis}
+  WAIT_FOR_DATABASE: ${WAIT_FOR_DATABASE:-1}
+
+x-app-service: &app-service
+  env_file:
+    - path: .env
+      required: false
+  environment:
+    <<: *app-environment
+  depends_on:
+    db:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+  restart: unless-stopped
+  volumes:
+    - ./storage:/var/www/html/storage
+
+services:
+  app:
+    <<: *app-service
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: app
+      args:
+        PHP_VERSION: ${PHP_VERSION:-8.4}
+        NODE_VERSION: ${NODE_VERSION:-22}
+    image: ${DOCKER_PROJECT_NAME:-laravel-app}-app
+    ports:
+      - '${APP_PORT:-8500}:8000'
+    environment:
+      <<: *app-environment
+      RUN_MIGRATIONS: ${RUN_MIGRATIONS:-0}
+    healthcheck:
+      test: ['CMD', 'docker-healthcheck-http']
+      interval: 10s
+      timeout: 5s
+      retries: 18
+      start_period: 10s
+
+  queue:
+    <<: *app-service
+    image: ${DOCKER_PROJECT_NAME:-laravel-app}-app
+    healthcheck:
+      disable: true
+    command: ['php', 'artisan', 'queue:work', '--queue=default', '--sleep=1', '--tries=3', '--timeout=600', '--max-time=3600', '--no-interaction']
+
+  scheduler:
+    <<: *app-service
+    image: ${DOCKER_PROJECT_NAME:-laravel-app}-app
+    healthcheck:
+      disable: true
+    command: ['php', 'artisan', 'schedule:work']
+
+  db:
+    image: pgvector/pgvector:pg17
+    environment:
+      POSTGRES_DB: ${DB_DATABASE:-laravel_app}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-laravel}
+      POSTGRES_USER: ${DB_USERNAME:-laravel}
+    ports:
+      - '${FORWARD_DB_PORT:-5450}:5432'
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"']
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    restart: unless-stopped
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7.4-alpine
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 5s
+    restart: unless-stopped
+    volumes:
+      - redis-data:/data
+
+volumes:
+  postgres-data:
+  redis-data:

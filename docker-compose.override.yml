@@ -1,0 +1,65 @@
+x-local-php-environment: &local-php-environment
+  APP_ENV: local
+  APP_DEBUG: ${APP_DEBUG:-true}
+  APP_OPTIMIZE: ${APP_OPTIMIZE:-0}
+  COMPOSER_HOME: /tmp/composer
+
+x-local-php-service: &local-php-service
+  user: '${DOCKER_UID:-1000}:${DOCKER_GID:-1000}'
+  environment:
+    <<: *local-php-environment
+  volumes:
+    - .:/var/www/html
+    - ./docker/app/php.local.ini:/usr/local/etc/php/conf.d/zz-local.ini:ro
+
+services:
+  app:
+    build:
+      target: app-dev
+    <<: *local-php-service
+    environment:
+      <<: *local-php-environment
+      OCTANE_WORKERS: ${OCTANE_WORKERS:-1}
+      OCTANE_MAX_REQUESTS: ${OCTANE_MAX_REQUESTS:-1}
+      RUN_MIGRATIONS: ${RUN_MIGRATIONS:-1}
+
+  queue:
+    <<: *local-php-service
+
+  scheduler:
+    <<: *local-php-service
+
+  db:
+    environment:
+      POSTGRES_TEST_DATABASE: ${DB_TEST_DATABASE:-laravel_app_testing}
+    volumes:
+      - ./docker/db/init:/docker-entrypoint-initdb.d:ro
+
+  vite:
+    image: node:${NODE_VERSION:-22}-alpine
+    working_dir: /var/www/html
+    command:
+      - sh
+      - -lc
+      - |
+        if [ -f package-lock.json ]; then
+          npm ci --no-fund --no-audit
+        elif [ -f package.json ] && [ ! -d node_modules ]; then
+          npm install --no-fund --no-audit
+        fi
+
+        npm run dev -- --host 0.0.0.0 --port ${VITE_PORT:-5174}
+    environment:
+      APP_URL: ${APP_URL:-http://localhost:8500}
+      VITE_PORT: ${VITE_PORT:-5174}
+      VITE_HMR_HOST: ${VITE_HMR_HOST:-localhost}
+      VITE_USE_POLLING: ${VITE_USE_POLLING:-0}
+    ports:
+      - '${VITE_PORT:-5174}:${VITE_PORT:-5174}'
+    restart: unless-stopped
+    volumes:
+      - .:/var/www/html
+      - node-modules:/var/www/html/node_modules
+
+volumes:
+  node-modules:

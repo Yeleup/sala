@@ -28,6 +28,12 @@ return [
         'region' => env('AWS_DEFAULT_REGION', 'us-east-1'),
     ],
 
+    'dereu' => [
+        'base_url' => env('DEREU_BASE_URL', 'https://api.dereu.noderail.io/api/v1'),
+        'platform_key' => env('DEREU_PLATFORM_KEY'),
+        'webhook_secret' => env('DEREU_WEBHOOK_SECRET'),
+    ],
+
     'github' => [
         'token' => env('GITHUB_TOKEN'),
     ],

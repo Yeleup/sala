@@ -17,7 +17,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  * silence the dialog is considered finished (mirrors the WhatsApp
  * session window).
  */
-#[Fillable(['contact_id', 'bot_scenario_id', 'scenario_version', 'current_node_id'])]
+#[Fillable(['contact_id', 'bot_scenario_id', 'scenario_version', 'current_node_id', 'state'])]
 class BotSession extends Model
 {
     /** @use HasFactory<BotSessionFactory> */
@@ -27,6 +27,16 @@ class BotSession extends Model
     public function contact(): BelongsTo
     {
         return $this->belongsTo(Contact::class);
+    }
+
+    /**
+     * @return array{state: 'array'}
+     */
+    protected function casts(): array
+    {
+        return [
+            'state' => 'array',
+        ];
     }
 
     /** @return BelongsTo<BotScenario, $this> */

@@ -42,6 +42,24 @@ class DereuMessenger
     }
 
     /**
+     * A message with a single URL button (WhatsApp interactive cta_url) —
+     * the handoff from the chat to the web interface.
+     *
+     * @param  string  $buttonText  Up to 20 characters (WhatsApp limit).
+     */
+    public function sendCtaUrl(Contact $contact, string $text, string $buttonText, string $url): void
+    {
+        $this->send($contact, 'interactive', [
+            'type' => 'cta_url',
+            'body' => ['text' => $text],
+            'action' => [
+                'name' => 'cta_url',
+                'parameters' => ['display_text' => $buttonText, 'url' => $url],
+            ],
+        ]);
+    }
+
+    /**
      * @param  list<array{id: string, title: string}>  $rows  Up to 10 (WhatsApp limit).
      */
     public function sendList(Contact $contact, string $text, string $button, array $rows): void

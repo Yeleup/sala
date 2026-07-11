@@ -149,7 +149,7 @@ class BotEngine
                 case BotNodeType::AiInput:
                     $this->waitAt($session, $node['id']);
 
-                    if ($this->aiAssistant->start($contact, $node) !== AiOutcome::Completed) {
+                    if ($this->aiAssistant->start($session, $node) !== AiOutcome::Completed) {
                         return;
                     }
 
@@ -193,7 +193,7 @@ class BotEngine
      */
     private function resumeAi(BotSession $session, Contact $contact, ScenarioDefinition $definition, array $node, InboundMessage $message): void
     {
-        if ($this->aiAssistant->resume($contact, $node, $message) === AiOutcome::Completed) {
+        if ($this->aiAssistant->resume($session, $node, $message) === AiOutcome::Completed) {
             $this->advance($session, $contact, $definition, $definition->target($node['id'], ScenarioDefinition::OUTPUT_CONTINUE));
 
             return;

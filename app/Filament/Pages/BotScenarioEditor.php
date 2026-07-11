@@ -2,6 +2,9 @@
 
 namespace App\Filament\Pages;
 
+use App\Enums\AiTask;
+use App\Enums\BotNodeType;
+use App\Enums\ListingType;
 use App\Models\BotScenario;
 use App\Services\Bot\ScenarioValidator;
 use BackedEnum;
@@ -143,6 +146,14 @@ class BotScenarioEditor extends Page
                     ])
                     ->values()
                     ->all();
+            }
+
+            if ($clean['type'] === BotNodeType::AiInput->value) {
+                $clean['task'] = AiTask::fromNode($node['task'] ?? null)->value;
+
+                if (filled($node['listing_type'] ?? null) && ListingType::tryFrom((string) $node['listing_type']) !== null) {
+                    $clean['listing_type'] = (string) $node['listing_type'];
+                }
             }
 
             $nodes[] = $clean;

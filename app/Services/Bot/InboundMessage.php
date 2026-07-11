@@ -2,6 +2,7 @@
 
 namespace App\Services\Bot;
 
+use App\Enums\ListingMediaType;
 use App\Models\DereuWebhookEvent;
 
 /**
@@ -9,14 +10,17 @@ use App\Models\DereuWebhookEvent;
  *
  * replyId is the machine id of a pressed button / picked list row; text is
  * the free-text body (for interactive replies — the human title of the
- * option, so title matching works either way). Media-only messages have
- * neither and count as unrecognized input for interactive blocks.
+ * option, so title matching works either way; for media — the caption).
+ * mediaId/mediaType are set for photo and voice messages so the AI
+ * assistant can download and process them.
  */
 class InboundMessage
 {
     public function __construct(
         public readonly ?string $text = null,
         public readonly ?string $replyId = null,
+        public readonly ?ListingMediaType $mediaType = null,
+        public readonly ?string $mediaId = null,
     ) {}
 
     public static function fromWebhookEvent(DereuWebhookEvent $event): self
@@ -29,8 +33,15 @@ class InboundMessage
             'interactive' => self::fromInteractiveReply($payload),
             // Template quick replies arrive as type "button".
             'button' => new self(text: $payload['text'] ?? null, replyId: $payload['payload'] ?? null),
+            'image' => self::fromMedia($payload, ListingMediaType::Photo),
+            'audio' => self::fromMedia($payload, ListingMediaType::Audio),
             default => new self(),
         };
+    }
+
+    public function hasMedia(): bool
+    {
+        return $this->mediaType !== null && filled($this->mediaId);
     }
 
     /**
@@ -45,5 +56,22 @@ class InboundMessage
         }
 
         return new self(text: $reply['title'] ?? null, replyId: $reply['id'] ?? null);
+    }
+
+    /**
+     * Meta delivers media as {id, mime_type, caption?}, sometimes nested
+     * under the media type key ({image: {id, ...}}); accept both shapes.
+     *
+     * @param  array<string, mixed>  $payload
+     */
+    private static function fromMedia(array $payload, ListingMediaType $mediaType): self
+    {
+        $media = $payload[$mediaType->value] ?? $payload;
+
+        return new self(
+            text: $media['caption'] ?? $payload['caption'] ?? null,
+            mediaType: $mediaType,
+            mediaId: is_string($media['id'] ?? null) ? $media['id'] : null,
+        );
     }
 }

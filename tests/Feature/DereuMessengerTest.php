@@ -65,6 +65,22 @@ test('buttons are sent as an interactive button message', function () {
         ]);
 });
 
+test('a web handoff link is sent as an interactive cta_url message', function () {
+    fakeDereuSendAccepted();
+    connectedDereuCompany();
+    $contact = Contact::factory()->create();
+
+    app(DereuMessenger::class)->sendCtaUrl($contact, 'Откройте форму', 'Открыть', 'https://app.test/supplier/listings/1/edit?signature=abc');
+
+    Http::assertSent(fn (Request $request) => $request['type'] === 'interactive'
+        && $request['payload']['type'] === 'cta_url'
+        && $request['payload']['body'] === ['text' => 'Откройте форму']
+        && $request['payload']['action'] === [
+            'name' => 'cta_url',
+            'parameters' => ['display_text' => 'Открыть', 'url' => 'https://app.test/supplier/listings/1/edit?signature=abc'],
+        ]);
+});
+
 test('a list is sent as an interactive list message with a single section', function () {
     fakeDereuSendAccepted();
     connectedDereuCompany();

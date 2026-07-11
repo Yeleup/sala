@@ -7,6 +7,7 @@ use App\Models\Contact;
 use App\Services\Bot\AiAssistant;
 use App\Services\Bot\BotEngine;
 use App\Services\Bot\InboundMessage;
+use App\Services\Bot\PassthroughAiAssistant;
 use App\Services\DereuMessenger;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Mockery\MockInterface;
@@ -251,6 +252,8 @@ test('republication that kept the awaited block continues the dialog on the new 
 });
 
 test('an AI block with the placeholder assistant falls through its continue output', function () {
+    app()->bind(AiAssistant::class, PassthroughAiAssistant::class);
+
     $scenario = BotScenario::factory()->published([
         'nodes' => [
             ['id' => 'start', 'type' => 'start'],
@@ -289,7 +292,7 @@ test('while the AI keeps the turn the contact waits at the AI block, and complet
     $assistant = test()->mock(AiAssistant::class);
     $assistant->shouldReceive('start')->once()->andReturn(AiOutcome::InProgress);
     $assistant->shouldReceive('resume')->once()
-        ->withArgs(fn (Contact $to, array $node, InboundMessage $message) => $message->text === 'Кран 25 тонн')
+        ->withArgs(fn (BotSession $session, array $node, InboundMessage $message) => $message->text === 'Кран 25 тонн')
         ->andReturn(AiOutcome::Completed);
 
     $messenger = fakeBotMessenger();

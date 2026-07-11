@@ -2,8 +2,8 @@
 
 namespace App\Providers;
 
+use App\Services\Ai\ScenarioAiAssistant;
 use App\Services\Bot\AiAssistant;
-use App\Services\Bot\PassthroughAiAssistant;
 use App\Services\DereuConnect;
 use Illuminate\Support\ServiceProvider;
 
@@ -14,7 +14,7 @@ class AppServiceProvider extends ServiceProvider
      */
     public function register(): void
     {
-        $this->app->bind(AiAssistant::class, PassthroughAiAssistant::class);
+        $this->app->bind(AiAssistant::class, ScenarioAiAssistant::class);
 
         $this->app->singleton(DereuConnect::class, function (): DereuConnect {
             return new DereuConnect(

@@ -98,8 +98,17 @@
                         </template>
 
                         <template x-if="selected.type === 'ai'">
-                            <p class="bse-note">Управление передаётся AI-ассистенту: сбор данных и уточняющие вопросы.
-                                После завершения пользователь идёт по выходу «Продолжить».</p>
+                            <div class="bse-field">
+                                <p class="bse-note">Управление передаётся AI-ассистенту: он собирает объявление из текста,
+                                    аудио и фото поставщика, задаёт уточняющие вопросы и создаёт черновик.
+                                    После завершения пользователь идёт по выходу «Продолжить».</p>
+                                <span>Тип объявления в этой ветке</span>
+                                <select class="bse-input" x-model="selected.listing_type">
+                                    <option value="">Определять автоматически</option>
+                                    <option value="equipment">Техника</option>
+                                    <option value="service">Услуга</option>
+                                </select>
+                            </div>
                         </template>
 
                         <template x-if="selected.type === 'list'">
@@ -433,6 +442,11 @@
 
                         if (type === 'list') {
                             node.button = 'Выбрать'
+                        }
+
+                        if (type === 'ai') {
+                            node.task = 'collect_listing'
+                            node.listing_type = ''
                         }
 
                         this.nodes.push(node)

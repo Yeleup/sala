@@ -3,21 +3,21 @@
 namespace App\Services\Bot;
 
 use App\Enums\AiOutcome;
-use App\Models\Contact;
+use App\Models\BotSession;
 
 /**
- * Stand-in until the AI assistant module is implemented: completes
- * immediately, so the flow falls through the AI block's "continue"
- * output without collecting anything.
+ * Stand-in that completes immediately, so the flow falls through the AI
+ * block's "continue" output without collecting anything. Bound in tests
+ * that exercise the engine without the real assistant.
  */
 class PassthroughAiAssistant implements AiAssistant
 {
-    public function start(Contact $contact, array $node): AiOutcome
+    public function start(BotSession $session, array $node): AiOutcome
     {
         return AiOutcome::Completed;
     }
 
-    public function resume(Contact $contact, array $node, InboundMessage $message): AiOutcome
+    public function resume(BotSession $session, array $node, InboundMessage $message): AiOutcome
     {
         return AiOutcome::Completed;
     }

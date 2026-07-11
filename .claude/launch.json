@@ -1,0 +1,12 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "app",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": [".claude/preview-relay.py"],
+      "port": 8899,
+      "autoPort": true
+    }
+  ]
+}

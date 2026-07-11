@@ -40,6 +40,24 @@ class BotScenario extends Model
     }
 
     /**
+     * Atomically apply the draft to contacts: active sessions pick the new
+     * version up on their next message (soft update in the bot engine).
+     */
+    public function publishDraft(): void
+    {
+        $this->forceFill([
+            'published_definition' => $this->draft_definition,
+            'published_version' => $this->published_version + 1,
+            'published_at' => now(),
+        ])->save();
+    }
+
+    public function hasUnpublishedChanges(): bool
+    {
+        return $this->draft_definition !== $this->published_definition;
+    }
+
+    /**
      * @return array{draft_definition: 'array', published_definition: 'array', published_at: 'datetime'}
      */
     protected function casts(): array

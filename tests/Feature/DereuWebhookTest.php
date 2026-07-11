@@ -1,7 +1,9 @@
 <?php
 
+use App\Jobs\ProcessDereuWebhookEvent;
 use App\Models\DereuWebhookEvent;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Str;
 use Illuminate\Testing\TestResponse;
 
@@ -96,6 +98,31 @@ test('delivery status events for the same wamid are stored separately per event_
     }
 
     expect(DereuWebhookEvent::count())->toBe(3);
+});
+
+test('a stored inbound message dispatches the processing job', function () {
+    Queue::fake();
+
+    postSignedDereuWebhook(dereuWebhookEventPayload())->assertNoContent();
+
+    Queue::assertPushed(ProcessDereuWebhookEvent::class, 1);
+});
+
+test('a redelivered inbound message does not dispatch a second job', function () {
+    Queue::fake();
+
+    postSignedDereuWebhook(dereuWebhookEventPayload(['wamid' => 'wamid.HBgSame']))->assertNoContent();
+    postSignedDereuWebhook(dereuWebhookEventPayload(['wamid' => 'wamid.HBgSame']))->assertNoContent();
+
+    Queue::assertPushed(ProcessDereuWebhookEvent::class, 1);
+});
+
+test('delivery status events do not dispatch the processing job', function () {
+    Queue::fake();
+
+    postSignedDereuWebhook(dereuWebhookEventPayload(['event' => 'message_delivered']))->assertNoContent();
+
+    Queue::assertNotPushed(ProcessDereuWebhookEvent::class);
 });
 
 test('a duplicate delivery of the same status event_id is deduplicated', function () {

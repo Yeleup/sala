@@ -57,10 +57,6 @@ function signedDereuConnectResult(array $overrides = []): array
     return [$result, DereuConnect::sign($result, 'consec_test_secret')];
 }
 
-function connectedDereuCompany(array $attributes = []): DereuCompany
-{
-    return DereuCompany::factory()->create(array_merge(['external_id' => 'org_test'], $attributes));
-}
 
 test('guests are redirected to the panel login', function () {
     auth()->logout();

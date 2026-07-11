@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Jobs\ProcessDereuWebhookEvent;
 use App\Models\DereuWebhookEvent;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
@@ -32,7 +33,7 @@ class DereuWebhookController extends Controller
             ? 'wamid:'.$wamid
             : 'event:'.$eventId;
 
-        DereuWebhookEvent::query()->createOrFirst(
+        $storedEvent = DereuWebhookEvent::query()->createOrFirst(
             ['dedupe_key' => $dedupeKey],
             [
                 'event' => $event,
@@ -43,6 +44,10 @@ class DereuWebhookController extends Controller
                 'payload' => $data,
             ],
         );
+
+        if ($storedEvent->wasRecentlyCreated && $event === 'message_received') {
+            ProcessDereuWebhookEvent::dispatch($storedEvent);
+        }
 
         return response()->noContent();
     }

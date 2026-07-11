@@ -44,7 +44,11 @@ expect()->extend('toBeOne', function () {
 |
 */
 
-function something()
+/**
+ * Подключённая компания Dereu этой инсталляции; тест должен выставить
+ * config('services.dereu.external_id') в 'org_test'.
+ */
+function connectedDereuCompany(array $attributes = []): \App\Models\DereuCompany
 {
-    // ..
+    return \App\Models\DereuCompany::factory()->create(array_merge(['external_id' => 'org_test'], $attributes));
 }

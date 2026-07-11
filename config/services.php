@@ -32,6 +32,12 @@ return [
         'base_url' => env('DEREU_BASE_URL', 'https://api.dereu.noderail.io/api/v1'),
         'platform_key' => env('DEREU_PLATFORM_KEY'),
         'webhook_secret' => env('DEREU_WEBHOOK_SECRET'),
+        'external_id' => env('DEREU_EXTERNAL_ID'),
+        'connect' => [
+            'url' => env('DEREU_CONNECT_URL', 'https://connect.dereu.io/connect'),
+            'signing_secret' => env('DEREU_CONNECT_SECRET'),
+            'key_prefix' => env('DEREU_CONNECT_PREFIX'),
+        ],
     ],
 
     'github' => [

@@ -8,7 +8,7 @@ use Illuminate\Testing\TestResponse;
 uses(RefreshDatabase::class);
 
 beforeEach(function () {
-    config()->set('services.dereu.webhook_secret', 'test-secret');
+    config()->set('services.dereu.webhook_secret', 'whsec_test');
 });
 
 function dereuWebhookEventPayload(array $overrides = []): array
@@ -21,13 +21,12 @@ function dereuWebhookEventPayload(array $overrides = []): array
         'from' => '77011234567',
         'wamid' => 'wamid.HBgTest',
         'type' => 'text',
-        'text' => 'Привет',
         'payload' => ['body' => 'Привет'],
         'timestamp' => 1718000000,
     ], $overrides);
 }
 
-function postSignedDereuWebhook(array $payload, ?string $secret = 'test-secret'): TestResponse
+function postSignedDereuWebhook(array $payload, ?string $secret = 'whsec_test'): TestResponse
 {
     $headers = [];
 
@@ -73,6 +72,12 @@ test('an event without event or event_id is rejected as invalid', function () {
     postSignedDereuWebhook(dereuWebhookEventPayload(['event_id' => '']))->assertUnprocessable();
 
     expect(DereuWebhookEvent::count())->toBe(0);
+});
+
+test('an unknown message type is still stored', function () {
+    postSignedDereuWebhook(dereuWebhookEventPayload(['type' => 'brand-new-type']))->assertNoContent();
+
+    expect(DereuWebhookEvent::sole()->payload['type'])->toBe('brand-new-type');
 });
 
 test('redelivery of the same inbound message with a new event_id is deduplicated by wamid', function () {

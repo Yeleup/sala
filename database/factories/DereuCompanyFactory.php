@@ -2,6 +2,7 @@
 
 namespace Database\Factories;
 
+use App\Enums\DereuCompanyStatus;
 use App\Models\DereuCompany;
 use Illuminate\Database\Eloquent\Factories\Factory;
 use Illuminate\Support\Str;
@@ -20,20 +21,21 @@ class DereuCompanyFactory extends Factory
     {
         return [
             'external_id' => 'org_'.Str::lower(Str::random(8)),
-            'name' => $this->faker->company(),
+            'name' => fake()->company(),
             'dereu_company_id' => 'co_'.Str::lower(Str::random(8)),
+            'waba_id' => (string) fake()->unique()->numerify('##########'),
+            'phone_number_id' => (string) fake()->unique()->numerify('##########'),
             'api_key' => 'dereu_'.Str::random(24),
-            'status' => DereuCompany::STATUS_PROVISIONED,
+            'status' => DereuCompanyStatus::Connected,
+            'connected_at' => now(),
         ];
     }
 
-    public function connected(): static
+    public function deactivated(): static
     {
         return $this->state(fn (): array => [
-            'status' => DereuCompany::STATUS_CONNECTED,
-            'waba_id' => (string) $this->faker->numerify('##########'),
-            'phone_number_id' => (string) $this->faker->numerify('##########'),
-            'display_phone_number' => '7701'.$this->faker->numerify('#######'),
+            'status' => DereuCompanyStatus::Deactivated,
+            'api_key' => null,
         ]);
     }
 

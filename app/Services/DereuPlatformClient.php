@@ -16,33 +16,35 @@ use RuntimeException;
 class DereuPlatformClient
 {
     /**
-     * Create or fetch a Dereu company. Idempotent by external id.
-     *
-     * The api_key is present in the response only on first creation (201);
-     * a repeated call returns already_provisioned without the key.
-     *
-     * @return array{dereu_company_id: string, api_key?: string, already_provisioned?: bool, phone_number_id_registered?: bool}
+     * Re-issue the company api_key after a Hosted Embedded Signup — the OUT
+     * redirect never exposes it. The previously issued key stops working.
      */
-    public function provisionCompany(string $externalId, ?string $name = null): array
+    public function reissueApiKey(string $externalId): string
     {
-        return $this->request()
-            ->post('/platform/companies', array_filter([
-                'external_id' => $externalId,
-                'name' => $name,
-            ]))
+        $apiKey = $this->request()
+            ->post("/platform/companies/{$externalId}/api-key/reissue")
             ->throw()
-            ->json();
+            ->json('api_key');
+
+        if (blank($apiKey) || ! is_string($apiKey)) {
+            throw new RuntimeException('Dereu did not return an api_key on re-issue.');
+        }
+
+        return $apiKey;
     }
 
     /**
      * Deactivate a Dereu company and stop inbound forwarding immediately.
+     *
+     * Without purge, Dereu keeps already received inbound messages for
+     * another 30 days.
      *
      * @return array{dereu_company_id: string, deactivated: bool, purged: bool}
      */
     public function deprovisionCompany(string $externalId, bool $purge = false): array
     {
         return $this->request()
-            ->delete("/platform/companies/{$externalId}", $purge ? ['purge' => 'true'] : [])
+            ->delete("/platform/companies/{$externalId}".($purge ? '?purge=true' : ''))
             ->throw()
             ->json();
     }

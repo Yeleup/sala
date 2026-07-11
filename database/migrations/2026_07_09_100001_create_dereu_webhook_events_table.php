@@ -2,15 +2,24 @@
 
 use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 
 return new class extends Migration
 {
     /**
      * Run the migrations.
+     *
+     * Drops the legacy table from the first Dereu iteration.
      */
     public function up(): void
     {
+        if (DB::getDriverName() === 'pgsql') {
+            DB::statement('drop table if exists dereu_webhook_events cascade');
+        } else {
+            Schema::dropIfExists('dereu_webhook_events');
+        }
+
         Schema::create('dereu_webhook_events', function (Blueprint $table) {
             $table->id();
             $table->string('event');

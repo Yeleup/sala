@@ -21,7 +21,7 @@ use LogicException;
  * free-form supplier input; every business field except the type may stay
  * empty until the supplier completes it via the web interface.
  */
-#[Fillable(['contact_id', 'type', 'category', 'description', 'location', 'price', 'status', 'rejection_reason', 'expires_at'])]
+#[Fillable(['contact_id', 'type', 'category', 'description', 'location', 'price', 'status', 'rejection_reason', 'expires_at', 'renewal_requested_at'])]
 class Listing extends Model
 {
     /** @use HasFactory<ListingFactory> */
@@ -116,13 +116,43 @@ class Listing extends Model
 
     /**
      * The supplier confirmed the listing is still relevant: prolong it
-     * without leaving the published status.
+     * without leaving the published status. The renewal poll flag resets
+     * so the next 30-day cycle asks again.
      */
     public function renew(): void
     {
         $this->assertStatusIn([ListingStatus::Published], 'renew');
 
-        $this->update(['expires_at' => now()->addDays(self::LIFETIME_DAYS)]);
+        $this->update([
+            'expires_at' => now()->addDays(self::LIFETIME_DAYS),
+            'renewal_requested_at' => null,
+        ]);
+    }
+
+    /**
+     * Published listings whose 30-day period ends within a day and that
+     * have not been polled in this period yet.
+     */
+    #[Scope]
+    protected function dueForRenewalPoll(Builder $query): void
+    {
+        $query
+            ->where('status', ListingStatus::Published)
+            ->whereNull('renewal_requested_at')
+            ->where('expires_at', '>', now())
+            ->where('expires_at', '<=', now()->addDay());
+    }
+
+    /**
+     * Published listings whose period ran out without a confirmation —
+     * they auto-archive («мёртвые души» leave the search).
+     */
+    #[Scope]
+    protected function expiredWithoutConfirmation(Builder $query): void
+    {
+        $query
+            ->where('status', ListingStatus::Published)
+            ->where('expires_at', '<=', now());
     }
 
     /**
@@ -138,7 +168,7 @@ class Listing extends Model
     }
 
     /**
-     * @return array{type: class-string<ListingType>, status: class-string<ListingStatus>, expires_at: 'datetime'}
+     * @return array{type: class-string<ListingType>, status: class-string<ListingStatus>, expires_at: 'datetime', renewal_requested_at: 'datetime'}
      */
     protected function casts(): array
     {
@@ -146,6 +176,7 @@ class Listing extends Model
             'type' => ListingType::class,
             'status' => ListingStatus::class,
             'expires_at' => 'datetime',
+            'renewal_requested_at' => 'datetime',
         ];
     }
 }

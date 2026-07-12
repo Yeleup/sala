@@ -63,7 +63,7 @@ class DereuMessenger
     }
 
     /**
-     * @param  list<array{id: string, title: string}>  $rows  Up to 10 (WhatsApp limit).
+     * @param  list<array{id: string, title: string, description?: string}>  $rows  Up to 10 (WhatsApp limit).
      */
     public function sendList(Contact $contact, string $text, string $button, array $rows): void
     {
@@ -74,10 +74,11 @@ class DereuMessenger
                 'button' => $button,
                 'sections' => [
                     [
-                        'rows' => array_map(fn (array $row): array => [
+                        'rows' => array_map(fn (array $row): array => array_filter([
                             'id' => $row['id'],
                             'title' => $row['title'],
-                        ], $rows),
+                            'description' => $row['description'] ?? null,
+                        ], fn (mixed $value): bool => $value !== null), $rows),
                     ],
                 ],
             ],
@@ -89,8 +90,10 @@ class DereuMessenger
      * the 24-hour session window. The template must be approved by Meta.
      *
      * @param  list<string>  $bodyParameters  Values for the {{n}} placeholders of the template body, in order.
+     * @param  list<string>  $buttonPayloads  Machine payloads for the template's quick-reply buttons, by button index;
+     *                                        they come back in the reply so the bot knows what was answered.
      */
-    public function sendTemplate(Contact $contact, WhatsappTemplate $template, array $bodyParameters = []): void
+    public function sendTemplate(Contact $contact, WhatsappTemplate $template, array $bodyParameters = [], array $buttonPayloads = []): void
     {
         if (! $template->isApproved()) {
             throw new RuntimeException(sprintf(
@@ -105,14 +108,29 @@ class DereuMessenger
             'language' => ['code' => $template->language],
         ];
 
+        $components = [];
+
         if ($bodyParameters !== []) {
-            $payload['components'] = [[
+            $components[] = [
                 'type' => 'body',
                 'parameters' => array_map(
                     fn (string $value): array => ['type' => 'text', 'text' => $value],
                     $bodyParameters,
                 ),
-            ]];
+            ];
+        }
+
+        foreach (array_values($buttonPayloads) as $index => $buttonPayload) {
+            $components[] = [
+                'type' => 'button',
+                'sub_type' => 'quick_reply',
+                'index' => (string) $index,
+                'parameters' => [['type' => 'payload', 'payload' => $buttonPayload]],
+            ];
+        }
+
+        if ($components !== []) {
+            $payload['components'] = $components;
         }
 
         $this->send($contact, 'template', $payload);

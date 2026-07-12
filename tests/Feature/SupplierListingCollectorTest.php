@@ -221,6 +221,87 @@ test('a voice message is stored, transcribed and used for extraction', function 
     Storage::disk('public')->assertExists($media->path);
 });
 
+test('a photo without a caption still runs the extraction with the image attached', function () {
+    Storage::fake('public');
+    ListingExtractionAgent::fake([fullExtraction()]);
+
+    $session = collectorSession();
+
+    test()->mock(DereuMediaDownloader::class)
+        ->shouldReceive('download')->once()->with('media-3')
+        ->andReturn(['contents' => 'JPEG-BYTES', 'mime_type' => 'image/jpeg']);
+
+    fakeCollectorMessenger()->shouldReceive('sendButtons')->once();
+
+    $outcome = app(SupplierListingCollector::class)->resume($session, supplierAiNode(), new InboundMessage(
+        mediaType: ListingMediaType::Photo,
+        mediaId: 'media-3',
+    ));
+
+    expect($outcome)->toBe(AiOutcome::InProgress);
+    ListingExtractionAgent::assertPrompted(
+        fn ($prompt): bool => $prompt->attachments->count() === 1
+            && str_contains((string) $prompt->prompt, 'только фотографии'),
+    );
+});
+
+test('photos are attached to the extraction alongside the caption text', function () {
+    Storage::fake('public');
+    ListingExtractionAgent::fake([fullExtraction()]);
+
+    $session = collectorSession();
+
+    test()->mock(DereuMediaDownloader::class)
+        ->shouldReceive('download')->once()->with('media-4')
+        ->andReturn(['contents' => 'JPEG-BYTES', 'mime_type' => 'image/jpeg']);
+
+    fakeCollectorMessenger()->shouldReceive('sendButtons')->once();
+
+    app(SupplierListingCollector::class)->resume($session, supplierAiNode(), new InboundMessage(
+        text: 'Сдаю трактор в Шымкенте, 10000 тг/час',
+        mediaType: ListingMediaType::Photo,
+        mediaId: 'media-4',
+    ));
+
+    ListingExtractionAgent::assertPrompted(
+        fn ($prompt): bool => $prompt->attachments->count() === 1
+            && $prompt->contains('Сдаю трактор'),
+    );
+});
+
+test('an unreadable follow-up does not spend a clarification attempt', function () {
+    ListingExtractionAgent::fake()->preventStrayPrompts();
+    $session = collectorSession(['attempts' => 1, 'transcript' => ['Сдаю трактор в Шымкенте']]);
+
+    fakeCollectorMessenger()->shouldReceive('sendText')->once()
+        ->withArgs(fn (Contact $to, string $text) => str_contains($text, 'Не удалось разобрать'));
+
+    $outcome = app(SupplierListingCollector::class)
+        ->resume($session, supplierAiNode(), new InboundMessage());
+
+    expect($outcome)->toBe(AiOutcome::InProgress)
+        ->and($session->fresh()->state['attempts'])->toBe(1);
+    ListingExtractionAgent::assertNeverPrompted();
+});
+
+test('an undetermined type in the auto branch asks about it instead of defaulting to equipment', function () {
+    ListingExtractionAgent::fake([
+        fullExtraction(['type' => null, 'clarifying_question' => 'Какая цена?']),
+    ]);
+    $session = collectorSession(['listing_type' => null]);
+
+    fakeCollectorMessenger()->shouldReceive('sendText')->once()
+        ->withArgs(fn (Contact $to, string $text) => str_contains($text, 'технику в аренду или услугу'));
+
+    $node = ['id' => 'collect', 'type' => 'ai', 'task' => 'collect_listing'];
+    $outcome = app(SupplierListingCollector::class)
+        ->resume($session, $node, new InboundMessage(text: 'Сдаю в Шымкенте, 10000 тг/час'));
+
+    expect($outcome)->toBe(AiOutcome::InProgress)
+        ->and($session->fresh()->state['attempts'])->toBe(1)
+        ->and(Listing::count())->toBe(0);
+});
+
 test('a photo with a caption is attached to the draft and the caption is extracted', function () {
     Storage::fake('public');
     ListingExtractionAgent::fake([fullExtraction()]);

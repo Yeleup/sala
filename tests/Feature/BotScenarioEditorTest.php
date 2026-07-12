@@ -117,6 +117,19 @@ test('validation errors block publication but keep the draft', function () {
         ->and($scenario->draft_definition['nodes'])->toHaveCount(4);
 });
 
+test('two edges from one output block publication', function () {
+    BotScenario::factory()->create();
+
+    $definition = publishableDefinition();
+    $definition['edges'][] = $definition['edges'][0]; // дубль связи с одного выхода
+
+    Livewire::test(BotScenarioEditor::class)
+        ->call('publish', $definition)
+        ->assertNotified('Сценарий не опубликован');
+
+    expect(BotScenario::sole()->published_version)->toBe(0);
+});
+
 test('unreachable blocks do not block publication', function () {
     BotScenario::factory()->create();
 

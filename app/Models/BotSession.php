@@ -17,7 +17,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  * silence the dialog is considered finished (mirrors the WhatsApp
  * session window).
  */
-#[Fillable(['contact_id', 'bot_scenario_id', 'scenario_version', 'current_node_id', 'state'])]
+#[Fillable(['contact_id', 'bot_scenario_id', 'scenario_version', 'current_node_id', 'current_node_fingerprint', 'state'])]
 class BotSession extends Model
 {
     /** @use HasFactory<BotSessionFactory> */

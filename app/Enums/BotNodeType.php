@@ -10,6 +10,9 @@ enum BotNodeType: string
     case ListMenu = 'list';
     case AiInput = 'ai';
 
+    /** Sends the personal signed CTA link into the supplier web portal. */
+    case MyListings = 'my_listings';
+
     /**
      * Blocks that stop the flow and wait for the contact's next message.
      */
@@ -17,7 +20,7 @@ enum BotNodeType: string
     {
         return match ($this) {
             self::ButtonMenu, self::ListMenu, self::AiInput => true,
-            self::Start, self::Text => false,
+            self::Start, self::Text, self::MyListings => false,
         };
     }
 }

@@ -251,6 +251,78 @@ test('republication that kept the awaited block continues the dialog on the new 
     expect(BotSession::sole()->scenario_version)->toBe(2);
 });
 
+test('republication that changed the options of the awaited block softly resets the dialog', function () {
+    $scenario = BotScenario::factory()->published(botMenuDefinition())->create();
+    $contact = Contact::factory()->create();
+    $session = botSessionWaitingAt($scenario, $contact, 'menu');
+    $session->update([
+        'current_node_fingerprint' => (new App\Services\Bot\ScenarioDefinition(botMenuDefinition()))
+            ->nodeFingerprint(botMenuDefinition()['nodes'][2]),
+    ]);
+
+    $definition = botMenuDefinition();
+    $definition['nodes'][2]['options'][1]['title'] = 'Ищу технику';
+    $scenario->update(['published_definition' => $definition, 'published_version' => 2]);
+
+    $messenger = fakeBotMessenger();
+    $messenger->shouldReceive('sendText')->once()
+        ->withArgs(fn (Contact $to, string $text) => $text === 'Привет!');
+    $messenger->shouldReceive('sendButtons')->once();
+
+    // Ответ по старой кнопке «Заказчик» не проваливается в новую ветку —
+    // диалог мягко начинается со «Старта».
+    app(BotEngine::class)->handle($contact, new InboundMessage(text: 'Заказчик', replyId: 'customer'));
+
+    expect(BotSession::sole())
+        ->current_node_id->toBe('menu')
+        ->scenario_version->toBe(2);
+});
+
+test('republication with only a text tweak keeps the fingerprinted step alive', function () {
+    $scenario = BotScenario::factory()->published(botMenuDefinition())->create();
+    $contact = Contact::factory()->create();
+    $session = botSessionWaitingAt($scenario, $contact, 'menu');
+    $session->update([
+        'current_node_fingerprint' => (new App\Services\Bot\ScenarioDefinition(botMenuDefinition()))
+            ->nodeFingerprint(botMenuDefinition()['nodes'][2]),
+    ]);
+
+    $definition = botMenuDefinition();
+    $definition['nodes'][2]['text'] = 'Кем вы пользуетесь сервисом?';
+    $scenario->update(['published_definition' => $definition, 'published_version' => 2]);
+
+    fakeBotMessenger()->shouldReceive('sendText')->once()
+        ->withArgs(fn (Contact $to, string $text) => $text === 'Ветка заказчика');
+
+    app(BotEngine::class)->handle($contact, new InboundMessage(text: 'Заказчик', replyId: 'customer'));
+
+    expect(BotSession::sole()->scenario_version)->toBe(2);
+});
+
+test('the my_listings block sends the personal portal link and ends the branch', function () {
+    $scenario = BotScenario::factory()->published([
+        'nodes' => [
+            ['id' => 'start', 'type' => 'start'],
+            ['id' => 'cabinet', 'type' => 'my_listings', 'text' => 'Откройте кабинет.'],
+        ],
+        'edges' => [
+            ['from' => 'start', 'output' => 'continue', 'to' => 'cabinet'],
+        ],
+    ])->create();
+    $contact = Contact::factory()->create();
+
+    fakeBotMessenger()->shouldReceive('sendCtaUrl')->once()
+        ->withArgs(fn (Contact $to, string $text, string $button, string $url) => $to->is($contact)
+            && $text === 'Откройте кабинет.'
+            && mb_strlen($button) <= 20
+            && str_contains($url, "/supplier/{$contact->id}/listings")
+            && str_contains($url, 'signature='));
+
+    app(BotEngine::class)->handle($contact, new InboundMessage(text: 'Мои объявления'));
+
+    expect(BotSession::sole()->current_node_id)->toBeNull();
+});
+
 test('an AI block with the placeholder assistant falls through its continue output', function () {
     app()->bind(AiAssistant::class, PassthroughAiAssistant::class);
 

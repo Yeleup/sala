@@ -7,6 +7,7 @@ use App\Enums\BotNodeType;
 use App\Models\BotScenario;
 use App\Models\BotSession;
 use App\Models\Contact;
+use App\Services\Ai\CtaLinkBuilder;
 use App\Services\DereuMessenger;
 
 /**
@@ -30,10 +31,18 @@ class BotEngine
     public function __construct(
         private readonly DereuMessenger $messenger,
         private readonly AiAssistant $aiAssistant,
+        private readonly NotificationReplyHandler $notificationReplies,
+        private readonly CtaLinkBuilder $links,
     ) {}
 
     public function handle(Contact $contact, InboundMessage $message): void
     {
+        // Replies to proactive notifications (customer request, renewal
+        // poll) can arrive at any scenario step — they never enter the flow.
+        if ($this->notificationReplies->handle($contact, $message)) {
+            return;
+        }
+
         $scenario = BotScenario::main();
         $definition = $scenario?->publishedDefinition();
 
@@ -75,8 +84,8 @@ class BotEngine
     /**
      * A new dialog starts from «Старт» when there is no active session,
      * the previous dialog ended or went silent for 24 hours, or a
-     * republication removed the awaited block (критический конфликт
-     * узлов — мягкий сброс).
+     * republication removed or reshaped the awaited block (критический
+     * конфликт узлов — мягкий сброс).
      */
     private function startsNewDialog(BotSession $session, BotScenario $scenario, ScenarioDefinition $definition): bool
     {
@@ -91,7 +100,15 @@ class BotEngine
         $node = $definition->node($session->current_node_id);
 
         if ($session->scenario_version !== $scenario->published_version) {
-            return $node === null || $definition->nodeType($node)?->waitsForInput() !== true;
+            if ($node === null || $definition->nodeType($node)?->waitsForInput() !== true) {
+                return true;
+            }
+
+            // The block survived but changed its type, options or AI task —
+            // the contact answered a different question than the new schema
+            // asks. Sessions from before fingerprints are trusted as-is.
+            return $session->current_node_fingerprint !== null
+                && $session->current_node_fingerprint !== $definition->nodeFingerprint($node);
         }
 
         return $node === null;
@@ -139,15 +156,26 @@ class BotEngine
                     $nodeId = $definition->target($node['id'], ScenarioDefinition::OUTPUT_CONTINUE);
                     break;
 
+                case BotNodeType::MyListings:
+                    $this->messenger->sendCtaUrl(
+                        $contact,
+                        (string) ($node['text'] ?? '') ?: 'Откройте кабинет — там ваши объявления, статусы и причины отклонения.',
+                        'Открыть кабинет',
+                        $this->links->myListingsUrl($contact),
+                    );
+
+                    $nodeId = $definition->target($node['id'], ScenarioDefinition::OUTPUT_CONTINUE);
+                    break;
+
                 case BotNodeType::ButtonMenu:
                 case BotNodeType::ListMenu:
                     $this->sendMenu($contact, $definition, $node);
-                    $this->waitAt($session, $node['id']);
+                    $this->waitAt($session, $node['id'], $definition->nodeFingerprint($node));
 
                     return;
 
                 case BotNodeType::AiInput:
-                    $this->waitAt($session, $node['id']);
+                    $this->waitAt($session, $node['id'], $definition->nodeFingerprint($node));
 
                     if ($this->aiAssistant->start($session, $node) !== AiOutcome::Completed) {
                         return;
@@ -219,15 +247,17 @@ class BotEngine
         $this->messenger->sendList($contact, $text, (string) ($node['button'] ?? self::DEFAULT_LIST_BUTTON), $options);
     }
 
-    private function waitAt(BotSession $session, string $nodeId): void
+    private function waitAt(BotSession $session, string $nodeId, string $fingerprint): void
     {
         $session->current_node_id = $nodeId;
+        $session->current_node_fingerprint = $fingerprint;
         $session->save();
     }
 
     private function endDialog(BotSession $session): void
     {
         $session->current_node_id = null;
+        $session->current_node_fingerprint = null;
         $session->save();
     }
 }

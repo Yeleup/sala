@@ -103,6 +103,28 @@ class ScenarioDefinition
     }
 
     /**
+     * Compatibility fingerprint of a waiting block: everything the contact
+     * relies on while answering it (type, the option set, the AI task).
+     * After a republication a changed fingerprint means the stored step is
+     * incompatible with the new schema — a soft reset, not a silent
+     * continuation. Message text tweaks keep the fingerprint intact.
+     *
+     * @param  array<string, mixed>  $node
+     */
+    public function nodeFingerprint(array $node): string
+    {
+        return md5(json_encode([
+            'type' => $node['type'] ?? null,
+            'task' => $node['task'] ?? null,
+            'listing_type' => $node['listing_type'] ?? null,
+            'options' => array_map(
+                fn (array $option): array => ['id' => $option['id'] ?? null, 'title' => $option['title'] ?? null],
+                $this->options($node),
+            ),
+        ]));
+    }
+
+    /**
      * Match an inbound message against the block's options: by the pressed
      * button / picked row id, or by free text equal to an option title
      * (case-insensitive, trimmed — per the constructor rules).

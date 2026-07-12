@@ -13,6 +13,7 @@ use App\Services\Bot\InboundMessage;
 use App\Services\DereuMediaDownloader;
 use App\Services\DereuMessenger;
 use Illuminate\Support\Facades\Storage;
+use Laravel\Ai\Files\Image;
 use Laravel\Ai\Transcription;
 
 /**
@@ -28,6 +29,12 @@ class SupplierListingCollector
      * CTA URL to fill the draft in manually (business rule: 2–3 attempts).
      */
     private const int MAX_CLARIFICATIONS = 3;
+
+    /**
+     * Photos attached to one extraction call — enough to recognize the
+     * equipment without inflating the prompt.
+     */
+    private const int MAX_PHOTO_ATTACHMENTS = 5;
 
     /** @var list<string> */
     private const array REQUIRED_FIELDS = ['category', 'description', 'location', 'price'];
@@ -92,9 +99,9 @@ class SupplierListingCollector
      */
     private function handleCollecting(BotSession $session, array $state, InboundMessage $message): AiOutcome
     {
-        $this->intake($session, $state, $message);
-
-        if ($state['transcript'] === []) {
+        // An unreadable message (sticker, empty caption, silent audio) never
+        // consumes a clarification attempt — the bot just asks to rephrase.
+        if (! $this->intake($session, $state, $message)) {
             $this->persist($session, $state);
             $this->messenger->sendText(
                 $session->contact,
@@ -105,7 +112,7 @@ class SupplierListingCollector
         }
 
         $state['fields'] = $this->extract($state);
-        $missing = $this->missingFields($state['fields']);
+        $missing = $this->missingFields($state['fields'], $state);
 
         if ($missing === []) {
             $draft = $this->ensureDraft($session, $state);
@@ -174,27 +181,30 @@ class SupplierListingCollector
 
     /**
      * Pull usable content out of the message into the transcript and store
-     * photos / voice messages on the draft.
+     * photos / voice messages on the draft. Returns whether the message
+     * carried anything the extractor can work with.
      *
      * @param  array<string, mixed>  $state
      */
-    private function intake(BotSession $session, array &$state, InboundMessage $message): void
+    private function intake(BotSession $session, array &$state, InboundMessage $message): bool
     {
-        if ($message->hasMedia()) {
-            $this->intakeMedia($session, $state, $message);
-        }
+        $gotMedia = $message->hasMedia() && $this->intakeMedia($session, $state, $message);
 
         $text = trim((string) $message->text);
 
         if ($text !== '') {
             $state['transcript'][] = $text;
+
+            return true;
         }
+
+        return $gotMedia;
     }
 
     /**
      * @param  array<string, mixed>  $state
      */
-    private function intakeMedia(BotSession $session, array &$state, InboundMessage $message): void
+    private function intakeMedia(BotSession $session, array &$state, InboundMessage $message): bool
     {
         $download = $this->mediaDownloader->download((string) $message->mediaId);
         $draft = $this->ensureDraft($session, $state);
@@ -217,9 +227,11 @@ class SupplierListingCollector
 
             if ($transcription !== '') {
                 $state['transcript'][] = $transcription;
+
+                return true;
             }
 
-            return;
+            return false;
         }
 
         $path = "listings/{$draft->id}/photos/".uniqid('', true).'.jpg';
@@ -230,10 +242,14 @@ class SupplierListingCollector
             'type' => ListingMediaType::Photo,
             'path' => $path,
         ]);
+
+        return true;
     }
 
     /**
-     * Run the extractor over the whole accumulated transcript.
+     * Run the extractor over the whole accumulated transcript, attaching
+     * the draft's photos so the model reads the pictures themselves, not
+     * only their captions.
      *
      * @param  array<string, mixed>  $state
      * @return array<string, mixed>
@@ -242,21 +258,52 @@ class SupplierListingCollector
     {
         $expectedType = ListingType::tryFrom((string) ($state['listing_type'] ?? ''));
 
+        $prompt = $state['transcript'] !== []
+            ? implode("\n", $state['transcript'])
+            : 'Поставщик прислал только фотографии — извлеки из них, что сможешь.';
+
         return (new ListingExtractionAgent($expectedType))
-            ->prompt(implode("\n", $state['transcript']))
+            ->prompt($prompt, attachments: $this->photoAttachments($state))
             ->toArray();
     }
 
     /**
+     * @param  array<string, mixed>  $state
+     * @return list<Image>
+     */
+    private function photoAttachments(array $state): array
+    {
+        if ($state['draft_id'] === null) {
+            return [];
+        }
+
+        return Listing::find($state['draft_id'])
+            ?->photos()->latest()->take(self::MAX_PHOTO_ATTACHMENTS)->get()
+            ->map(fn (ListingMedia $photo): Image => Image::fromStorage($photo->path, $photo->disk))
+            ->all() ?? [];
+    }
+
+    /**
+     * The type joins the required fields when the branch leaves it to the
+     * AI («Определять автоматически») — a listing must never silently
+     * default to «техника».
+     *
      * @param  array<string, mixed>  $fields
+     * @param  array<string, mixed>  $state
      * @return list<string>
      */
-    private function missingFields(array $fields): array
+    private function missingFields(array $fields, array $state): array
     {
-        return array_values(array_filter(
+        $missing = array_values(array_filter(
             self::REQUIRED_FIELDS,
             fn (string $field): bool => blank($fields[$field] ?? null),
         ));
+
+        if (blank($state['listing_type']) && blank($fields['type'] ?? null)) {
+            array_unshift($missing, 'type');
+        }
+
+        return $missing;
     }
 
     /**
@@ -338,6 +385,12 @@ class SupplierListingCollector
      */
     private function clarificationQuestion(array $fields, array $missing): string
     {
+        // The type question outranks whatever the extractor suggested: the
+        // branch cannot finish while the listing type is unknown.
+        if (($missing[0] ?? null) === 'type') {
+            return 'Уточните: вы предлагаете технику в аренду или услугу (работу специалиста)?';
+        }
+
         if (filled($fields['clarifying_question'] ?? null)) {
             return (string) $fields['clarifying_question'];
         }

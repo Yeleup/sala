@@ -15,7 +15,10 @@ use App\Services\Bot\InboundMessage;
  */
 class ScenarioAiAssistant implements AiAssistant
 {
-    public function __construct(private readonly SupplierListingCollector $collector) {}
+    public function __construct(
+        private readonly SupplierListingCollector $collector,
+        private readonly CustomerSearchAssistant $customerSearch,
+    ) {}
 
     public function start(BotSession $session, array $node): AiOutcome
     {
@@ -27,10 +30,11 @@ class ScenarioAiAssistant implements AiAssistant
         return $this->settle($session, $this->handlerFor($node)->resume($session, $node, $message));
     }
 
-    private function handlerFor(array $node): SupplierListingCollector
+    private function handlerFor(array $node): SupplierListingCollector|CustomerSearchAssistant
     {
         return match (AiTask::fromNode($node['task'] ?? null)) {
             AiTask::CollectListing => $this->collector,
+            AiTask::CustomerSearch => $this->customerSearch,
         };
     }
 

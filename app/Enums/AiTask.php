@@ -10,6 +10,7 @@ namespace App\Enums;
 enum AiTask: string
 {
     case CollectListing = 'collect_listing';
+    case CustomerSearch = 'customer_search';
 
     public static function fromNode(mixed $value): self
     {

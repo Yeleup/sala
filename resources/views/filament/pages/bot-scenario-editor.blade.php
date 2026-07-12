@@ -21,6 +21,7 @@
             <button type="button" class="bse-btn" x-on:click="addNode('buttons')">+ Меню (кнопки)</button>
             <button type="button" class="bse-btn" x-on:click="addNode('list')">+ Список</button>
             <button type="button" class="bse-btn" x-on:click="addNode('ai')">+ Запрос ввода (AI)</button>
+            <button type="button" class="bse-btn" x-on:click="addNode('my_listings')">+ Мои объявления (CTA)</button>
 
             <span class="bse-toolbar-spring"></span>
 
@@ -99,15 +100,24 @@
 
                         <template x-if="selected.type === 'ai'">
                             <div class="bse-field">
-                                <p class="bse-note">Управление передаётся AI-ассистенту: он собирает объявление из текста,
-                                    аудио и фото поставщика, задаёт уточняющие вопросы и создаёт черновик.
-                                    После завершения пользователь идёт по выходу «Продолжить».</p>
-                                <span>Тип объявления в этой ветке</span>
-                                <select class="bse-input" x-model="selected.listing_type">
-                                    <option value="">Определять автоматически</option>
-                                    <option value="equipment">Техника</option>
-                                    <option value="service">Услуга</option>
+                                <p class="bse-note" x-text="selected.task === 'customer_search'
+                                    ? 'Управление передаётся AI-ассистенту: он спрашивает, что нужно заказчику, подбирает опубликованные объявления и отправляет заявку выбранному поставщику. После завершения пользователь идёт по выходу «Продолжить».'
+                                    : 'Управление передаётся AI-ассистенту: он собирает объявление из текста, аудио и фото поставщика, задаёт уточняющие вопросы и создаёт черновик. После завершения пользователь идёт по выходу «Продолжить».'"></p>
+                                <span>Задача AI</span>
+                                <select class="bse-input" x-model="selected.task">
+                                    <option value="collect_listing">Сбор объявления поставщика</option>
+                                    <option value="customer_search">Поиск для заказчика</option>
                                 </select>
+                                <template x-if="selected.task !== 'customer_search'">
+                                    <label class="bse-field" style="margin-top: 0.5rem;">
+                                        <span>Тип объявления в этой ветке</span>
+                                        <select class="bse-input" x-model="selected.listing_type">
+                                            <option value="">Определять автоматически</option>
+                                            <option value="equipment">Техника</option>
+                                            <option value="service">Услуга</option>
+                                        </select>
+                                    </label>
+                                </template>
                             </div>
                         </template>
 
@@ -211,7 +221,7 @@
                     TEXT_H: 40,
                     OUT_H: 28,
 
-                    typeLabels: { start: 'Старт', text: 'Текст', buttons: 'Меню (кнопки)', list: 'Список', ai: 'Запрос ввода (AI)' },
+                    typeLabels: { start: 'Старт', text: 'Текст', buttons: 'Меню (кнопки)', list: 'Список', ai: 'Запрос ввода (AI)', my_listings: 'Мои объявления (CTA)' },
                     optionLimit: { buttons: 3, list: 10 },
 
                     init() {
@@ -447,6 +457,10 @@
                         if (type === 'ai') {
                             node.task = 'collect_listing'
                             node.listing_type = ''
+                        }
+
+                        if (type === 'my_listings') {
+                            node.text = 'Откройте кабинет — там ваши объявления, статусы и причины отклонения.'
                         }
 
                         this.nodes.push(node)

@@ -54,6 +54,17 @@ class ScenarioValidator
             }
         }
 
+        // Каждый выход ведёт максимум в один блок: клиент переназначает
+        // связь при повторном соединении, сервер — последний рубеж.
+        $edges
+            ->groupBy(fn (array $edge): string => ($edge['from'] ?? '').'|'.($edge['output'] ?? ''))
+            ->filter(fn ($group): bool => $group->count() > 1)
+            ->each(function ($group) use ($nodes, &$errors): void {
+                $from = $group->first()['from'] ?? '?';
+                $node = $nodes->firstWhere('id', $from) ?? ['id' => $from];
+                $errors[] = "С одного выхода блока {$this->nodeLabel($node)} идёт больше одной связи.";
+            });
+
         return [
             'errors' => array_values(array_unique($errors)),
             'warnings' => $this->unreachableNodeWarnings($nodes->all(), $edges->all()),
@@ -83,7 +94,7 @@ class ScenarioValidator
             $errors[] = 'Выход блока «Старт» не подключен.';
         }
 
-        if (in_array($type, [BotNodeType::Text, BotNodeType::ButtonMenu, BotNodeType::ListMenu], true)
+        if (in_array($type, [BotNodeType::Text, BotNodeType::ButtonMenu, BotNodeType::ListMenu, BotNodeType::MyListings], true)
             && blank($node['text'] ?? null)) {
             $errors[] = "У блока {$label} не заполнен текст сообщения.";
         }

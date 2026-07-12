@@ -10,6 +10,8 @@ use App\Models\BotSession;
 use App\Models\Listing;
 use App\Models\ListingMedia;
 use App\Services\Bot\InboundMessage;
+use App\Enums\AiOperationType;
+use App\Services\Ai\Audit\AiAudit;
 use App\Services\DereuMediaDownloader;
 use App\Services\DereuMessenger;
 use Illuminate\Support\Facades\Storage;
@@ -55,6 +57,7 @@ class SupplierListingCollector
         private readonly DereuMessenger $messenger,
         private readonly DereuMediaDownloader $mediaDownloader,
         private readonly CtaLinkBuilder $cta,
+        private readonly AiAudit $audit,
     ) {}
 
     /**
@@ -111,7 +114,7 @@ class SupplierListingCollector
             return AiOutcome::InProgress;
         }
 
-        $state['fields'] = $this->extract($state);
+        $state['fields'] = $this->extract($session, $state);
         $missing = $this->missingFields($state['fields'], $state);
 
         if ($missing === []) {
@@ -213,10 +216,18 @@ class SupplierListingCollector
             $path = "listings/{$draft->id}/audio/".uniqid('', true).'.ogg';
             Storage::disk('public')->put($path, $download['contents']);
 
-            $transcription = trim((string) Transcription::fromBase64(
-                base64_encode($download['contents']),
-                $download['mime_type'],
-            )->generate());
+            $transcription = $this->audit->run(
+                AiOperationType::Transcription,
+                fn (): string => trim((string) Transcription::fromBase64(
+                    base64_encode($download['contents']),
+                    $download['mime_type'],
+                )->generate()),
+                [
+                    'contact_id' => $session->contact_id,
+                    'bot_session_id' => $session->id,
+                    'listing_id' => $draft->id,
+                ],
+            );
 
             ListingMedia::create([
                 'listing_id' => $draft->id,
@@ -254,7 +265,7 @@ class SupplierListingCollector
      * @param  array<string, mixed>  $state
      * @return array<string, mixed>
      */
-    private function extract(array $state): array
+    private function extract(BotSession $session, array $state): array
     {
         $expectedType = ListingType::tryFrom((string) ($state['listing_type'] ?? ''));
 
@@ -262,9 +273,17 @@ class SupplierListingCollector
             ? implode("\n", $state['transcript'])
             : 'Поставщик прислал только фотографии — извлеки из них, что сможешь.';
 
-        return (new ListingExtractionAgent($expectedType))
-            ->prompt($prompt, attachments: $this->photoAttachments($state))
-            ->toArray();
+        return $this->audit->run(
+            AiOperationType::ListingExtraction,
+            fn (): array => (new ListingExtractionAgent($expectedType))
+                ->prompt($prompt, attachments: $this->photoAttachments($state))
+                ->toArray(),
+            [
+                'contact_id' => $session->contact_id,
+                'bot_session_id' => $session->id,
+                'listing_id' => $state['draft_id'],
+            ],
+        );
     }
 
     /**

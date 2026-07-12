@@ -20,7 +20,14 @@ beforeEach(function () {
 
 function fakeDereuSendAccepted(): void
 {
-    Http::fake(['api.dereu.test/*' => Http::response(['id' => 'uuid', 'status' => 'queued'], 202)]);
+    // Каждому запросу — свой id: журнал channel_messages держит уникальность
+    // по dereu_message_id, как и реальный Dereu.
+    Http::fake([
+        'api.dereu.test/*' => fn () => Http::response(
+            ['id' => (string) Illuminate\Support\Str::uuid(), 'status' => 'queued'],
+            202,
+        ),
+    ]);
 }
 
 test('a text message is sent with the company key and a normalized recipient', function () {

@@ -2,7 +2,10 @@
 
 namespace App\Services;
 
+use App\Enums\ChannelDirection;
+use App\Enums\ChannelMessageStatus;
 use App\Exceptions\SessionWindowClosed;
+use App\Models\ChannelMessage;
 use App\Models\Contact;
 use App\Models\DereuCompany;
 use App\Models\WhatsappTemplate;
@@ -169,7 +172,7 @@ class DereuMessenger
             throw new RuntimeException('WhatsApp number is not connected — cannot send messages.');
         }
 
-        $this->request($company->api_key)
+        $response = $this->request($company->api_key)
             ->post('/messages/send', [
                 'phone_number_id' => $company->phone_number_id,
                 'to' => '+'.ltrim($contact->phone, '+'),
@@ -177,6 +180,32 @@ class DereuMessenger
                 'payload' => $payload,
             ])
             ->throw();
+
+        ChannelMessage::create([
+            'contact_id' => $contact->id,
+            'direction' => ChannelDirection::Outbound,
+            'type' => $type,
+            'text' => $this->outboundText($type, $payload),
+            'payload' => $payload,
+            'dereu_message_id' => $response->json('id'),
+            'status' => ChannelMessageStatus::Queued,
+        ]);
+    }
+
+    /**
+     * A short human-readable body for the journal list; the full payload
+     * is stored next to it anyway.
+     *
+     * @param  array<string, mixed>  $payload
+     */
+    protected function outboundText(string $type, array $payload): ?string
+    {
+        return match ($type) {
+            'text' => $payload['body'] ?? null,
+            'interactive' => $payload['body']['text'] ?? null,
+            'template' => 'Шаблон: '.($payload['name'] ?? '?'),
+            default => null,
+        };
     }
 
     protected function request(string $apiKey): PendingRequest

@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Jobs\ApplyDereuDeliveryStatus;
 use App\Jobs\ApplyDereuTemplateStatus;
 use App\Jobs\ProcessDereuWebhookEvent;
 use App\Models\DereuWebhookEvent;
@@ -52,6 +53,11 @@ class DereuWebhookController extends Controller
 
         if ($storedEvent->wasRecentlyCreated && $event === 'template_status_update') {
             ApplyDereuTemplateStatus::dispatch($storedEvent);
+        }
+
+        if ($storedEvent->wasRecentlyCreated
+            && in_array($event, ['message_sent', 'message_delivered', 'message_read', 'message_failed'], true)) {
+            ApplyDereuDeliveryStatus::dispatch($storedEvent);
         }
 
         return response()->noContent();

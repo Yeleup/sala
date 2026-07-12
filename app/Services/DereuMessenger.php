@@ -2,8 +2,10 @@
 
 namespace App\Services;
 
+use App\Exceptions\SessionWindowClosed;
 use App\Models\Contact;
 use App\Models\DereuCompany;
+use App\Models\WhatsappTemplate;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\PendingRequest;
 use Illuminate\Support\Facades\Http;
@@ -14,8 +16,9 @@ use RuntimeException;
  *
  * Payloads are Meta Cloud API message objects passed through by Dereu;
  * delivery statuses arrive asynchronously via the webhook. Free session
- * messages reach the contact only inside the 24-hour window
- * (Contact::hasOpenSessionWindow()).
+ * messages are deliverable only inside the contact's 24-hour window —
+ * sending one outside it throws SessionWindowClosed; outside the window
+ * use an approved Template Message (sendTemplate / sendTextOrTemplate).
  */
 class DereuMessenger
 {
@@ -82,10 +85,66 @@ class DereuMessenger
     }
 
     /**
+     * A paid Template Message — the only way to reach a contact outside
+     * the 24-hour session window. The template must be approved by Meta.
+     *
+     * @param  list<string>  $bodyParameters  Values for the {{n}} placeholders of the template body, in order.
+     */
+    public function sendTemplate(Contact $contact, WhatsappTemplate $template, array $bodyParameters = []): void
+    {
+        if (! $template->isApproved()) {
+            throw new RuntimeException(sprintf(
+                'Template "%s" (%s) is not approved by Meta — cannot send it.',
+                $template->name,
+                $template->language,
+            ));
+        }
+
+        $payload = [
+            'name' => $template->name,
+            'language' => ['code' => $template->language],
+        ];
+
+        if ($bodyParameters !== []) {
+            $payload['components'] = [[
+                'type' => 'body',
+                'parameters' => array_map(
+                    fn (string $value): array => ['type' => 'text', 'text' => $value],
+                    $bodyParameters,
+                ),
+            ]];
+        }
+
+        $this->send($contact, 'template', $payload);
+    }
+
+    /**
+     * Session text while the 24-hour window is open, the approved template
+     * otherwise — the channel choice WhatsApp imposes on every proactive
+     * notification (customer requests, the 30-day relevance poll).
+     *
+     * @param  list<string>  $bodyParameters
+     */
+    public function sendTextOrTemplate(Contact $contact, string $text, WhatsappTemplate $template, array $bodyParameters = []): void
+    {
+        if ($contact->hasOpenSessionWindow()) {
+            $this->sendText($contact, $text);
+
+            return;
+        }
+
+        $this->sendTemplate($contact, $template, $bodyParameters);
+    }
+
+    /**
      * @param  array<string, mixed>  $payload
      */
     protected function send(Contact $contact, string $type, array $payload): void
     {
+        if ($type !== 'template' && ! $contact->hasOpenSessionWindow()) {
+            throw new SessionWindowClosed($contact);
+        }
+
         $company = DereuCompany::current();
 
         if ($company === null || ! $company->isConnected() || ! $company->hasApiKey()) {

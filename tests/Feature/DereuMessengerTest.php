@@ -1,6 +1,8 @@
 <?php
 
+use App\Exceptions\SessionWindowClosed;
 use App\Models\Contact;
+use App\Models\WhatsappTemplate;
 use App\Services\DereuMessenger;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\Request;
@@ -24,7 +26,7 @@ function fakeDereuSendAccepted(): void
 test('a text message is sent with the company key and a normalized recipient', function () {
     fakeDereuSendAccepted();
     connectedDereuCompany(['phone_number_id' => '1234567890', 'api_key' => 'dereu_testkey']);
-    $contact = Contact::factory()->create(['phone' => '77011234567']);
+    $contact = Contact::factory()->withOpenSessionWindow()->create(['phone' => '77011234567']);
 
     app(DereuMessenger::class)->sendText($contact, 'Привет!');
 
@@ -39,7 +41,7 @@ test('a text message is sent with the company key and a normalized recipient', f
 test('a recipient phone that already has a plus is not doubled', function () {
     fakeDereuSendAccepted();
     connectedDereuCompany();
-    $contact = Contact::factory()->create(['phone' => '+77011234567']);
+    $contact = Contact::factory()->withOpenSessionWindow()->create(['phone' => '+77011234567']);
 
     app(DereuMessenger::class)->sendText($contact, 'Привет!');
 
@@ -49,7 +51,7 @@ test('a recipient phone that already has a plus is not doubled', function () {
 test('buttons are sent as an interactive button message', function () {
     fakeDereuSendAccepted();
     connectedDereuCompany();
-    $contact = Contact::factory()->create();
+    $contact = Contact::factory()->withOpenSessionWindow()->create();
 
     app(DereuMessenger::class)->sendButtons($contact, 'Кто вы?', [
         ['id' => 'supplier', 'title' => 'Поставщик'],
@@ -68,7 +70,7 @@ test('buttons are sent as an interactive button message', function () {
 test('a web handoff link is sent as an interactive cta_url message', function () {
     fakeDereuSendAccepted();
     connectedDereuCompany();
-    $contact = Contact::factory()->create();
+    $contact = Contact::factory()->withOpenSessionWindow()->create();
 
     app(DereuMessenger::class)->sendCtaUrl($contact, 'Откройте форму', 'Открыть', 'https://app.test/supplier/listings/1/edit?signature=abc');
 
@@ -84,7 +86,7 @@ test('a web handoff link is sent as an interactive cta_url message', function ()
 test('a list is sent as an interactive list message with a single section', function () {
     fakeDereuSendAccepted();
     connectedDereuCompany();
-    $contact = Contact::factory()->create();
+    $contact = Contact::factory()->withOpenSessionWindow()->create();
 
     app(DereuMessenger::class)->sendList($contact, 'Выберите категорию', 'Категории', [
         ['id' => 'crane', 'title' => 'Кран'],
@@ -105,7 +107,7 @@ test('a list is sent as an interactive list message with a single section', func
 
 test('sending fails when no company is connected', function () {
     Http::fake();
-    $contact = Contact::factory()->create();
+    $contact = Contact::factory()->withOpenSessionWindow()->create();
 
     expect(fn () => app(DereuMessenger::class)->sendText($contact, 'Привет!'))
         ->toThrow(RuntimeException::class);
@@ -116,7 +118,7 @@ test('sending fails when no company is connected', function () {
 test('sending fails when the connected company has no api key', function () {
     Http::fake();
     connectedDereuCompany(['api_key' => null]);
-    $contact = Contact::factory()->create();
+    $contact = Contact::factory()->withOpenSessionWindow()->create();
 
     expect(fn () => app(DereuMessenger::class)->sendText($contact, 'Привет!'))
         ->toThrow(RuntimeException::class);
@@ -127,8 +129,64 @@ test('sending fails when the connected company has no api key', function () {
 test('a rejected send surfaces as an exception', function () {
     Http::fake(['api.dereu.test/*' => Http::response(['error' => 'validation'], 422)]);
     connectedDereuCompany();
-    $contact = Contact::factory()->create();
+    $contact = Contact::factory()->withOpenSessionWindow()->create();
 
     expect(fn () => app(DereuMessenger::class)->sendText($contact, 'Привет!'))
         ->toThrow(RequestException::class);
+});
+
+test('a session message outside the 24-hour window is refused locally', function () {
+    Http::fake();
+    connectedDereuCompany();
+    $contact = Contact::factory()->withClosedSessionWindow()->create();
+
+    expect(fn () => app(DereuMessenger::class)->sendText($contact, 'Привет!'))
+        ->toThrow(SessionWindowClosed::class);
+
+    Http::assertNothingSent();
+});
+
+test('an approved template is sent with body parameters regardless of the window', function () {
+    fakeDereuSendAccepted();
+    connectedDereuCompany();
+    $contact = Contact::factory()->withClosedSessionWindow()->create();
+    $template = WhatsappTemplate::factory()->approved()->create(['name' => 'listing_renewal', 'language' => 'ru']);
+
+    app(DereuMessenger::class)->sendTemplate($contact, $template, ['Автокран 25т']);
+
+    Http::assertSent(fn (Request $request) => $request['type'] === 'template'
+        && $request['payload']['name'] === 'listing_renewal'
+        && $request['payload']['language'] === ['code' => 'ru']
+        && $request['payload']['components'] === [[
+            'type' => 'body',
+            'parameters' => [['type' => 'text', 'text' => 'Автокран 25т']],
+        ]]);
+});
+
+test('an unapproved template cannot be sent', function () {
+    Http::fake();
+    connectedDereuCompany();
+    $contact = Contact::factory()->withClosedSessionWindow()->create();
+    $template = WhatsappTemplate::factory()->create();
+
+    expect(fn () => app(DereuMessenger::class)->sendTemplate($contact, $template, []))
+        ->toThrow(RuntimeException::class, 'not approved');
+
+    Http::assertNothingSent();
+});
+
+test('the channel is chosen by the window: session text inside, template outside', function () {
+    fakeDereuSendAccepted();
+    connectedDereuCompany();
+    $template = WhatsappTemplate::factory()->approved()->create();
+
+    $openContact = Contact::factory()->withOpenSessionWindow()->create();
+    app(DereuMessenger::class)->sendTextOrTemplate($openContact, 'Объявление скоро истечёт', $template, ['x']);
+    Http::assertSent(fn (Request $request) => $request['type'] === 'text'
+        && $request['payload'] === ['body' => 'Объявление скоро истечёт']);
+
+    $closedContact = Contact::factory()->withClosedSessionWindow()->create();
+    app(DereuMessenger::class)->sendTextOrTemplate($closedContact, 'Объявление скоро истечёт', $template, ['x']);
+    Http::assertSent(fn (Request $request) => $request['type'] === 'template'
+        && $request['payload']['name'] === $template->name);
 });

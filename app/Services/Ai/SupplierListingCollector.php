@@ -125,7 +125,7 @@ class SupplierListingCollector
                 $session->contact,
                 'Не получилось собрать все данные из переписки. Откройте форму и заполните объявление вручную.',
                 'Заполнить вручную',
-                $this->cta->draftEditUrl($draft),
+                $this->cta->editUrl($draft),
             );
 
             return AiOutcome::Completed;
@@ -158,7 +158,7 @@ class SupplierListingCollector
                     $session->contact,
                     'Откройте форму, чтобы проверить и поправить объявление.',
                     'Открыть объявление',
-                    $this->cta->draftEditUrl($draft),
+                    $this->cta->editUrl($draft),
                 );
             }
 

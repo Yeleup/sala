@@ -2,27 +2,47 @@
 
 namespace App\Services\Ai;
 
+use App\Models\Contact;
 use App\Models\Listing;
 use Illuminate\Support\Facades\URL;
 
 /**
- * Builds the CTA URLs the bot hands off to when a task needs the web
- * interface — editing a draft or fixing what the AI misrecognized (see
- * docs/modules/whatsapp-integration.md, «Управление через Web»).
+ * Builds the signed URLs into the supplier web portal: the CTA links the
+ * bot hands off to (editing a draft, «Мои объявления») and the portal's
+ * own action endpoints (see docs/modules/whatsapp-integration.md,
+ * «Веб-кабинет поставщика»).
  *
- * Links are signed and time-limited; the supplier web portal itself is
- * Module 3 and currently a placeholder.
+ * Every link is personal, signed and time-limited to 7 days.
  */
 class CtaLinkBuilder
 {
     private const int LINK_TTL_DAYS = 7;
 
-    public function draftEditUrl(Listing $listing): string
+    public function editUrl(Listing $listing): string
     {
-        return URL::temporarySignedRoute(
-            'supplier.listings.edit',
-            now()->addDays(self::LINK_TTL_DAYS),
-            ['listing' => $listing->getKey()],
-        );
+        return $this->signed('supplier.listings.edit', ['listing' => $listing->getKey()]);
+    }
+
+    public function myListingsUrl(Contact $contact): string
+    {
+        return $this->signed('supplier.listings.index', ['contact' => $contact->getKey()]);
+    }
+
+    public function updateUrl(Listing $listing): string
+    {
+        return $this->signed('supplier.listings.update', ['listing' => $listing->getKey()]);
+    }
+
+    public function archiveUrl(Listing $listing): string
+    {
+        return $this->signed('supplier.listings.archive', ['listing' => $listing->getKey()]);
+    }
+
+    /**
+     * @param  array<string, int|string>  $parameters
+     */
+    protected function signed(string $route, array $parameters): string
+    {
+        return URL::temporarySignedRoute($route, now()->addDays(self::LINK_TTL_DAYS), $parameters);
     }
 }

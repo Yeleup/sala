@@ -49,6 +49,56 @@ class DereuPlatformClient
             ->json();
     }
 
+    /**
+     * Templates of the company as Dereu/Meta know them (components in the
+     * Meta form, BODY included as one of the components).
+     *
+     * @return list<array{id: int, name: string, language: string, category: string, status: string, components: list<array<string, mixed>>}>
+     */
+    public function listTemplates(string $externalId): array
+    {
+        return $this->request()
+            ->get("/platform/companies/{$externalId}/templates")
+            ->throw()
+            ->json('data') ?? [];
+    }
+
+    /**
+     * Register a template with Meta through Dereu. Moderation is
+     * asynchronous: the response status is pending, the outcome arrives via
+     * the template_status_update webhook. Meta requires example values for
+     * every {{n}} placeholder.
+     *
+     * @param  array<string, mixed>  $payload  name, language, category, body, components?, example?
+     * @return array{name: string, language: string, status: string}
+     */
+    public function createTemplate(string $externalId, array $payload): array
+    {
+        return $this->request()
+            ->post("/platform/companies/{$externalId}/templates", $payload)
+            ->throw()
+            ->json();
+    }
+
+    public function deleteTemplate(string $externalId, int $dereuTemplateId): void
+    {
+        $this->request()
+            ->delete("/platform/companies/{$externalId}/templates/{$dereuTemplateId}")
+            ->throw();
+    }
+
+    /**
+     * Ask Dereu to re-pull templates and their statuses from Meta — picks
+     * up templates created or changed directly in Meta Business Manager.
+     */
+    public function syncTemplates(string $externalId): int
+    {
+        return (int) $this->request()
+            ->post("/platform/companies/{$externalId}/templates/sync")
+            ->throw()
+            ->json('synced');
+    }
+
     protected function request(): PendingRequest
     {
         $platformKey = config('services.dereu.platform_key');

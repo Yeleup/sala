@@ -1,6 +1,6 @@
 <?php
 
-use App\Models\Listing;
+use App\Http\Controllers\SupplierListingController;
 use Illuminate\Support\Facades\Route;
 
 Route::get('/', function () {
@@ -8,11 +8,18 @@ Route::get('/', function () {
 });
 
 /**
- * Supplier web portal (CTA target). Placeholder until Module 3 builds the
- * real editing interface; the signed link and route name are already what
- * the bot hands off to, so the portal can replace this without touching
- * the AI assistant.
+ * Supplier web portal (Module 3). Every route requires a valid signed URL:
+ * personal, time-limited links issued by CtaLinkBuilder and handed off from
+ * WhatsApp (or embedded into the portal pages themselves). The edit route
+ * keeps its historical path so previously issued CTA links stay valid.
  */
-Route::get('/supplier/listings/{listing}/edit', function (Listing $listing) {
-    return response()->view('supplier.listing-edit-placeholder', ['listing' => $listing]);
-})->middleware('signed')->name('supplier.listings.edit');
+Route::middleware('signed')->name('supplier.listings.')->group(function (): void {
+    Route::get('/supplier/{contact}/listings', [SupplierListingController::class, 'index'])
+        ->whereNumber('contact')->name('index');
+    Route::get('/supplier/listings/{listing}/edit', [SupplierListingController::class, 'edit'])
+        ->whereNumber('listing')->name('edit');
+    Route::post('/supplier/listings/{listing}', [SupplierListingController::class, 'update'])
+        ->whereNumber('listing')->name('update');
+    Route::post('/supplier/listings/{listing}/archive', [SupplierListingController::class, 'archive'])
+        ->whereNumber('listing')->name('archive');
+});

@@ -10,9 +10,9 @@ use InvalidArgumentException;
 /**
  * Built-in catalog of the project's standard Template Messages — the ones
  * the business rules rely on (the 30-day relevance poll, the customer
- * request notification, the operator's fleet update broadcast). The
- * operator adds them to the registry in one click instead of typing the
- * texts by hand; flows reference them by the name constants.
+ * request notification). The operator adds them to the registry in one
+ * click instead of typing the texts by hand; flows reference them by the
+ * name constants.
  *
  * @phpstan-type LibraryEntry array{name: string, language: string, category: WhatsappTemplateCategory, title: string, purpose: string, body: string, quick_replies: list<string>, examples: list<string>}
  */
@@ -23,9 +23,6 @@ class WhatsappTemplateLibrary
 
     /** Notifies a supplier about a new customer request outside the 24-hour window. */
     public const string NEW_CUSTOMER_REQUEST = 'new_customer_request';
-
-    /** The operator's mass broadcast asking suppliers to refresh their fleet. */
-    public const string FLEET_STATUS_UPDATE = 'fleet_status_update';
 
     public function __construct(private readonly WhatsappTemplateRegistry $registry) {}
 
@@ -54,16 +51,6 @@ class WhatsappTemplateLibrary
                 'body' => 'По вашему объявлению «{{1}}» новая заявка от заказчика: «{{2}}». Готовы взять заказ?',
                 'quick_replies' => ['Согласиться', 'Отказаться'],
                 'examples' => ['Автокран 25 т', 'Нужен кран на завтра, Шымкент'],
-            ],
-            [
-                'name' => self::FLEET_STATUS_UPDATE,
-                'language' => 'ru',
-                'category' => WhatsappTemplateCategory::Marketing,
-                'title' => 'Актуализация парка (рассылка)',
-                'purpose' => 'Массовая рассылка оператора с просьбой обновить объявления. Ответ поставщика откроет 24-часовое окно — бот пришлёт персональную ссылку на кабинет.',
-                'body' => 'Здравствуйте! Мы обновляем каталог техники и услуг. Нажмите кнопку ниже — и мы пришлём ссылку для обновления ваших объявлений.',
-                'quick_replies' => ['Обновить объявления'],
-                'examples' => [],
             ],
         ]);
     }

@@ -4,8 +4,14 @@ namespace App\Filament\Pages;
 
 use App\Enums\AiTask;
 use App\Enums\BotNodeType;
+use App\Enums\BotScenarioTrigger;
 use App\Enums\ListingType;
+use App\Enums\ScenarioAction;
+use App\Enums\ScenarioCondition;
+use App\Enums\ScenarioMessageChannel;
+use App\Enums\ScenarioVariable;
 use App\Models\BotScenario;
+use App\Models\WhatsappTemplate;
 use App\Services\Bot\ScenarioValidator;
 use BackedEnum;
 use Filament\Notifications\Notification;
@@ -13,12 +19,16 @@ use Filament\Pages\Page;
 use Filament\Support\Icons\Heroicon;
 use Illuminate\Support\HtmlString;
 use Livewire\Attributes\Computed;
+use Livewire\Attributes\Url;
+use UnitEnum;
 
 /**
- * Visual constructor of the bot's single main scenario
- * (docs/modules/bot-constructor.md): a canvas of blocks connected by
- * transitions. Admins edit the draft; contacts are affected only after
- * «Опубликовать сценарий» passes validation.
+ * Visual constructor of the bot scenarios (docs/modules/bot-constructor.md):
+ * a canvas of blocks connected by transitions. Besides the main dialog
+ * the bot has run-based scenarios — auto-scenarios launched by system
+ * events and broadcast scenarios launched by the operator; each is a
+ * separate graph edited here. Admins edit the draft; contacts are
+ * affected only after «Опубликовать сценарий» passes validation.
  */
 class BotScenarioEditor extends Page
 {
@@ -28,29 +38,151 @@ class BotScenarioEditor extends Page
 
     protected static string|BackedEnum|null $navigationIcon = Heroicon::OutlinedShare;
 
-    protected static ?string $navigationLabel = 'Сценарий бота';
+    protected static string|UnitEnum|null $navigationGroup = 'Бот';
 
-    protected static ?string $title = 'Сценарий бота';
+    protected static ?string $navigationLabel = 'Сценарии';
+
+    protected static ?string $title = 'Сценарии бота';
+
+    #[Url(as: 'scenario')]
+    public ?int $scenarioId = null;
+
+    public string $newScenarioName = '';
+
+    public string $newScenarioTrigger = BotScenarioTrigger::NewCustomerRequest->value;
 
     public function mount(): void
     {
-        $this->scenario;
+        $this->scenarioId = $this->scenario->id;
     }
 
     /**
-     * The single main scenario; created with a lone Start block on the
-     * first visit.
+     * The scenario being edited; defaults to the main dialog, which is
+     * created with a lone Start block on the first visit.
      */
     #[Computed]
     public function scenario(): BotScenario
     {
+        if ($this->scenarioId !== null) {
+            $selected = BotScenario::query()->find($this->scenarioId);
+
+            if ($selected !== null) {
+                return $selected;
+            }
+        }
+
         return BotScenario::main() ?? BotScenario::query()->create([
             'name' => 'Главный сценарий',
+            'trigger' => BotScenarioTrigger::InboundMessage,
             'draft_definition' => [
                 'nodes' => [['id' => 'start', 'type' => 'start', 'x' => 80, 'y' => 220]],
                 'edges' => [],
             ],
         ]);
+    }
+
+    /**
+     * @return \Illuminate\Database\Eloquent\Collection<int, BotScenario>
+     */
+    #[Computed]
+    public function scenarios()
+    {
+        return BotScenario::query()->orderBy('id')->get();
+    }
+
+    /**
+     * Reference data the canvas editor needs for the block sidebar:
+     * which blocks the scenario's trigger allows and the select options
+     * for templates, variables, conditions and actions.
+     *
+     * @return array<string, mixed>
+     */
+    #[Computed]
+    public function editorConfig(): array
+    {
+        $trigger = $this->scenario->trigger;
+
+        return [
+            'runBased' => $trigger->isRunBased(),
+            'templates' => WhatsappTemplate::query()->orderBy('name')->get()
+                ->map(fn (WhatsappTemplate $template): array => [
+                    'name' => $template->name,
+                    'label' => $template->name.' — '.$template->status->getLabel(),
+                    'body' => (string) $template->body,
+                ])
+                ->values()
+                ->all(),
+            'variables' => collect(ScenarioVariable::cases())
+                ->filter(fn (ScenarioVariable $variable): bool => $variable->allowedIn($trigger))
+                ->map(fn (ScenarioVariable $variable): array => ['value' => $variable->value, 'label' => $variable->label()])
+                ->values()
+                ->all(),
+            'conditions' => collect(ScenarioCondition::cases())
+                ->filter(fn (ScenarioCondition $condition): bool => $condition->allowedIn($trigger))
+                ->map(fn (ScenarioCondition $condition): array => ['value' => $condition->value, 'label' => $condition->label()])
+                ->values()
+                ->all(),
+            'actions' => collect(ScenarioAction::cases())
+                ->filter(fn (ScenarioAction $action): bool => $action->allowedIn($trigger))
+                ->map(fn (ScenarioAction $action): array => ['value' => $action->value, 'label' => $action->label()])
+                ->values()
+                ->all(),
+        ];
+    }
+
+    public function selectScenario(int $id): void
+    {
+        $this->redirect(static::getUrl(['scenario' => $id]));
+    }
+
+    public function createScenario(): void
+    {
+        $name = trim($this->newScenarioName);
+        $trigger = BotScenarioTrigger::tryFrom($this->newScenarioTrigger);
+
+        if ($name === '' || $trigger === null) {
+            Notification::make()
+                ->title('Укажите название и триггер нового сценария')
+                ->danger()
+                ->send();
+
+            return;
+        }
+
+        $scenario = BotScenario::query()->create([
+            'name' => $name,
+            'trigger' => $trigger,
+            'draft_definition' => [
+                'nodes' => [['id' => 'start', 'type' => 'start', 'x' => 80, 'y' => 220]],
+                'edges' => [],
+            ],
+        ]);
+
+        $this->redirect(static::getUrl(['scenario' => $scenario->id]));
+    }
+
+    /**
+     * Deleting is allowed only while the scenario has never been
+     * published: a published scenario may have runs in flight whose
+     * buttons must keep working.
+     */
+    public function deleteScenario(): void
+    {
+        $scenario = $this->scenario;
+
+        if ($scenario->isPublished()) {
+            Notification::make()
+                ->title('Опубликованный сценарий удалить нельзя')
+                ->body('По нему могут ждать ответа уже отправленные сообщения.')
+                ->danger()
+                ->send();
+
+            return;
+        }
+
+        $scenario->delete();
+
+        $this->redirect(static::getUrl());
     }
 
     /**
@@ -78,7 +210,7 @@ class BotScenarioEditor extends Page
 
         $scenario->update(['draft_definition' => $clean]);
 
-        ['errors' => $errors, 'warnings' => $warnings] = app(ScenarioValidator::class)->validate($clean);
+        ['errors' => $errors, 'warnings' => $warnings] = app(ScenarioValidator::class)->validate($clean, $scenario->trigger);
 
         if ($errors !== []) {
             Notification::make()
@@ -95,6 +227,8 @@ class BotScenarioEditor extends Page
         $scenario->publishDraft();
         unset($this->scenario);
 
+        $warnings = [...$warnings, ...$this->shadowedTriggerWarnings($scenario)];
+
         $notification = Notification::make()
             ->title('Сценарий опубликован')
             ->success();
@@ -104,6 +238,27 @@ class BotScenarioEditor extends Page
         }
 
         $notification->send();
+    }
+
+    /**
+     * With several published scenarios on one trigger the oldest wins —
+     * tell the operator this one will not actually be launched.
+     *
+     * @return list<string>
+     */
+    protected function shadowedTriggerWarnings(BotScenario $scenario): array
+    {
+        if (! $scenario->trigger->isRunBased()) {
+            return [];
+        }
+
+        $active = BotScenario::publishedForTrigger($scenario->trigger);
+
+        if ($active === null || $active->id === $scenario->id) {
+            return [];
+        }
+
+        return ["Триггер «{$scenario->trigger->label()}» запускает более старый сценарий «{$active->name}» — этот опубликован, но запускаться не будет, пока существует тот."];
     }
 
     /**
@@ -154,6 +309,29 @@ class BotScenarioEditor extends Page
                 if (filled($node['listing_type'] ?? null) && ListingType::tryFrom((string) $node['listing_type']) !== null) {
                     $clean['listing_type'] = (string) $node['listing_type'];
                 }
+            }
+
+            if ($clean['type'] === BotNodeType::Message->value) {
+                $clean['channel'] = ScenarioMessageChannel::fromNode($node['channel'] ?? null)->value;
+                $clean['template_name'] = trim((string) ($node['template_name'] ?? ''));
+                $clean['variables'] = collect(is_array($node['variables'] ?? null) ? $node['variables'] : [])
+                    ->filter(fn (mixed $variable): bool => is_string($variable) && $variable !== '')
+                    ->values()
+                    ->all();
+
+                $timeoutHours = (int) ($node['timeout_hours'] ?? 0);
+
+                if ($timeoutHours > 0) {
+                    $clean['timeout_hours'] = $timeoutHours;
+                }
+            }
+
+            if ($clean['type'] === BotNodeType::Condition->value) {
+                $clean['condition'] = (string) ($node['condition'] ?? '');
+            }
+
+            if ($clean['type'] === BotNodeType::Action->value) {
+                $clean['action'] = (string) ($node['action'] ?? '');
             }
 
             $nodes[] = $clean;

@@ -1,15 +1,16 @@
 <?php
 
+use App\Enums\BotScenarioTrigger;
 use App\Models\BotScenario;
 use App\Services\Bot\ScenarioDefinition;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 
 uses(RefreshDatabase::class);
 
-test('the installer publishes the reference scenario with every MVP branch', function () {
+test('the installer publishes the reference main dialog with every MVP branch', function () {
     $this->artisan('bot:install-default-scenario')->assertSuccessful();
 
-    $scenario = BotScenario::sole();
+    $scenario = BotScenario::main();
     expect($scenario->isPublished())->toBeTrue();
 
     $definition = new ScenarioDefinition($scenario->published_definition);
@@ -25,12 +26,34 @@ test('the installer publishes the reference scenario with every MVP branch', fun
         ->and($definition->startNodeId())->toBe('start');
 });
 
+test('the installer publishes the flow scenarios next to the main dialog', function () {
+    $this->artisan('bot:install-default-scenario')->assertSuccessful();
+
+    expect(BotScenario::query()->count())->toBe(3);
+
+    $request = BotScenario::publishedForTrigger(BotScenarioTrigger::NewCustomerRequest);
+    $requestNodes = collect($request->published_definition['nodes']);
+
+    expect($requestNodes->firstWhere('id', 'poll'))
+        ->toMatchArray(['type' => 'message', 'channel' => 'adaptive', 'template_name' => 'new_customer_request'])
+        ->and($requestNodes->firstWhere('id', 'poll')['variables'])->toBe(['listing.category', 'request.query'])
+        ->and($requestNodes->firstWhere('id', 'do_accept')['action'])->toBe('accept_request')
+        ->and($requestNodes->firstWhere('id', 'check_accept')['condition'])->toBe('request_pending');
+
+    $renewal = BotScenario::publishedForTrigger(BotScenarioTrigger::ListingExpiring);
+    $renewalNodes = collect($renewal->published_definition['nodes']);
+
+    expect($renewalNodes->firstWhere('id', 'poll')['template_name'])->toBe('listing_renewal')
+        ->and($renewalNodes->firstWhere('id', 'do_renew')['action'])->toBe('renew_listing')
+        ->and($renewalNodes->firstWhere('id', 'do_archive')['action'])->toBe('archive_listing');
+});
+
 test('the installer refuses to overwrite a published scenario without --force', function () {
     BotScenario::factory()->published()->create();
 
     $this->artisan('bot:install-default-scenario')->assertFailed();
 
-    expect(BotScenario::sole()->published_version)->toBe(1);
+    expect(BotScenario::main()->published_version)->toBe(1);
 });
 
 test('--force replaces the published scenario with the reference one', function () {
@@ -38,7 +61,7 @@ test('--force replaces the published scenario with the reference one', function 
 
     $this->artisan('bot:install-default-scenario', ['--force' => true])->assertSuccessful();
 
-    $scenario = BotScenario::sole();
+    $scenario = BotScenario::main();
     expect($scenario->published_version)->toBe(2)
         ->and(collect($scenario->published_definition['nodes'])->pluck('id'))->toContain('customer_search');
 });
@@ -48,5 +71,5 @@ test('an unpublished draft is replaced without --force', function () {
 
     $this->artisan('bot:install-default-scenario')->assertSuccessful();
 
-    expect(BotScenario::sole()->isPublished())->toBeTrue();
+    expect(BotScenario::main()->isPublished())->toBeTrue();
 });

@@ -2,6 +2,7 @@
 
 namespace Database\Factories;
 
+use App\Enums\BotScenarioTrigger;
 use App\Models\BotScenario;
 use Illuminate\Database\Eloquent\Factories\Factory;
 
@@ -17,9 +18,32 @@ class BotScenarioFactory extends Factory
     {
         return [
             'name' => 'Главный сценарий',
+            'trigger' => BotScenarioTrigger::InboundMessage,
             'draft_definition' => static::roleMenuDefinition(),
             'published_version' => 0,
         ];
+    }
+
+    /**
+     * Every publication leaves an immutable snapshot; mirror that for
+     * factory-published scenarios so runs can resolve their graphs.
+     */
+    public function configure(): static
+    {
+        return $this->afterCreating(function (BotScenario $scenario): void {
+            if ($scenario->published_version > 0 && $scenario->versions()->doesntExist()) {
+                $scenario->versions()->create([
+                    'version' => $scenario->published_version,
+                    'definition' => $scenario->published_definition,
+                    'published_at' => $scenario->published_at ?? now(),
+                ]);
+            }
+        });
+    }
+
+    public function trigger(BotScenarioTrigger $trigger): static
+    {
+        return $this->state(fn (): array => ['trigger' => $trigger]);
     }
 
     /**

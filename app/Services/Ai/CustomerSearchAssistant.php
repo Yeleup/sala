@@ -3,10 +3,13 @@
 namespace App\Services\Ai;
 
 use App\Enums\AiOutcome;
+use App\Enums\BotScenarioTrigger;
+use App\Models\BotScenario;
 use App\Models\BotSession;
 use App\Models\CustomerRequest;
 use App\Models\Listing;
 use App\Services\Bot\InboundMessage;
+use App\Services\Bot\ScenarioRunner;
 use App\Services\CustomerRequestNotifier;
 use App\Services\DereuMessenger;
 use Illuminate\Support\Collection;
@@ -39,6 +42,7 @@ class CustomerSearchAssistant
     public function __construct(
         private readonly DereuMessenger $messenger,
         private readonly ListingMatcher $matcher,
+        private readonly ScenarioRunner $runner,
         private readonly CustomerRequestNotifier $notifier,
     ) {}
 
@@ -144,7 +148,7 @@ class CustomerSearchAssistant
             'query_text' => (string) $state['query'],
         ]);
 
-        $this->notifier->notifySupplier($request);
+        $this->notifySupplier($request);
 
         $this->messenger->sendText(
             $session->contact,
@@ -155,6 +159,24 @@ class CustomerSearchAssistant
         );
 
         return AiOutcome::Completed;
+    }
+
+    /**
+     * The published «Новая заявка» scenario orchestrates the supplier
+     * notification as an isolated run; while none is published, the
+     * legacy hardcoded notifier keeps the flow working.
+     */
+    protected function notifySupplier(CustomerRequest $request): void
+    {
+        $scenario = BotScenario::publishedForTrigger(BotScenarioTrigger::NewCustomerRequest);
+
+        if ($scenario !== null) {
+            $this->runner->launch($scenario, $request->listing->supplier, $request);
+
+            return;
+        }
+
+        $this->notifier->notifySupplier($request);
     }
 
     /**

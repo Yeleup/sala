@@ -1,7 +1,9 @@
 <?php
 
+use App\Enums\BotScenarioTrigger;
 use App\Filament\Pages\BotScenarioEditor;
 use App\Models\BotScenario;
+use App\Models\BotScenarioVersion;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Livewire\Livewire;
@@ -149,4 +151,147 @@ test('a republication increments the version further', function () {
     Livewire::test(BotScenarioEditor::class)->call('publish', publishableDefinition());
 
     expect(BotScenario::sole()->published_version)->toBe(2);
+});
+
+test('every publication leaves an immutable version snapshot', function () {
+    BotScenario::factory()->published()->create();
+
+    Livewire::test(BotScenarioEditor::class)->call('publish', publishableDefinition());
+
+    $scenario = BotScenario::sole();
+    expect($scenario->versions()->count())->toBe(2)
+        ->and(BotScenarioVersion::query()->where('version', 2)->sole()->definition)
+        ->toBe($scenario->published_definition);
+});
+
+/**
+ * Публикуемый run-based граф: Старт → сообщение с кнопкой → действие → конец.
+ */
+function publishableRunDefinition(): array
+{
+    return [
+        'nodes' => [
+            ['id' => 'start', 'type' => 'start', 'x' => 0, 'y' => 0],
+            ['id' => 'blast', 'type' => 'message', 'text' => 'Обновите объявления', 'channel' => 'session',
+                'x' => 300, 'y' => 0, 'options' => [['id' => 'update', 'title' => 'Обновить']]],
+            ['id' => 'cta', 'type' => 'action', 'action' => 'send_cabinet_cta', 'x' => 600, 'y' => 0],
+            ['id' => 'end', 'type' => 'end', 'x' => 900, 'y' => 0],
+        ],
+        'edges' => [
+            ['from' => 'start', 'output' => 'continue', 'to' => 'blast'],
+            ['from' => 'blast', 'output' => 'option:update', 'to' => 'cta'],
+            ['from' => 'cta', 'output' => 'continue', 'to' => 'end'],
+        ],
+    ];
+}
+
+describe('несколько сценариев', function () {
+    test('создание нового сценария с триггером и переход в его редактор', function () {
+        BotScenario::factory()->create();
+
+        Livewire::test(BotScenarioEditor::class)
+            ->set('newScenarioName', 'Мой автосценарий')
+            ->set('newScenarioTrigger', BotScenarioTrigger::ListingExpiring->value)
+            ->call('createScenario')
+            ->assertRedirect();
+
+        $created = BotScenario::query()->where('name', 'Мой автосценарий')->sole();
+        expect($created->trigger)->toBe(BotScenarioTrigger::ListingExpiring)
+            ->and($created->draft_definition['nodes'][0]['type'])->toBe('start');
+    });
+
+    test('шаблон без зеркалированных кнопок (синхронизация Dereu) не блокирует публикацию', function () {
+        BotScenario::factory()->create();
+        // Синхронизация возвращает только BODY-компонент — состав кнопок неизвестен.
+        \App\Models\WhatsappTemplate::factory()->approved()->create([
+            'name' => 'renewal_poll',
+            'body' => 'Объявление «{{1}}» ещё актуально?',
+            'components' => [['type' => 'BODY', 'text' => 'Объявление «{{1}}» ещё актуально?']],
+        ]);
+        $scenario = BotScenario::factory()->trigger(BotScenarioTrigger::ListingExpiring)->create(['name' => 'Продление']);
+
+        $definition = publishableRunDefinition();
+        $definition['nodes'][1]['channel'] = 'adaptive';
+        $definition['nodes'][1]['template_name'] = 'renewal_poll';
+        $definition['nodes'][1]['variables'] = ['listing.category'];
+        $definition['nodes'][2] = ['id' => 'cta', 'type' => 'action', 'action' => 'renew_listing', 'x' => 600, 'y' => 0];
+
+        Livewire::test(BotScenarioEditor::class, ['scenarioId' => $scenario->id])
+            ->call('publish', $definition)
+            ->assertNotified('Сценарий опубликован');
+    });
+
+    test('явное несовпадение числа кнопок с шаблоном блокирует публикацию', function () {
+        BotScenario::factory()->create();
+        \App\Models\WhatsappTemplate::factory()->approved()->create([
+            'name' => 'renewal_poll',
+            'body' => 'Объявление «{{1}}» ещё актуально?',
+            'components' => [
+                ['type' => 'BODY', 'text' => 'Объявление «{{1}}» ещё актуально?'],
+                ['type' => 'BUTTONS', 'buttons' => [
+                    ['type' => 'QUICK_REPLY', 'text' => 'Да'],
+                    ['type' => 'QUICK_REPLY', 'text' => 'Нет'],
+                ]],
+            ],
+        ]);
+        $scenario = BotScenario::factory()->trigger(BotScenarioTrigger::ListingExpiring)->create(['name' => 'Продление']);
+
+        $definition = publishableRunDefinition();
+        $definition['nodes'][1]['channel'] = 'adaptive';
+        $definition['nodes'][1]['template_name'] = 'renewal_poll';
+        $definition['nodes'][1]['variables'] = ['listing.category'];
+        $definition['nodes'][2] = ['id' => 'cta', 'type' => 'action', 'action' => 'renew_listing', 'x' => 600, 'y' => 0];
+
+        Livewire::test(BotScenarioEditor::class, ['scenarioId' => $scenario->id])
+            ->call('publish', $definition)
+            ->assertNotified('Сценарий не опубликован');
+
+        expect($scenario->refresh()->published_version)->toBe(0);
+    });
+
+    test('run-based сценарий публикуется с блоками сообщения, действия и завершения', function () {
+        BotScenario::factory()->create();
+        $flow = BotScenario::factory()->trigger(BotScenarioTrigger::ListingExpiring)->create(['name' => 'Автосценарий']);
+
+        Livewire::test(BotScenarioEditor::class, ['scenarioId' => $flow->id])
+            ->call('publish', publishableRunDefinition())
+            ->assertNotified('Сценарий опубликован');
+
+        expect($flow->refresh()->published_version)->toBe(1);
+    });
+
+    test('блоки запусков запрещены в главном диалоге, а AI-блок — в run-based сценарии', function () {
+        BotScenario::factory()->create();
+
+        Livewire::test(BotScenarioEditor::class)
+            ->call('publish', publishableRunDefinition())
+            ->assertNotified('Сценарий не опубликован');
+
+        $flow = BotScenario::factory()->trigger(BotScenarioTrigger::ListingExpiring)->create(['name' => 'Автосценарий']);
+        $withAi = publishableRunDefinition();
+        $withAi['nodes'][] = ['id' => 'ai', 'type' => 'ai', 'task' => 'collect_listing', 'x' => 0, 'y' => 300];
+
+        Livewire::test(BotScenarioEditor::class, ['scenarioId' => $flow->id])
+            ->call('publish', $withAi)
+            ->assertNotified('Сценарий не опубликован');
+    });
+
+    test('опубликованный сценарий удалить нельзя, черновик — можно', function () {
+        BotScenario::factory()->create();
+        $published = BotScenario::factory()->trigger(BotScenarioTrigger::ListingExpiring)->published()->create(['name' => 'Опубликованная']);
+
+        Livewire::test(BotScenarioEditor::class, ['scenarioId' => $published->id])
+            ->call('deleteScenario')
+            ->assertNotified('Опубликованный сценарий удалить нельзя');
+
+        expect(BotScenario::query()->whereKey($published->id)->exists())->toBeTrue();
+
+        $draft = BotScenario::factory()->trigger(BotScenarioTrigger::ListingExpiring)->create(['name' => 'Черновик']);
+
+        Livewire::test(BotScenarioEditor::class, ['scenarioId' => $draft->id])
+            ->call('deleteScenario')
+            ->assertRedirect();
+
+        expect(BotScenario::query()->whereKey($draft->id)->exists())->toBeFalse();
+    });
 });

@@ -15,6 +15,12 @@ use App\Enums\BotNodeType;
  *         ['id' => 'n2', 'type' => 'buttons', 'text' => '...', 'options' => [['id' => 'o1', 'title' => '...']]],
  *         ['id' => 'n3', 'type' => 'list', 'text' => '...', 'button' => '...', 'options' => [...]],
  *         ['id' => 'n4', 'type' => 'ai'],
+ *         ['id' => 'n5', 'type' => 'message', 'text' => '...', 'channel' => 'adaptive',
+ *             'template_name' => 'listing_renewal', 'variables' => ['listing.category'],
+ *             'options' => [...], 'timeout_hours' => 48],
+ *         ['id' => 'n6', 'type' => 'condition', 'condition' => 'listing_published'],
+ *         ['id' => 'n7', 'type' => 'action', 'action' => 'renew_listing'],
+ *         ['id' => 'n8', 'type' => 'end'],
  *     ],
  *     'edges' => [
  *         ['from' => 'start', 'output' => 'continue', 'to' => 'n1'],
@@ -31,6 +37,14 @@ class ScenarioDefinition
     public const string OUTPUT_CONTINUE = 'continue';
 
     public const string OUTPUT_FALLBACK = 'fallback';
+
+    /** The branches of a «Условие» block. */
+    public const string OUTPUT_YES = 'yes';
+
+    public const string OUTPUT_NO = 'no';
+
+    /** Fires when a «WhatsApp-сообщение» block got no reply in time. */
+    public const string OUTPUT_TIMEOUT = 'timeout';
 
     /**
      * @param  array{nodes?: list<array<string, mixed>>, edges?: list<array<string, mixed>>}  $definition
@@ -100,6 +114,35 @@ class ScenarioDefinition
     public function options(array $node): array
     {
         return array_values($node['options'] ?? []);
+    }
+
+    /**
+     * Whether the flow must stop at this block for the contact's reply.
+     * A «WhatsApp-сообщение» block without buttons is fire-and-forget.
+     *
+     * @param  array<string, mixed>|null  $node
+     */
+    public function nodeWaitsForInput(?array $node): bool
+    {
+        $type = $this->nodeType($node);
+
+        if ($type?->waitsForInput() !== true) {
+            return false;
+        }
+
+        return $type !== BotNodeType::Message || $this->options($node) !== [];
+    }
+
+    /**
+     * The reply timeout of a «WhatsApp-сообщение» block, if configured.
+     *
+     * @param  array<string, mixed>  $node
+     */
+    public function timeoutHours(array $node): ?int
+    {
+        $hours = (int) ($node['timeout_hours'] ?? 0);
+
+        return $hours > 0 ? $hours : null;
     }
 
     /**

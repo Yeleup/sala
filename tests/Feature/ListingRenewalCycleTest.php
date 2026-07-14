@@ -5,7 +5,6 @@ use App\Models\Contact;
 use App\Models\Listing;
 use App\Models\WhatsappTemplate;
 use App\Services\DereuMessenger;
-use App\Services\FleetUpdateBroadcaster;
 use App\Services\WhatsappTemplateLibrary;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Mockery\MockInterface;
@@ -106,51 +105,3 @@ describe('ежедневный опрос актуальности', function ()
     });
 });
 
-describe('рассылка актуализации парка', function () {
-    test('поставщики с опубликованными объявлениями получают сообщение по состоянию окна', function () {
-        $openSupplier = Contact::factory()->withOpenSessionWindow()->create();
-        Listing::factory()->published()->for($openSupplier, 'supplier')->create();
-
-        $closedSupplier = Contact::factory()->withClosedSessionWindow()->create();
-        Listing::factory()->published()->for($closedSupplier, 'supplier')->create();
-
-        $draftOnly = Contact::factory()->withOpenSessionWindow()->create();
-        Listing::factory()->for($draftOnly, 'supplier')->create();
-
-        $template = WhatsappTemplate::factory()->approved()->marketing()->create([
-            'name' => WhatsappTemplateLibrary::FLEET_STATUS_UPDATE,
-            'language' => 'ru',
-        ]);
-
-        $messenger = fakeCycleMessenger();
-        $messenger->shouldReceive('sendButtons')->once()->withArgs(
-            fn (Contact $contact, string $text, array $buttons): bool => $contact->is($openSupplier)
-                && $buttons[0]['id'] === 'my_listings',
-        );
-        $messenger->shouldReceive('sendTemplate')->once()->withArgs(
-            fn (Contact $contact, WhatsappTemplate $sent, array $params, array $payloads): bool => $contact->is($closedSupplier)
-                && $sent->is($template)
-                && $payloads === ['my_listings'],
-        );
-
-        $result = app(FleetUpdateBroadcaster::class)->broadcast();
-
-        expect($result)->toBe(['sent' => 2, 'failed' => 0]);
-    });
-
-    test('отказ по одному получателю не срывает рассылку остальным', function () {
-        $first = Contact::factory()->withOpenSessionWindow()->create();
-        Listing::factory()->published()->for($first, 'supplier')->create();
-
-        $second = Contact::factory()->withClosedSessionWindow()->create();
-        Listing::factory()->published()->for($second, 'supplier')->create();
-
-        $messenger = fakeCycleMessenger();
-        $messenger->shouldReceive('sendButtons')->once();
-        // Второй — вне окна, а утверждённого шаблона нет: получатель падает в failed.
-
-        $result = app(FleetUpdateBroadcaster::class)->broadcast();
-
-        expect($result)->toBe(['sent' => 1, 'failed' => 1]);
-    });
-});

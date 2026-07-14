@@ -31,14 +31,21 @@ class BotEngine
     public function __construct(
         private readonly DereuMessenger $messenger,
         private readonly AiAssistant $aiAssistant,
+        private readonly ScenarioRunReplyHandler $runReplies,
         private readonly NotificationReplyHandler $notificationReplies,
         private readonly CtaLinkBuilder $links,
     ) {}
 
     public function handle(Contact $contact, InboundMessage $message): void
     {
-        // Replies to proactive notifications (customer request, renewal
-        // poll) can arrive at any scenario step — they never enter the flow.
+        // Buttons of scenario runs carry flow:{token}:{option} payloads
+        // and route to their own run — they never enter the main dialog.
+        if ($this->runReplies->handle($contact, $message)) {
+            return;
+        }
+
+        // Replies to legacy proactive notifications (buttons sent before
+        // the flows moved into scenarios) can also arrive at any step.
         if ($this->notificationReplies->handle($contact, $message)) {
             return;
         }
@@ -183,6 +190,14 @@ class BotEngine
 
                     $nodeId = $definition->target($node['id'], ScenarioDefinition::OUTPUT_CONTINUE);
                     break;
+
+                case BotNodeType::End:
+                default:
+                    // Blocks of run-based scenarios cannot be published
+                    // into the main dialog — validation forbids them.
+                    $this->endDialog($session);
+
+                    return;
             }
         }
 

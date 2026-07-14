@@ -1,7 +1,36 @@
 <x-filament-panels::page>
     @php $scenario = $this->scenario; @endphp
 
+    <div class="bse-tabs">
+        @foreach ($this->scenarios as $item)
+            <button type="button"
+                    wire:click="selectScenario({{ $item->id }})"
+                    class="bse-tab {{ $item->id === $scenario->id ? 'bse-tab-active' : '' }}">
+                <span class="bse-tab-name">{{ $item->name }}</span>
+                <span class="bse-tab-trigger">{{ $item->trigger->label() }}</span>
+            </button>
+        @endforeach
+
+        <details class="bse-create">
+            <summary class="bse-tab">+ Новый сценарий</summary>
+            <div class="bse-create-form">
+                <input type="text" class="bse-input" placeholder="Название сценария" wire:model="newScenarioName">
+                <select class="bse-input" wire:model="newScenarioTrigger">
+                    @foreach (\App\Enums\BotScenarioTrigger::cases() as $trigger)
+                        @if ($trigger->isRunBased())
+                            <option value="{{ $trigger->value }}">{{ $trigger->label() }}</option>
+                        @endif
+                    @endforeach
+                </select>
+                <button type="button" class="bse-btn bse-btn-primary" wire:click="createScenario">Создать</button>
+                <p class="bse-note">Главный диалог один; новые сценарии — автосценарии на системные события. Триггер задаётся при создании.</p>
+            </div>
+        </details>
+    </div>
+
     <div class="flex flex-wrap items-center gap-2 text-sm">
+        <x-filament::badge color="info">{{ $scenario->trigger->label() }}</x-filament::badge>
+
         @if ($scenario->isPublished())
             <x-filament::badge color="success">Опубликована версия {{ $scenario->published_version }}</x-filament::badge>
             <span class="text-gray-500 dark:text-gray-400">от {{ $scenario->published_at->format('d.m.Y H:i') }}</span>
@@ -14,14 +43,28 @@
         @endif
     </div>
 
-    <div wire:ignore x-data="botScenarioEditor(@js($scenario->draft_definition))" class="bse" x-bind:class="{ 'bse-dragging': drag }">
+    <div wire:ignore wire:key="bse-{{ $scenario->id }}"
+         x-data="botScenarioEditor(@js($scenario->draft_definition), @js($this->editorConfig))"
+         class="bse" x-bind:class="{ 'bse-dragging': drag }">
         <div class="bse-toolbar">
             <span class="bse-toolbar-label">Добавить блок:</span>
             <button type="button" class="bse-btn" x-on:click="addNode('text')">+ Текст</button>
-            <button type="button" class="bse-btn" x-on:click="addNode('buttons')">+ Меню (кнопки)</button>
-            <button type="button" class="bse-btn" x-on:click="addNode('list')">+ Список</button>
-            <button type="button" class="bse-btn" x-on:click="addNode('ai')">+ Запрос ввода (AI)</button>
+            <template x-if="!config.runBased">
+                <span style="display: contents">
+                    <button type="button" class="bse-btn" x-on:click="addNode('buttons')">+ Меню (кнопки)</button>
+                    <button type="button" class="bse-btn" x-on:click="addNode('list')">+ Список</button>
+                    <button type="button" class="bse-btn" x-on:click="addNode('ai')">+ Запрос ввода (AI)</button>
+                </span>
+            </template>
+            <template x-if="config.runBased">
+                <span style="display: contents">
+                    <button type="button" class="bse-btn" x-on:click="addNode('message')">+ WhatsApp-сообщение</button>
+                    <button type="button" class="bse-btn" x-on:click="addNode('condition')">+ Условие</button>
+                    <button type="button" class="bse-btn" x-on:click="addNode('action')">+ Действие</button>
+                </span>
+            </template>
             <button type="button" class="bse-btn" x-on:click="addNode('my_listings')">+ Мои объявления (CTA)</button>
+            <button type="button" class="bse-btn" x-on:click="addNode('end')">+ Завершение</button>
 
             <span class="bse-toolbar-spring"></span>
 
@@ -70,7 +113,7 @@
                                 <span class="bse-node-type" x-text="typeLabels[node.type] ?? node.type"></span>
                             </div>
                             <div class="bse-node-text" x-show="node.type !== 'start'"
-                                 x-text="node.text || '(текст не заполнен)'"></div>
+                                 x-text="nodeSummary(node)"></div>
                             <template x-for="out in outputsOf(node)" :key="out.key">
                                 <div class="bse-out">
                                     <span class="bse-out-label" x-text="out.label"></span>
@@ -90,11 +133,18 @@
                     <div class="bse-panel-body">
                         <div class="bse-panel-title" x-text="typeLabels[selected.type] ?? selected.type"></div>
 
-                        <template x-if="selected.type !== 'start' && selected.type !== 'ai'">
+                        <template x-if="!['start', 'ai', 'condition', 'end'].includes(selected.type)
+                            && !(selected.type === 'message' && selected.channel !== 'session')">
                             <label class="bse-field">
                                 <span>Текст сообщения</span>
                                 <textarea class="bse-input" rows="4" x-model="selected.text"
                                           placeholder="Что увидит пользователь"></textarea>
+                                <template x-if="config.runBased && selected.type !== 'action'">
+                                    <p class="bse-note">Можно вставлять данные: @{{listing.category}}, @{{request.query}} и другие переменные.</p>
+                                </template>
+                                <template x-if="selected.type === 'action'">
+                                    <p class="bse-note">Используется действием «Отправить CTA-ссылку на кабинет» как текст сообщения; для остальных действий не нужен.</p>
+                                </template>
                             </label>
                         </template>
 
@@ -121,6 +171,94 @@
                             </div>
                         </template>
 
+                        <template x-if="selected.type === 'message'">
+                            <div class="bse-field">
+                                <span>Канал отправки</span>
+                                <select class="bse-input" x-model="selected.channel">
+                                    <option value="adaptive">Адаптивно: сессия или шаблон</option>
+                                    <option value="session">Только сессионное</option>
+                                    <option value="template">Только шаблон</option>
+                                </select>
+                                <p class="bse-note">Текст сообщения задаёт шаблон Meta. Адаптивно: вне 24-часового окна уходит платный шаблон, в открытое окно — тот же текст бесплатным сессионным сообщением.</p>
+
+                                <template x-if="selected.channel !== 'session'">
+                                    <label class="bse-field" style="margin-top: 0.5rem;">
+                                        <span>Шаблон Meta — задаёт текст сообщения</span>
+                                        <select class="bse-input" x-model="selected.template_name">
+                                            <option value="">— не выбран —</option>
+                                            <template x-for="t in config.templates" :key="t.name">
+                                                <option x-bind:value="t.name" x-text="t.label"></option>
+                                            </template>
+                                        </select>
+                                        <template x-if="(config.templates.find(t => t.name === selected.template_name)?.body ?? '') !== ''">
+                                            <div class="bse-template-preview">
+                                                <p class="bse-note" style="margin-bottom: 0.25rem;">Текст зафиксирован в Meta — для изменения зарегистрируйте новый шаблон в реестре:</p>
+                                                <p class="bse-template-body" x-text="config.templates.find(t => t.name === selected.template_name)?.body"></p>
+                                            </div>
+                                        </template>
+                                    </label>
+                                </template>
+
+                                <template x-if="selected.channel !== 'session'">
+                                    <div class="bse-field" style="margin-top: 0.5rem;"
+                                         x-effect="syncTemplateVariables(selected)">
+                                        <span x-text="`Переменные шаблона (${(selected.variables ?? []).length})`"></span>
+                                        <template x-for="(variable, index) in (selected.variables ?? [])" :key="index">
+                                            <div class="bse-option-row">
+                                                <span class="bse-var-index" x-text="'{'+'{'+(index + 1)+'}'+'}'"></span>
+                                                <select class="bse-input" x-model="selected.variables[index]">
+                                                    <option value="">— не выбрано —</option>
+                                                    <template x-for="v in config.variables" :key="v.value">
+                                                        <option x-bind:value="v.value" x-text="v.label"></option>
+                                                    </template>
+                                                </select>
+                                            </div>
+                                        </template>
+                                        <template x-if="(selected.variables ?? []).length === 0">
+                                            <p class="bse-note">У выбранного шаблона нет переменных @{{n}} — сопоставлять нечего.</p>
+                                        </template>
+                                        <template x-if="(selected.variables ?? []).length > 0">
+                                            <p class="bse-note">Строки созданы автоматически по числу @{{n}} в теле шаблона — выберите, какие данные подставлять в каждую.</p>
+                                        </template>
+                                    </div>
+                                </template>
+
+                                <label class="bse-field" style="margin-top: 0.5rem;">
+                                    <span>Таймаут ожидания ответа (часов)</span>
+                                    <input type="number" class="bse-input" min="0" x-model.number="selected.timeout_hours">
+                                    <p class="bse-note">0 — ждать без ограничения. По истечении срока запуск идёт по выходу «Таймаут» (или тихо завершается, если выход не подключен).</p>
+                                </label>
+                            </div>
+                        </template>
+
+                        <template x-if="selected.type === 'condition'">
+                            <label class="bse-field">
+                                <span>Условие</span>
+                                <select class="bse-input" x-model="selected.condition">
+                                    <template x-for="c in config.conditions" :key="c.value">
+                                        <option x-bind:value="c.value" x-text="c.label"></option>
+                                    </template>
+                                </select>
+                                <p class="bse-note">Проверяется в момент прохождения блока — в том числе когда ответ пришёл спустя дни.</p>
+                            </label>
+                        </template>
+
+                        <template x-if="selected.type === 'action'">
+                            <label class="bse-field">
+                                <span>Действие</span>
+                                <select class="bse-input" x-model="selected.action">
+                                    <template x-for="a in config.actions" :key="a.value">
+                                        <option x-bind:value="a.value" x-text="a.label"></option>
+                                    </template>
+                                </select>
+                                <p class="bse-note">Действие выполняется доменными правилами: например, решение по уже закрытой заявке не изменится.</p>
+                            </label>
+                        </template>
+
+                        <template x-if="selected.type === 'end'">
+                            <p class="bse-note">Диалог или запуск сценария завершается на этом блоке.</p>
+                        </template>
+
                         <template x-if="selected.type === 'list'">
                             <label class="bse-field">
                                 <span>Надпись на кнопке списка</span>
@@ -128,15 +266,15 @@
                             </label>
                         </template>
 
-                        <template x-if="selected.type === 'buttons' || selected.type === 'list'">
+                        <template x-if="['buttons', 'list', 'message'].includes(selected.type)">
                             <div class="bse-field">
-                                <span x-text="selected.type === 'buttons'
-                                    ? `Кнопки (${selected.options.length} из ${optionLimit.buttons})`
-                                    : `Элементы списка (${selected.options.length} из ${optionLimit.list})`"></span>
+                                <span x-text="selected.type === 'list'
+                                    ? `Элементы списка (${selected.options.length} из ${optionLimit.list})`
+                                    : `Кнопки (${selected.options.length} из ${optionLimit[selected.type]})`"></span>
                                 <template x-for="opt in selected.options" :key="opt.id">
                                     <div class="bse-option-row">
                                         <input type="text" class="bse-input" x-model="opt.title"
-                                               x-bind:maxlength="selected.type === 'buttons' ? 20 : 24"
+                                               x-bind:maxlength="selected.type === 'list' ? 24 : 20"
                                                placeholder="Название">
                                         <button type="button" class="bse-btn bse-btn-danger"
                                                 x-on:click="removeOption(selected, opt.id)" title="Удалить вариант">✕</button>
@@ -147,7 +285,8 @@
                                         x-bind:disabled="selected.options.length >= optionLimit[selected.type]">
                                     + Добавить вариант
                                 </button>
-                                <p class="bse-note">Лимит WhatsApp: до 3 кнопок (до 20 символов) или до 10 элементов списка (до 24 символов).</p>
+                                <p class="bse-note" x-show="selected.type !== 'message'">Лимит WhatsApp: до 3 кнопок (до 20 символов) или до 10 элементов списка (до 24 символов).</p>
+                                <p class="bse-note" x-show="selected.type === 'message'">До 3 кнопок (до 20 символов). У выбранного шаблона должно быть столько же кнопок быстрого ответа. Без кнопок блок отправляет сообщение и идёт дальше по «Продолжить».</p>
                             </div>
                         </template>
 
@@ -176,7 +315,7 @@
                         </template>
 
                         <template x-if="selected.type === 'start'">
-                            <p class="bse-note">Точка входа: с этого блока начинается каждый новый диалог.
+                            <p class="bse-note">Точка входа: с этого блока начинается каждый новый диалог или запуск.
                                 Блок единственный и не удаляется.</p>
                         </template>
                     </div>
@@ -188,12 +327,25 @@
                         <p class="bse-note">Связи: кликните оранжевый кружок справа от выхода, затем кликните по
                             следующему блоку (или просто потяните от кружка к блоку).
                             Чтобы разорвать связь, потяните её с выхода в пустое место.</p>
+                        <template x-if="config.runBased">
+                            <p class="bse-note">Это сценарий на событие: каждый запуск идёт отдельно и не трогает
+                                основной диалог контакта. Кнопки его сообщений несут уникальный токен запуска, поэтому
+                                ответ спустя дни попадает точно в свою ветку и опубликованную на тот момент версию.</p>
+                        </template>
                     </div>
                 </template>
             </aside>
         </div>
 
         <div class="bse-actions">
+            @unless ($scenario->isPublished())
+                <button type="button" class="bse-btn bse-btn-lg bse-btn-danger"
+                        wire:click="deleteScenario"
+                        wire:confirm="Удалить сценарий «{{ $scenario->name }}»?">
+                    Удалить сценарий
+                </button>
+            @endunless
+            <span class="bse-toolbar-spring"></span>
             <button type="button" class="bse-btn bse-btn-lg" x-on:click="save()" x-bind:disabled="busy">
                 Сохранить черновик
             </button>
@@ -204,9 +356,10 @@
 
         <script>
             document.addEventListener('alpine:init', () => {
-                Alpine.data('botScenarioEditor', (initial) => ({
+                Alpine.data('botScenarioEditor', (initial, config) => ({
                     nodes: (initial.nodes ?? []).map((n) => ({ text: '', options: [], ...n })),
                     edges: initial.edges ?? [],
+                    config: config ?? { runBased: false, templates: [], variables: [], conditions: [], actions: [] },
                     pan: { x: 40, y: 20 },
                     scale: 1,
                     selectedId: null,
@@ -221,8 +374,12 @@
                     TEXT_H: 40,
                     OUT_H: 28,
 
-                    typeLabels: { start: 'Старт', text: 'Текст', buttons: 'Меню (кнопки)', list: 'Список', ai: 'Запрос ввода (AI)', my_listings: 'Мои объявления (CTA)' },
-                    optionLimit: { buttons: 3, list: 10 },
+                    typeLabels: {
+                        start: 'Старт', text: 'Текст', buttons: 'Меню (кнопки)', list: 'Список',
+                        ai: 'Запрос ввода (AI)', my_listings: 'Мои объявления (CTA)',
+                        message: 'WhatsApp-сообщение', condition: 'Условие', action: 'Действие', end: 'Завершение',
+                    },
+                    optionLimit: { buttons: 3, list: 10, message: 3 },
 
                     init() {
                         window.addEventListener('pointermove', (e) => this.onMove(e))
@@ -251,7 +408,87 @@
                             ]
                         }
 
+                        if (node.type === 'message') {
+                            const outs = (node.options ?? []).map((o) => ({ key: 'option:' + o.id, label: o.title || 'Без названия' }))
+
+                            if ((node.timeout_hours ?? 0) > 0) {
+                                outs.push({ key: 'timeout', label: 'Таймаут' })
+                            }
+
+                            return outs.length ? outs : [{ key: 'continue', label: 'Продолжить' }]
+                        }
+
+                        if (node.type === 'condition') {
+                            return [{ key: 'yes', label: 'Да' }, { key: 'no', label: 'Нет' }]
+                        }
+
+                        if (node.type === 'end') {
+                            return []
+                        }
+
                         return [{ key: 'continue', label: 'Продолжить' }]
+                    },
+
+                    listLabel(list, value) {
+                        return (list ?? []).find((i) => i.value === value)?.label ?? ''
+                    },
+
+                    // Зеркалит ScenarioValidator::templatePlaceholderCount.
+                    templatePlaceholderCount(body) {
+                        const indexes = [...(body ?? '').matchAll(/\{\{(\d+)\}\}/g)].map((m) => parseInt(m[1], 10))
+
+                        return indexes.length ? Math.max(...indexes) : 0
+                    },
+
+                    /**
+                     * Держит строки «Переменные шаблона» в точном числе
+                     * плейсхолдеров выбранного шаблона: оператор только
+                     * выбирает значения. Шаблон, которого нет в реестре,
+                     * не трогаем — сохранённое сопоставление не теряется.
+                     */
+                    syncTemplateVariables(node) {
+                        if (! node || node.type !== 'message' || node.channel === 'session') {
+                            return
+                        }
+
+                        const template = this.config.templates.find((t) => t.name === node.template_name)
+
+                        if (! template) {
+                            return
+                        }
+
+                        const count = this.templatePlaceholderCount(template.body)
+                        const current = Array.isArray(node.variables) ? node.variables : []
+
+                        if (current.length === count) {
+                            return
+                        }
+
+                        node.variables = Array.from({ length: count }, (_, i) => current[i] ?? '')
+                    },
+
+                    nodeSummary(node) {
+                        if (node.type === 'condition') {
+                            return this.listLabel(this.config.conditions, node.condition) || '(условие не выбрано)'
+                        }
+
+                        if (node.type === 'action') {
+                            return this.listLabel(this.config.actions, node.action) || '(действие не выбрано)'
+                        }
+
+                        if (node.type === 'end') {
+                            return 'Конец ветки'
+                        }
+
+                        // Текст шаблонного сообщения задаёт выбранный шаблон Meta.
+                        if (node.type === 'message' && node.channel !== 'session') {
+                            const template = this.config.templates.find(t => t.name === node.template_name)
+
+                            return template?.body
+                                || (node.template_name ? 'Шаблон: ' + node.template_name : '(шаблон не выбран)')
+                        }
+
+                        return node.text || '(текст не заполнен)'
                     },
 
                     nodeHeight(node) {
@@ -314,10 +551,32 @@
                     },
 
                     nodeLabel(node) {
-                        const type = this.typeLabels[node.type] ?? node.type
-                        const text = (node.text ?? '').trim()
+                        const base = this.nodeBaseLabel(node)
+                        const twins = this.nodes.filter(n => this.nodeBaseLabel(n) === base)
 
-                        return text ? type + ': ' + text.slice(0, 30) : type
+                        if (twins.length < 2) {
+                            return base
+                        }
+
+                        return `${base} № ${twins.findIndex(n => n.id === node.id) + 1}`
+                    },
+
+                    nodeBaseLabel(node) {
+                        const type = this.typeLabels[node.type] ?? node.type
+
+                        if (node.type === 'condition' || node.type === 'action') {
+                            const label = node.type === 'condition'
+                                ? this.listLabel(this.config.conditions, node.condition)
+                                : this.listLabel(this.config.actions, node.action)
+
+                            return label ? type + ': ' + label : type
+                        }
+
+                        const text = node.type === 'message' && node.channel !== 'session'
+                            ? this.nodeSummary(node)
+                            : (node.text ?? '').trim()
+
+                        return text && !text.startsWith('(') ? type + ': ' + text.slice(0, 30) : type
                     },
 
                     toCanvas(e) {
@@ -463,6 +722,22 @@
                             node.text = 'Откройте кабинет — там ваши объявления, статусы и причины отклонения.'
                         }
 
+                        if (type === 'message') {
+                            node.channel = 'adaptive'
+                            node.template_name = ''
+                            node.variables = []
+                            node.timeout_hours = 0
+                            node.options = [{ id: this.newOptionId(), title: '' }]
+                        }
+
+                        if (type === 'condition') {
+                            node.condition = this.config.conditions[0]?.value ?? ''
+                        }
+
+                        if (type === 'action') {
+                            node.action = this.config.actions[0]?.value ?? ''
+                        }
+
                         this.nodes.push(node)
                         this.selectedId = node.id
                     },
@@ -540,6 +815,23 @@
         <style>
             .bse { display: flex; flex-direction: column; gap: 0.75rem; }
             .bse-dragging { user-select: none; }
+
+            .bse-tabs { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 0.5rem; }
+            .bse-tab {
+                display: inline-flex; flex-direction: column; align-items: flex-start; gap: 0.125rem;
+                padding: 0.375rem 0.75rem; border-radius: 0.5rem; border: 1px solid rgb(209 213 219);
+                background: white; cursor: pointer; text-align: left;
+            }
+            .bse-tab:hover { background: rgb(249 250 251); }
+            .bse-tab-active { border-color: rgb(217 119 6); box-shadow: 0 0 0 2px rgb(217 119 6 / 0.35); }
+            .bse-tab-name { font-size: 0.875rem; font-weight: 600; color: rgb(55 65 81); }
+            .bse-tab-trigger { font-size: 0.6875rem; color: rgb(107 114 128); }
+            .bse-create summary { list-style: none; cursor: pointer; }
+            .bse-create summary::-webkit-details-marker { display: none; }
+            .bse-create-form {
+                margin-top: 0.5rem; padding: 0.75rem; border: 1px solid rgb(229 231 235); border-radius: 0.5rem;
+                background: white; display: flex; flex-direction: column; gap: 0.5rem; width: 20rem;
+            }
 
             .bse-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; }
             .bse-hintbar { font-size: 0.8125rem; color: rgb(107 114 128); }
@@ -621,21 +913,28 @@
             .bse-panel-title { font-weight: 600; font-size: 0.9375rem; }
             .bse-field { display: flex; flex-direction: column; gap: 0.375rem; font-size: 0.8125rem; font-weight: 500; color: rgb(55 65 81); }
             .bse-note { font-size: 0.75rem; color: rgb(107 114 128); }
-            .bse-option-row { display: flex; gap: 0.375rem; }
+            .bse-template-preview { margin-top: 0.5rem; padding: 0.5rem; border: 1px dashed rgb(209 213 219); border-radius: 0.375rem; background: rgb(249 250 251); }
+            .bse-template-body { font-size: 0.8rem; white-space: pre-wrap; color: rgb(55 65 81); }
+            .bse-option-row { display: flex; gap: 0.375rem; align-items: center; }
             .bse-option-row .bse-input { flex: 1; }
+            .bse-var-index { font-size: 0.75rem; color: rgb(107 114 128); min-width: 2.25rem; }
 
             .bse-input {
                 padding: 0.375rem 0.625rem; font-size: 0.875rem; border-radius: 0.5rem; font-weight: 400;
                 border: 1px solid rgb(209 213 219); background: white; color: rgb(17 24 39); width: 100%;
             }
             .bse-search { width: 14rem; }
-            .bse-actions { display: flex; justify-content: flex-end; gap: 0.5rem; }
+            .bse-actions { display: flex; align-items: center; gap: 0.5rem; }
 
             :where(.dark) .bse-toolbar-sep { background: rgb(55 65 81); }
             :where(.dark) .bse-btn { background: rgb(31 41 55); border-color: rgb(75 85 99); color: rgb(209 213 219); }
             :where(.dark) .bse-btn:hover { background: rgb(55 65 81); }
             :where(.dark) .bse-btn-primary { background: rgb(217 119 6); border-color: rgb(217 119 6); color: white; }
             :where(.dark) .bse-btn-danger { color: rgb(252 165 165); border-color: rgb(153 27 27); }
+            :where(.dark) .bse-tab { background: rgb(31 41 55); border-color: rgb(75 85 99); }
+            :where(.dark) .bse-tab:hover { background: rgb(55 65 81); }
+            :where(.dark) .bse-tab-name { color: rgb(209 213 219); }
+            :where(.dark) .bse-create-form { background: rgb(31 41 55); border-color: rgb(55 65 81); }
             :where(.dark) .bse-viewport { background-color: rgb(17 24 39); border-color: rgb(55 65 81); background-image: radial-gradient(circle, rgb(55 65 81) 1px, transparent 1px); }
             :where(.dark) .bse-node { background: rgb(31 41 55); border-color: rgb(75 85 99); }
             :where(.dark) .bse-node-header { border-color: rgb(55 65 81); }

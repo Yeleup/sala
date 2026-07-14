@@ -14,6 +14,7 @@ use App\Models\ListingMedia;
 use App\Models\User;
 use Filament\Actions\Testing\TestAction;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Storage;
 use Livewire\Livewire;
 
@@ -72,6 +73,37 @@ test('оператор редактирует бизнес-поля объявл
         ->category->name->toBe('Экскаватор')
         ->description->toBe('Гусеничный экскаватор')
         ->price->toBe('15000 тг/ч');
+});
+
+test('оператор добавляет фото объявлению через форму', function () {
+    Storage::fake('public');
+    $listing = Listing::factory()->create();
+
+    Livewire::test(EditListing::class, ['record' => $listing->id])
+        ->fillForm(['photos' => [['path' => [UploadedFile::fake()->image('crane.jpg')]]]])
+        ->call('save')
+        ->assertHasNoFormErrors();
+
+    $photo = ListingMedia::sole();
+    expect($photo)
+        ->listing_id->toBe($listing->id)
+        ->type->toBe(ListingMediaType::Photo);
+    Storage::disk('public')->assertExists($photo->path);
+});
+
+test('оператор убирает фото из формы — файл удаляется с диска', function () {
+    Storage::fake('public');
+    $listing = Listing::factory()->create();
+    Storage::disk('public')->put('listing-photos/old.jpg', 'JPEG');
+    ListingMedia::factory()->for($listing)->create(['path' => 'listing-photos/old.jpg']);
+
+    Livewire::test(EditListing::class, ['record' => $listing->id])
+        ->fillForm(['photos' => []])
+        ->call('save')
+        ->assertHasNoFormErrors();
+
+    expect(ListingMedia::count())->toBe(0);
+    Storage::disk('public')->assertMissing('listing-photos/old.jpg');
 });
 
 test('черновик отправляется на модерацию из таблицы', function () {

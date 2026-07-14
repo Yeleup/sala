@@ -35,6 +35,8 @@
         dd { margin: 0.125rem 0 0; }
         .photos { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.5rem; }
         .photos img { width: 5rem; height: 5rem; object-fit: cover; border-radius: 0.5rem; border: 1px solid #e5e7eb; }
+        .field .photo-tile { display: flex; flex-direction: column; align-items: center; gap: 0.25rem; margin: 0; font-size: 0.8125rem; color: #6b7280; text-transform: none; }
+        .field .photo-tile input { width: auto; }
     </style>
 </head>
 <body>

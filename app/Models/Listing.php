@@ -33,6 +33,12 @@ class Listing extends Model
      */
     public const int LIFETIME_DAYS = 30;
 
+    /**
+     * The cap on photos per listing, shared by the supplier cabinet and
+     * the admin form. Photos arriving from the bot are not capped.
+     */
+    public const int MAX_PHOTOS = 10;
+
     protected $attributes = [
         'status' => ListingStatus::Draft->value,
     ];

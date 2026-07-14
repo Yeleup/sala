@@ -2,13 +2,16 @@
 
 namespace App\Http\Controllers;
 
+use App\Enums\ListingMediaType;
 use App\Enums\ListingStatus;
 use App\Http\Requests\UpdateSupplierListingRequest;
 use App\Models\Category;
 use App\Models\Contact;
 use App\Models\Listing;
+use App\Models\ListingMedia;
 use App\Services\Ai\CtaLinkBuilder;
 use Illuminate\Http\RedirectResponse;
+use Illuminate\Http\UploadedFile;
 use Illuminate\View\View;
 
 /**
@@ -54,7 +57,8 @@ class SupplierListingController extends Controller
     {
         abort_unless($this->isEditable($listing), 403);
 
-        $listing->fill($request->validated())->save();
+        $listing->fill($request->safe()->except(['photos', 'remove_photos']))->save();
+        $this->applyPhotoChanges($request, $listing);
         $listing->submitForModeration();
 
         return redirect()
@@ -71,6 +75,24 @@ class SupplierListingController extends Controller
         return redirect()
             ->to($this->links->myListingsUrl($listing->supplier))
             ->with('status', 'Объявление снято с публикации.');
+    }
+
+    /**
+     * Photos checked for removal go away with their files (scoping to the
+     * listing's own photos guards against foreign ids); new uploads land
+     * on the same disk and path layout the bot uses.
+     */
+    private function applyPhotoChanges(UpdateSupplierListingRequest $request, Listing $listing): void
+    {
+        $listing->photos()
+            ->whereIn('id', $request->input('remove_photos', []))
+            ->get()
+            ->each(fn (ListingMedia $photo) => $photo->delete());
+
+        collect($request->file('photos', []))->each(fn (UploadedFile $file) => $listing->photos()->create([
+            'type' => ListingMediaType::Photo,
+            'path' => $file->store("listings/{$listing->id}/photos", 'public'),
+        ]));
     }
 
     /**

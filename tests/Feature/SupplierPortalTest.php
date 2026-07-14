@@ -4,8 +4,11 @@ use App\Enums\ListingStatus;
 use App\Enums\ListingType;
 use App\Models\Contact;
 use App\Models\Listing;
+use App\Models\ListingMedia;
 use App\Services\Ai\CtaLinkBuilder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Http\UploadedFile;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Facades\URL;
 
 uses(RefreshDatabase::class);
@@ -13,6 +16,21 @@ uses(RefreshDatabase::class);
 function portalLinks(): CtaLinkBuilder
 {
     return app(CtaLinkBuilder::class);
+}
+
+/**
+ * Валидный набор полей формы кабинета, собранный из самого объявления, —
+ * фото-тесты меняют только «свои» ключи.
+ */
+function supplierListingPayload(Listing $listing, array $overrides = []): array
+{
+    return array_merge([
+        'type' => $listing->type->value,
+        'category_id' => $listing->category_id,
+        'description' => $listing->description,
+        'location_id' => $listing->location_id,
+        'price' => $listing->price,
+    ], $overrides);
 }
 
 describe('доступ по подписанным ссылкам', function () {
@@ -213,6 +231,85 @@ describe('редактирование', function () {
         ])->assertForbidden();
 
         expect($listing->refresh())->status->toBe(ListingStatus::Published);
+    });
+});
+
+describe('фотографии', function () {
+    beforeEach(function () {
+        Storage::fake('public');
+    });
+
+    test('загруженные фотографии сохраняются в объявлении', function () {
+        $listing = Listing::factory()->create();
+
+        $this->post(portalLinks()->updateUrl($listing), supplierListingPayload($listing, [
+            'photos' => [UploadedFile::fake()->image('crane.jpg'), UploadedFile::fake()->image('side.png')],
+        ]))->assertRedirect();
+
+        $photos = $listing->refresh()->photos;
+        expect($photos)->toHaveCount(2);
+        $photos->each(fn (ListingMedia $photo) => Storage::disk('public')->assertExists($photo->path));
+    });
+
+    test('отмеченные фотографии удаляются вместе с файлами', function () {
+        $listing = Listing::factory()->create();
+        Storage::disk('public')->put("listings/{$listing->id}/photos/old.jpg", 'JPEG');
+        $photo = ListingMedia::factory()->for($listing)->create(['path' => "listings/{$listing->id}/photos/old.jpg"]);
+
+        $this->post(portalLinks()->updateUrl($listing), supplierListingPayload($listing, [
+            'remove_photos' => [$photo->id],
+        ]))->assertRedirect();
+
+        expect(ListingMedia::count())->toBe(0);
+        Storage::disk('public')->assertMissing("listings/{$listing->id}/photos/old.jpg");
+    });
+
+    test('фото чужого объявления через remove_photos не удаляется', function () {
+        $listing = Listing::factory()->create();
+        $foreign = ListingMedia::factory()->create();
+
+        $this->post(portalLinks()->updateUrl($listing), supplierListingPayload($listing, [
+            'remove_photos' => [$foreign->id],
+        ]))->assertRedirect();
+
+        expect($foreign->fresh())->not->toBeNull();
+    });
+
+    test('файл, не являющийся изображением, не принимается', function () {
+        $listing = Listing::factory()->create();
+
+        $response = $this->post(portalLinks()->updateUrl($listing), supplierListingPayload($listing, [
+            'photos' => [UploadedFile::fake()->create('document.pdf', 100, 'application/pdf')],
+        ]));
+
+        $response->assertSessionHasErrors(['photos.0']);
+        expect($listing->refresh())->status->toBe(ListingStatus::Draft)
+            ->and(ListingMedia::count())->toBe(0);
+    });
+
+    test('больше 10 фотографий у объявления быть не может', function () {
+        $listing = Listing::factory()->create();
+        ListingMedia::factory()->count(Listing::MAX_PHOTOS)->for($listing)->create();
+
+        $response = $this->post(portalLinks()->updateUrl($listing), supplierListingPayload($listing, [
+            'photos' => [UploadedFile::fake()->image('one-more.jpg')],
+        ]));
+
+        $response->assertSessionHasErrors(['photos']);
+        expect($listing->photos()->count())->toBe(Listing::MAX_PHOTOS)
+            ->and($listing->refresh())->status->toBe(ListingStatus::Draft);
+    });
+
+    test('удаление освобождает место под новое фото в пределах лимита', function () {
+        $listing = Listing::factory()->create();
+        $photos = ListingMedia::factory()->count(Listing::MAX_PHOTOS)->for($listing)->create();
+
+        $this->post(portalLinks()->updateUrl($listing), supplierListingPayload($listing, [
+            'remove_photos' => [$photos->first()->id],
+            'photos' => [UploadedFile::fake()->image('replacement.jpg')],
+        ]))->assertRedirect()->assertSessionHasNoErrors();
+
+        expect($listing->photos()->count())->toBe(Listing::MAX_PHOTOS);
     });
 });
 

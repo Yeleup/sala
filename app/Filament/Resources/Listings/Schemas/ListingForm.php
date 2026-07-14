@@ -2,10 +2,15 @@
 
 namespace App\Filament\Resources\Listings\Schemas;
 
+use App\Enums\ListingMediaType;
 use App\Enums\ListingType;
 use App\Models\Contact;
+use App\Models\Listing;
+use App\Models\ListingMedia;
 use App\Models\Location;
 use App\Services\Locations\LocationResolver;
+use Filament\Forms\Components\FileUpload;
+use Filament\Forms\Components\Repeater;
 use Filament\Forms\Components\Select;
 use Filament\Forms\Components\Textarea;
 use Filament\Forms\Components\TextInput;
@@ -78,6 +83,32 @@ class ListingForm
                     ->label('Цена/Тариф')
                     ->placeholder('Например: 10000 тг/ч')
                     ->maxLength(255),
+                Repeater::make('photos')
+                    ->label('Фотографии')
+                    ->relationship()
+                    ->schema([
+                        FileUpload::make('path')
+                            ->hiddenLabel()
+                            ->disk('public')
+                            ->directory('listing-photos')
+                            ->image()
+                            ->acceptedFileTypes(['image/jpeg', 'image/png', 'image/webp'])
+                            ->maxSize(ListingMedia::MAX_PHOTO_KILOBYTES)
+                            ->required()
+                            ->validationMessages(['required' => 'Загрузите фото или удалите пустую строку.']),
+                    ])
+                    // The photos() relation filters by type but does not set
+                    // it on create — new rows must be stamped explicitly.
+                    ->mutateRelationshipDataBeforeCreateUsing(function (array $data): array {
+                        $data['type'] = ListingMediaType::Photo->value;
+
+                        return $data;
+                    })
+                    ->maxItems(Listing::MAX_PHOTOS)
+                    ->defaultItems(0)
+                    ->addActionLabel('Добавить фото')
+                    ->reorderable(false)
+                    ->columnSpanFull(),
             ]);
     }
 }

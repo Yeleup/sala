@@ -3,8 +3,11 @@
 namespace App\Http\Requests;
 
 use App\Enums\ListingType;
+use App\Models\Listing;
+use App\Models\ListingMedia;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Validation\Rule;
+use Illuminate\Validation\Validator;
 
 /**
  * Saving a listing from the supplier web form. Submitting to moderation
@@ -39,6 +42,41 @@ class UpdateSupplierListingRequest extends FormRequest
             'location_id' => ['required', 'integer', Rule::exists('locations', 'id')],
             'location_detail' => ['nullable', 'string', 'max:255'],
             'price' => ['required', 'string', 'max:255'],
+            'photos' => ['nullable', 'array'],
+            'photos.*' => ['file', 'image', 'mimes:jpg,jpeg,png,webp', 'max:'.ListingMedia::MAX_PHOTO_KILOBYTES],
+            'remove_photos' => ['nullable', 'array'],
+            'remove_photos.*' => ['integer'],
+        ];
+    }
+
+    /**
+     * The photo cap counts what stays after the marked removals plus the
+     * new uploads — not the uploads alone.
+     *
+     * @return array<int, callable(Validator): void>
+     */
+    public function after(): array
+    {
+        return [
+            function (Validator $validator): void {
+                if ($validator->errors()->hasAny(['photos', 'photos.*', 'remove_photos', 'remove_photos.*'])) {
+                    return;
+                }
+
+                /** @var Listing $listing */
+                $listing = $this->route('listing');
+
+                $keptPhotos = $listing->photos()
+                    ->whereNotIn('id', $this->input('remove_photos', []))
+                    ->count();
+
+                if ($keptPhotos + count($this->file('photos', [])) > Listing::MAX_PHOTOS) {
+                    $validator->errors()->add(
+                        'photos',
+                        'У объявления может быть не более '.Listing::MAX_PHOTOS.' фотографий.',
+                    );
+                }
+            },
         ];
     }
 
@@ -56,6 +94,9 @@ class UpdateSupplierListingRequest extends FormRequest
             'category_id.exists' => 'Категория не соответствует выбранному типу — выберите категорию из списка нужного типа.',
             'location_id.integer' => 'Выберите локацию из подсказок.',
             'location_id.exists' => 'Выберите локацию из подсказок.',
+            'photos.*.image' => 'Файл «:attribute» не является изображением.',
+            'photos.*.mimes' => 'Фото принимаются в форматах JPG, PNG или WebP.',
+            'photos.*.max' => 'Фото слишком большое — не более 5 МБ.',
         ];
     }
 
@@ -71,6 +112,7 @@ class UpdateSupplierListingRequest extends FormRequest
             'location_id' => 'локация',
             'location_detail' => 'уточнение адреса',
             'price' => 'цена/тариф',
+            'photos.*' => 'фото',
         ];
     }
 }

@@ -21,9 +21,27 @@ class ListingMedia extends Model
     /** @use HasFactory<ListingMediaFactory> */
     use HasFactory;
 
+    /**
+     * Upload size cap for a single photo, in kilobytes (supplier cabinet
+     * and admin form).
+     */
+    public const int MAX_PHOTO_KILOBYTES = 5120;
+
     protected $attributes = [
         'disk' => 'public',
     ];
+
+    /**
+     * A media row deleted through Eloquent (supplier cabinet, admin form)
+     * takes its file along. DB cascade deletes bypass this hook — Listing
+     * removes the files itself before deleting.
+     */
+    protected static function booted(): void
+    {
+        static::deleted(function (ListingMedia $media): void {
+            Storage::disk($media->disk)->delete($media->path);
+        });
+    }
 
     /** @return BelongsTo<Listing, $this> */
     public function listing(): BelongsTo

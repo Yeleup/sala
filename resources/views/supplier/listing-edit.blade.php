@@ -14,7 +14,7 @@
         @if ($editable)
             <p class="muted" style="margin: 0.75rem 0 1rem;">Проверьте данные и заполните недостающее — после сохранения объявление уйдёт на проверку модератору.</p>
 
-            <form method="POST" action="{{ $updateUrl }}">
+            <form method="POST" action="{{ $updateUrl }}" enctype="multipart/form-data">
                 @csrf
 
                 <div class="field">
@@ -72,6 +72,28 @@
                     <label for="price">Цена / тариф</label>
                     <input id="price" name="price" value="{{ old('price', $listing->price) }}" placeholder="Например: 10000 тг/ч">
                     @error('price') <p class="error">{{ $message }}</p> @enderror
+                </div>
+
+                @if ($listing->photos->isNotEmpty())
+                    <div class="field">
+                        <label>Фотографии</label>
+                        <div class="photos">
+                            @foreach ($listing->photos as $photo)
+                                <label class="photo-tile">
+                                    <img src="{{ $photo->url() }}" alt="Фото объявления">
+                                    <span><input type="checkbox" name="remove_photos[]" value="{{ $photo->id }}" @checked(in_array($photo->id, old('remove_photos', [])))> удалить</span>
+                                </label>
+                            @endforeach
+                        </div>
+                    </div>
+                @endif
+
+                <div class="field">
+                    <label for="photos">Добавить фотографии</label>
+                    <input type="file" id="photos" name="photos[]" multiple accept="image/jpeg,image/png,image/webp">
+                    <p class="muted" style="margin: 0.25rem 0 0;">До {{ \App\Models\Listing::MAX_PHOTOS }} фото на объявление: JPG, PNG или WebP, каждое до 5 МБ.</p>
+                    @error('photos') <p class="error">{{ $message }}</p> @enderror
+                    @error('photos.*') <p class="error">{{ $message }}</p> @enderror
                 </div>
 
                 <div class="actions">
@@ -149,7 +171,7 @@
             @endif
         @endif
 
-        @if ($listing->photos->isNotEmpty())
+        @if (! $editable && $listing->photos->isNotEmpty())
             <dl style="margin: 1rem 0 0;"><dt>Фотографии</dt></dl>
             <div class="photos">
                 @foreach ($listing->photos as $photo)

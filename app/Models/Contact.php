@@ -12,7 +12,7 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
  * A WhatsApp user who wrote to the bot. The same contact can act both as a
  * supplier and as a customer — the role comes from the scenario branch.
  */
-#[Fillable(['phone', 'profile_name', 'last_inbound_at'])]
+#[Fillable(['phone', 'profile_name', 'display_name', 'last_inbound_at'])]
 class Contact extends Model
 {
     /** @use HasFactory<ContactFactory> */
@@ -28,6 +28,16 @@ class Contact extends Model
         static::deleting(function (Contact $contact): void {
             $contact->listings()->get()->each->delete();
         });
+    }
+
+    /**
+     * The name shown wherever the contact appears (listings, bot messages,
+     * admin). The name the contact set themselves wins; otherwise the
+     * WhatsApp profile name, which every inbound message keeps refreshing.
+     */
+    public function displayName(): ?string
+    {
+        return $this->display_name ?: $this->profile_name;
     }
 
     /**

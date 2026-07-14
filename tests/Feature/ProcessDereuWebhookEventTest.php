@@ -81,6 +81,17 @@ test('the profile name from the event updates the contact', function () {
     expect(Contact::sole()->profile_name)->toBe('Асхат');
 });
 
+test('the profile name from the event never touches the manually set display name', function () {
+    test()->mock(BotEngine::class)->shouldReceive('handle')->once();
+    Contact::factory()->create(['phone' => '77011234567', 'display_name' => 'ТОО «СтройКран»']);
+
+    runDereuWebhookJob(inboundMessageEvent(['profile_name' => 'Асхат']));
+
+    $contact = Contact::sole();
+    expect($contact->profile_name)->toBe('Асхат')
+        ->and($contact->display_name)->toBe('ТОО «СтройКран»');
+});
+
 test('an event of a foreign company is skipped without creating a contact', function () {
     config()->set('services.dereu.external_id', 'org_test');
     connectedDereuCompany(['dereu_company_id' => 'co_ours']);

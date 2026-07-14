@@ -1,6 +1,26 @@
 <x-supplier.layout title="Мои объявления">
     <h1>Мои объявления</h1>
 
+    <article class="card">
+        <div class="meta">
+            <strong>Ваше имя</strong>
+            <span class="muted">{{ $contact->displayName() ?: 'не указано' }}</span>
+        </div>
+        <form method="POST" action="{{ $updateNameUrl }}" style="margin-top: 0.75rem;">
+            @csrf
+            <div class="field" style="margin-bottom: 0.75rem;">
+                <label for="display_name">Имя</label>
+                <input id="display_name" name="display_name" value="{{ old('display_name', $contact->display_name) }}"
+                       placeholder="{{ $contact->profile_name ?: 'Как к вам обращаться' }}" maxlength="255">
+                @error('display_name')
+                    <p class="error">{{ $message }}</p>
+                @enderror
+                <p class="muted" style="margin: 0.375rem 0 0;">Имя видно во всех ваших объявлениях. Оставьте поле пустым, чтобы использовать имя из WhatsApp.</p>
+            </div>
+            <button type="submit" class="btn btn-primary">Сохранить имя</button>
+        </form>
+    </article>
+
     @forelse ($listings as $listing)
         <article class="card">
             <div class="meta">

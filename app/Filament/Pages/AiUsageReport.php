@@ -136,7 +136,7 @@ class AiUsageReport extends Page
             ->join('ai_operations', 'ai_operations.id', '=', 'ai_attempts.ai_operation_id')
             ->join('contacts', 'contacts.id', '=', 'ai_operations.contact_id')
             ->selectRaw('contacts.phone as phone')
-            ->selectRaw("max(coalesce(contacts.profile_name, '')) as profile_name")
+            ->selectRaw("max(coalesce(nullif(contacts.display_name, ''), contacts.profile_name, '')) as profile_name")
             ->selectRaw('count(*) as requests')
             ->selectRaw('coalesce(sum(ai_attempts.estimated_cost_usd), 0) as cost')
             ->groupBy('contacts.phone')

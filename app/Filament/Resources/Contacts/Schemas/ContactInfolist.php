@@ -18,8 +18,11 @@ class ContactInfolist
                     ->schema([
                         TextEntry::make('phone')
                             ->label('Телефон'),
+                        TextEntry::make('display_name')
+                            ->label('Отображаемое имя')
+                            ->placeholder('—'),
                         TextEntry::make('profile_name')
-                            ->label('Имя профиля')
+                            ->label('Имя профиля WhatsApp')
                             ->placeholder('—'),
                         TextEntry::make('last_inbound_at')
                             ->label('Последнее входящее')

@@ -37,7 +37,7 @@ class ScenarioVariableResolver
             ScenarioVariable::ListingLocation => $listing?->locationLine(),
             ScenarioVariable::ListingPrice => $listing?->price,
             ScenarioVariable::RequestQuery => $subject instanceof CustomerRequest ? $subject->query_text : null,
-            ScenarioVariable::ContactName => $run->contact->profile_name,
+            ScenarioVariable::ContactName => $run->contact->displayName(),
             ScenarioVariable::ContactPhone => '+'.ltrim($run->contact->phone, '+'),
         };
 

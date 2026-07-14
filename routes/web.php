@@ -23,6 +23,8 @@ Route::get('/locations/search', LocationSearchController::class)->name('location
 Route::middleware('signed')->name('supplier.listings.')->group(function (): void {
     Route::get('/supplier/{contact}/listings', [SupplierListingController::class, 'index'])
         ->whereNumber('contact')->name('index');
+    Route::post('/supplier/{contact}/name', [SupplierListingController::class, 'updateName'])
+        ->whereNumber('contact')->name('update-name');
     Route::get('/supplier/listings/{listing}/edit', [SupplierListingController::class, 'edit'])
         ->whereNumber('listing')->name('edit');
     Route::post('/supplier/listings/{listing}', [SupplierListingController::class, 'update'])

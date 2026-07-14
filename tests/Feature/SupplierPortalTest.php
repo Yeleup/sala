@@ -91,6 +91,55 @@ describe('мои объявления', function () {
     });
 });
 
+describe('имя поставщика', function () {
+    test('страница показывает текущее имя и форму его смены', function () {
+        $contact = Contact::factory()->create(['profile_name' => 'Асхат', 'display_name' => null]);
+
+        $this->get(portalLinks()->myListingsUrl($contact))
+            ->assertOk()
+            ->assertSee('Ваше имя')
+            ->assertSee('Асхат')
+            ->assertSee('Сохранить имя');
+    });
+
+    test('смена имени сохраняется в контакте и видна на странице', function () {
+        $contact = Contact::factory()->create(['profile_name' => 'Асхат']);
+
+        $this->post(portalLinks()->updateNameUrl($contact), ['display_name' => '  Мағжан  '])
+            ->assertRedirect();
+
+        expect($contact->refresh()->display_name)->toBe('Мағжан');
+        $this->get(portalLinks()->myListingsUrl($contact))->assertSee('Мағжан');
+    });
+
+    test('пустое поле сбрасывает имя к имени из WhatsApp', function () {
+        $contact = Contact::factory()->create(['profile_name' => 'Асхат', 'display_name' => 'Мағжан']);
+
+        $this->post(portalLinks()->updateNameUrl($contact), ['display_name' => ''])->assertRedirect();
+
+        $contact->refresh();
+        expect($contact->display_name)->toBeNull()
+            ->and($contact->displayName())->toBe('Асхат');
+    });
+
+    test('без подписи имя не меняется', function () {
+        $contact = Contact::factory()->create();
+
+        $this->post("/supplier/{$contact->id}/name", ['display_name' => 'Хакер'])->assertForbidden();
+
+        expect($contact->refresh()->display_name)->toBeNull();
+    });
+
+    test('слишком длинное имя не принимается', function () {
+        $contact = Contact::factory()->create(['display_name' => 'Мағжан']);
+
+        $response = $this->post(portalLinks()->updateNameUrl($contact), ['display_name' => str_repeat('а', 256)]);
+
+        $response->assertSessionHasErrors(['display_name']);
+        expect($contact->refresh()->display_name)->toBe('Мағжан');
+    });
+});
+
 describe('редактирование', function () {
     test('черновик открывается с формой и текущими значениями', function () {
         $listing = Listing::factory()->create([

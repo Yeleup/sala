@@ -28,9 +28,16 @@ class ContactForm
                         'regex' => 'Только цифры, в международном формате без «+».',
                         'unique' => 'Контакт с таким номером уже есть.',
                     ]),
+                TextInput::make('display_name')
+                    ->label('Отображаемое имя')
+                    ->placeholder('Имя, заданное вручную')
+                    ->helperText('Показывается вместо имени профиля WhatsApp; поставщик задаёт его сам в веб-кабинете. Пустое поле — используется имя профиля.')
+                    ->maxLength(255)
+                    ->dehydrateStateUsing(fn (?string $state): ?string => trim((string) $state) ?: null),
                 TextInput::make('profile_name')
                     ->label('Имя профиля')
                     ->placeholder('Как контакт подписан в WhatsApp')
+                    ->helperText('Обновляется автоматически с каждым входящим сообщением WhatsApp.')
                     ->maxLength(255),
             ]);
     }

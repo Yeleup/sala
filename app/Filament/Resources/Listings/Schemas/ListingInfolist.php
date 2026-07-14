@@ -54,8 +54,9 @@ class ListingInfolist
                     ->schema([
                         TextEntry::make('supplier.phone')
                             ->label('Телефон'),
-                        TextEntry::make('supplier.profile_name')
-                            ->label('Имя профиля')
+                        TextEntry::make('supplier.display_name')
+                            ->label('Имя')
+                            ->state(fn (Listing $record): ?string => $record->supplier?->displayName())
                             ->placeholder('—'),
                         TextEntry::make('created_at')
                             ->label('Создано')

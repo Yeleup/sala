@@ -27,8 +27,9 @@ class CustomerRequestInfolist
                             ->columnSpanFull(),
                         TextEntry::make('customer.phone')
                             ->label('Телефон заказчика'),
-                        TextEntry::make('customer.profile_name')
+                        TextEntry::make('customer.display_name')
                             ->label('Имя заказчика')
+                            ->state(fn (CustomerRequest $record): ?string => $record->customer?->displayName())
                             ->placeholder('—'),
                     ])
                     ->columns(2),

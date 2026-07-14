@@ -28,6 +28,11 @@ class CtaLinkBuilder
         return $this->signed('supplier.listings.index', ['contact' => $contact->getKey()]);
     }
 
+    public function updateNameUrl(Contact $contact): string
+    {
+        return $this->signed('supplier.listings.update-name', ['contact' => $contact->getKey()]);
+    }
+
     public function updateUrl(Listing $listing): string
     {
         return $this->signed('supplier.listings.update', ['listing' => $listing->getKey()]);

@@ -33,10 +33,10 @@ class ListingForm
                 Select::make('contact_id')
                     ->label('Поставщик')
                     ->relationship('supplier', 'phone')
-                    ->getOptionLabelFromRecordUsing(fn (Contact $record): string => filled($record->profile_name)
-                        ? "{$record->phone} ({$record->profile_name})"
+                    ->getOptionLabelFromRecordUsing(fn (Contact $record): string => filled($record->displayName())
+                        ? "{$record->phone} ({$record->displayName()})"
                         : $record->phone)
-                    ->searchable(['phone', 'profile_name'])
+                    ->searchable(['phone', 'profile_name', 'display_name'])
                     ->preload()
                     ->required()
                     ->validationMessages(['required' => 'Выберите поставщика.']),

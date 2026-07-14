@@ -20,9 +20,10 @@ class ContactsTable
                 TextColumn::make('phone')
                     ->label('Телефон')
                     ->searchable(),
-                TextColumn::make('profile_name')
-                    ->label('Имя профиля')
-                    ->searchable()
+                TextColumn::make('display_name')
+                    ->label('Имя')
+                    ->state(fn (Contact $record): ?string => $record->displayName())
+                    ->searchable(['display_name', 'profile_name'])
                     ->placeholder('—'),
                 TextColumn::make('last_inbound_at')
                     ->label('Последнее входящее')

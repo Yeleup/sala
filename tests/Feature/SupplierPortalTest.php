@@ -45,9 +45,9 @@ describe('доступ по подписанным ссылкам', function () 
 describe('мои объявления', function () {
     test('показывает только объявления контакта со статусами и причиной отклонения', function () {
         $contact = Contact::factory()->create();
-        Listing::factory()->for($contact, 'supplier')->create(['category' => 'Автокран']);
-        Listing::factory()->for($contact, 'supplier')->rejected()->create(['category' => 'Экскаватор']);
-        Listing::factory()->create(['category' => 'Чужой самосвал']);
+        Listing::factory()->for($contact, 'supplier')->create(['category_id' => categoryNamed('Автокран')->id]);
+        Listing::factory()->for($contact, 'supplier')->rejected()->create(['category_id' => categoryNamed('Экскаватор')->id]);
+        Listing::factory()->create(['category_id' => categoryNamed('Чужой самосвал')->id]);
 
         $response = $this->get(portalLinks()->myListingsUrl($contact));
 
@@ -75,7 +75,10 @@ describe('мои объявления', function () {
 
 describe('редактирование', function () {
     test('черновик открывается с формой и текущими значениями', function () {
-        $listing = Listing::factory()->create(['category' => 'Автокран', 'location' => 'Шымкент']);
+        $listing = Listing::factory()->create([
+            'category_id' => categoryNamed('Автокран')->id,
+            'location_id' => locationNamed('г.Шымкент')->id,
+        ]);
 
         $this->get(portalLinks()->editUrl($listing))
             ->assertOk()
@@ -107,9 +110,10 @@ describe('редактирование', function () {
 
         $response = $this->post(portalLinks()->updateUrl($listing), [
             'type' => ListingType::Service->value,
-            'category' => 'Сварщик',
+            'category_id' => categoryNamed('Сварщик', ListingType::Service)->id,
             'description' => 'Бригада сварщиков с допусками.',
-            'location' => 'Алматы',
+            'location_id' => locationNamed('г.Алматы')->id,
+            'location_detail' => 'Ауэзовский район',
             'price' => '5000 тг/ч',
         ]);
 
@@ -117,8 +121,9 @@ describe('редактирование', function () {
         expect($listing->refresh())
             ->status->toBe(ListingStatus::PendingModeration)
             ->type->toBe(ListingType::Service)
-            ->category->toBe('Сварщик')
-            ->location->toBe('Алматы')
+            ->category->name->toBe('Сварщик')
+            ->location->name->toBe('г.Алматы')
+            ->location_detail->toBe('Ауэзовский район')
             ->price->toBe('5000 тг/ч');
     });
 
@@ -127,9 +132,9 @@ describe('редактирование', function () {
 
         $this->post(portalLinks()->updateUrl($listing), [
             'type' => $listing->type->value,
-            'category' => $listing->category,
+            'category_id' => $listing->category_id,
             'description' => $listing->description,
-            'location' => $listing->location,
+            'location_id' => $listing->location_id,
             'price' => '12000 тг/ч',
         ]);
 
@@ -137,17 +142,62 @@ describe('редактирование', function () {
     });
 
     test('для отправки на проверку обязательны все бизнес-поля', function () {
-        $listing = Listing::factory()->create(['category' => null, 'price' => null]);
+        $listing = Listing::factory()->create(['category_id' => null, 'price' => null]);
 
         $response = $this->post(portalLinks()->updateUrl($listing), [
             'type' => $listing->type->value,
-            'category' => '',
+            'category_id' => '',
             'description' => $listing->description,
-            'location' => $listing->location,
+            'location_id' => $listing->location_id,
             'price' => '',
         ]);
 
-        $response->assertSessionHasErrors(['category', 'price']);
+        $response->assertSessionHasErrors(['category_id', 'price']);
+        expect($listing->refresh())->status->toBe(ListingStatus::Draft);
+    });
+
+    test('категория вне справочника не принимается', function () {
+        $listing = Listing::factory()->create();
+
+        $response = $this->post(portalLinks()->updateUrl($listing), [
+            'type' => $listing->type->value,
+            'category_id' => 999999,
+            'description' => $listing->description,
+            'location_id' => $listing->location_id,
+            'price' => '10000 тг/ч',
+        ]);
+
+        $response->assertSessionHasErrors(['category_id']);
+        expect($listing->refresh())->status->toBe(ListingStatus::Draft);
+    });
+
+    test('локация вне справочника не принимается', function () {
+        $listing = Listing::factory()->create();
+
+        $response = $this->post(portalLinks()->updateUrl($listing), [
+            'type' => $listing->type->value,
+            'category_id' => $listing->category_id,
+            'description' => $listing->description,
+            'location_id' => 999999,
+            'price' => '10000 тг/ч',
+        ]);
+
+        $response->assertSessionHasErrors(['location_id']);
+        expect($listing->refresh())->status->toBe(ListingStatus::Draft);
+    });
+
+    test('категория чужого типа не принимается', function () {
+        $listing = Listing::factory()->create();
+
+        $response = $this->post(portalLinks()->updateUrl($listing), [
+            'type' => ListingType::Service->value,
+            'category_id' => categoryNamed('Автокран')->id,
+            'description' => $listing->description,
+            'location_id' => $listing->location_id,
+            'price' => '10000 тг/ч',
+        ]);
+
+        $response->assertSessionHasErrors(['category_id']);
         expect($listing->refresh())->status->toBe(ListingStatus::Draft);
     });
 
@@ -156,9 +206,9 @@ describe('редактирование', function () {
 
         $this->post(portalLinks()->updateUrl($listing), [
             'type' => $listing->type->value,
-            'category' => 'Другая категория',
+            'category_id' => categoryNamed('Другая категория')->id,
             'description' => $listing->description,
-            'location' => $listing->location,
+            'location_id' => $listing->location_id,
             'price' => $listing->price,
         ])->assertForbidden();
 

@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Enums\ListingStatus;
 use App\Http\Requests\UpdateSupplierListingRequest;
+use App\Models\Category;
 use App\Models\Contact;
 use App\Models\Listing;
 use App\Services\Ai\CtaLinkBuilder;
@@ -22,7 +23,7 @@ class SupplierListingController extends Controller
 
     public function index(Contact $contact): View
     {
-        $listings = $contact->listings()->latest()->get();
+        $listings = $contact->listings()->with(['category', 'location'])->latest()->get();
 
         return view('supplier.listings-index', [
             'listings' => $listings,
@@ -41,6 +42,7 @@ class SupplierListingController extends Controller
 
         return view('supplier.listing-edit', [
             'listing' => $listing,
+            'categories' => Category::query()->orderBy('name')->get(),
             'editable' => $this->isEditable($listing),
             'indexUrl' => $this->links->myListingsUrl($listing->supplier),
             'updateUrl' => $this->links->updateUrl($listing),

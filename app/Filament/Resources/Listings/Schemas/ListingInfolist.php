@@ -22,16 +22,20 @@ class ListingInfolist
                         TextEntry::make('type')
                             ->label('Тип')
                             ->badge(),
-                        TextEntry::make('category')
+                        TextEntry::make('category.name')
                             ->label('Категория')
                             ->placeholder('Не указана'),
                         TextEntry::make('description')
                             ->label('Описание')
                             ->placeholder('Не указано')
                             ->columnSpanFull(),
-                        TextEntry::make('location')
+                        TextEntry::make('location.name')
                             ->label('Локация')
+                            ->state(fn (Listing $record): ?string => $record->location?->label())
                             ->placeholder('Не указана'),
+                        TextEntry::make('location_detail')
+                            ->label('Уточнение адреса')
+                            ->placeholder('—'),
                         TextEntry::make('price')
                             ->label('Цена/Тариф')
                             ->placeholder('Не указана'),

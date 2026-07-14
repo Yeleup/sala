@@ -28,7 +28,7 @@ class ListingRenewalNotifier
     public function sendPoll(Listing $listing): bool
     {
         $supplier = $listing->supplier;
-        $category = $listing->category ?: 'без категории';
+        $category = $listing->category?->name ?: 'без категории';
         $yesId = NotificationReplyHandler::renewalYesId($listing);
         $noId = NotificationReplyHandler::renewalNoId($listing);
 

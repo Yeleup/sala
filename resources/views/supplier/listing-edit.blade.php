@@ -28,9 +28,21 @@
                 </div>
 
                 <div class="field">
-                    <label for="category">Категория</label>
-                    <input id="category" name="category" value="{{ old('category', $listing->category) }}" placeholder="Например: автокран, сварщик">
-                    @error('category') <p class="error">{{ $message }}</p> @enderror
+                    <label for="category_id">Категория</label>
+                    <select id="category_id" name="category_id">
+                        <option value="" @selected(old('category_id', $listing->category_id) === null)>— выберите категорию —</option>
+                        @foreach (\App\Enums\ListingType::cases() as $categoryType)
+                            @if ($categories->where('type', $categoryType)->isNotEmpty())
+                                <optgroup label="{{ $categoryType->getLabel() }}">
+                                    @foreach ($categories->where('type', $categoryType) as $category)
+                                        <option value="{{ $category->id }}" @selected((int) old('category_id', $listing->category_id) === $category->id)>{{ $category->name }}</option>
+                                    @endforeach
+                                </optgroup>
+                            @endif
+                        @endforeach
+                    </select>
+                    <p class="muted" style="margin: 0.25rem 0 0;">Категория должна соответствовать выбранному типу.</p>
+                    @error('category_id') <p class="error">{{ $message }}</p> @enderror
                 </div>
 
                 <div class="field">
@@ -40,9 +52,20 @@
                 </div>
 
                 <div class="field">
-                    <label for="location">Локация</label>
-                    <input id="location" name="location" value="{{ old('location', $listing->location) }}" placeholder="Например: Шымкент, центр">
-                    @error('location') <p class="error">{{ $message }}</p> @enderror
+                    <label for="location_search">Локация</label>
+                    <input id="location_search" name="location_label" list="location-options" autocomplete="off"
+                           value="{{ old('location_label', $listing->location?->label()) }}"
+                           placeholder="Начните вводить: город, район или село">
+                    <datalist id="location-options"></datalist>
+                    <input type="hidden" id="location_id" name="location_id" value="{{ old('location_id', $listing->location_id) }}">
+                    <p class="muted" style="margin: 0.25rem 0 0;">Выберите вариант из подсказок.</p>
+                    @error('location_id') <p class="error">{{ $message }}</p> @enderror
+                </div>
+
+                <div class="field">
+                    <label for="location_detail">Уточнение адреса (необязательно)</label>
+                    <input id="location_detail" name="location_detail" value="{{ old('location_detail', $listing->location_detail) }}" placeholder="Например: центр, мкр Нурсат">
+                    @error('location_detail') <p class="error">{{ $message }}</p> @enderror
                 </div>
 
                 <div class="field">
@@ -55,6 +78,47 @@
                     <button type="submit" class="btn btn-primary">Сохранить и отправить на проверку</button>
                 </div>
             </form>
+
+            <script>
+                (function () {
+                    const input = document.getElementById('location_search');
+                    const datalist = document.getElementById('location-options');
+                    const hidden = document.getElementById('location_id');
+                    let optionIds = {};
+                    let timer = null;
+
+                    input.addEventListener('input', function () {
+                        hidden.value = optionIds[input.value] ?? '';
+
+                        if (hidden.value !== '') {
+                            return;
+                        }
+
+                        clearTimeout(timer);
+                        const query = input.value.trim();
+
+                        if (query.length < 2) {
+                            return;
+                        }
+
+                        timer = setTimeout(function () {
+                            fetch('{{ route('locations.search') }}?q=' + encodeURIComponent(query))
+                                .then((response) => response.json())
+                                .then((items) => {
+                                    optionIds = {};
+                                    datalist.innerHTML = '';
+                                    items.forEach((item) => {
+                                        optionIds[item.label] = item.id;
+                                        const option = document.createElement('option');
+                                        option.value = item.label;
+                                        datalist.appendChild(option);
+                                    });
+                                    hidden.value = optionIds[input.value] ?? '';
+                                });
+                        }, 200);
+                    });
+                })();
+            </script>
         @else
             @if ($listing->status === \App\Enums\ListingStatus::PendingModeration)
                 <p class="muted" style="margin: 0.75rem 0 0;">Объявление на проверке у модератора — редактирование недоступно, ожидайте результата.</p>
@@ -68,11 +132,11 @@
                 <dt>Тип</dt>
                 <dd>{{ $listing->type->getLabel() }}</dd>
                 <dt>Категория</dt>
-                <dd>{{ $listing->category ?: '—' }}</dd>
+                <dd>{{ $listing->category?->name ?: '—' }}</dd>
                 <dt>Описание</dt>
                 <dd>{{ $listing->description ?: '—' }}</dd>
                 <dt>Локация</dt>
-                <dd>{{ $listing->location ?: '—' }}</dd>
+                <dd>{{ $listing->locationLine() ?: '—' }}</dd>
                 <dt>Цена / тариф</dt>
                 <dd>{{ $listing->price ?: '—' }}</dd>
             </dl>

@@ -4,8 +4,10 @@ namespace Database\Factories;
 
 use App\Enums\ListingStatus;
 use App\Enums\ListingType;
+use App\Models\Category;
 use App\Models\Contact;
 use App\Models\Listing;
+use App\Models\Location;
 use Illuminate\Database\Eloquent\Factories\Factory;
 
 /**
@@ -23,13 +25,14 @@ class ListingFactory extends Factory
         return [
             'contact_id' => Contact::factory(),
             'type' => ListingType::Equipment,
-            'category' => fake()->randomElement(['Автокран', 'Экскаватор', 'Самосвал', 'Манипулятор', 'Бетононасос']),
+            'category_id' => Category::factory(),
             'description' => fake()->randomElement([
                 'Автокран 25 тонн, стрела 28 м, работаем по городу и области.',
                 'Экскаватор-погрузчик, копаем траншеи и котлованы.',
                 'Самосвал 20 тонн, доставка сыпучих материалов.',
             ]),
-            'location' => fake()->randomElement(['Шымкент, центр', 'Алматы, Ауэзовский район', 'Астана, Есиль']),
+            'location_id' => Location::factory(),
+            'location_detail' => null,
             'price' => (fake()->numberBetween(5, 50) * 1000).' тг/ч',
             'status' => ListingStatus::Draft,
             'rejection_reason' => null,
@@ -41,7 +44,7 @@ class ListingFactory extends Factory
     {
         return $this->state(fn (): array => [
             'type' => ListingType::Service,
-            'category' => fake()->randomElement(['Сварщик', 'Монтажник', 'Стропальщик']),
+            'category_id' => Category::factory()->service(),
             'description' => 'Бригада с допусками, выезд на объект в день обращения.',
         ]);
     }

@@ -53,14 +53,15 @@ test('entering the block asks what the customer needs', function () {
 });
 
 test('a query returns a ranked list of matching published listings', function () {
+    $shymkent = locationNamed('г.Шымкент');
     $crane25 = Listing::factory()->published()->create([
-        'category' => 'Автокран', 'description' => 'Кран 25 тонн со стрелой', 'location' => 'Шымкент', 'price' => '20000 тг/ч',
+        'category_id' => categoryNamed('Автокран')->id, 'description' => 'Кран 25 тонн со стрелой', 'location_id' => $shymkent->id, 'price' => '20000 тг/ч',
     ]);
     $crane10 = Listing::factory()->published()->create([
-        'category' => 'Автокран', 'description' => 'Кран 10 тонн', 'location' => 'Алматы',
+        'category_id' => categoryNamed('Автокран')->id, 'description' => 'Кран 10 тонн', 'location_id' => $shymkent->id,
     ]);
-    Listing::factory()->published()->create(['category' => 'Экскаватор', 'description' => 'Гусеничный', 'location' => 'Астана']);
-    Listing::factory()->create(['category' => 'Автокран', 'description' => 'Черновик крана']);
+    Listing::factory()->published()->create(['category_id' => categoryNamed('Экскаватор')->id, 'description' => 'Гусеничный', 'location_id' => locationNamed('г.Астана')->id]);
+    Listing::factory()->create(['category_id' => categoryNamed('Автокран')->id, 'description' => 'Черновик крана', 'location_id' => $shymkent->id]);
 
     $messenger = fakeSearchMessenger();
     $messenger->shouldReceive('sendList')->once()->withArgs(function (Contact $contact, string $text, string $button, array $rows) use ($crane25, $crane10): bool {
@@ -109,7 +110,7 @@ test('the third fruitless search releases the contact back to the scenario', fun
 
 test('picking a row creates a pending request and notifies the supplier in the open window', function () {
     $supplier = Contact::factory()->withOpenSessionWindow()->create();
-    $listing = Listing::factory()->published()->for($supplier, 'supplier')->create(['category' => 'Автокран']);
+    $listing = Listing::factory()->published()->for($supplier, 'supplier')->create(['category_id' => categoryNamed('Автокран')->id]);
 
     $messenger = fakeSearchMessenger();
     $messenger->shouldReceive('sendButtons')->once()->withArgs(function (Contact $contact, string $text, array $buttons) use ($supplier, $listing): bool {
@@ -140,7 +141,7 @@ test('picking a row creates a pending request and notifies the supplier in the o
 
 test('outside the window the supplier gets the approved template with reply payloads', function () {
     $supplier = Contact::factory()->withClosedSessionWindow()->create();
-    $listing = Listing::factory()->published()->for($supplier, 'supplier')->create(['category' => 'Автокран']);
+    $listing = Listing::factory()->published()->for($supplier, 'supplier')->create(['category_id' => categoryNamed('Автокран')->id]);
     $template = WhatsappTemplate::factory()->approved()->create([
         'name' => WhatsappTemplateLibrary::NEW_CUSTOMER_REQUEST,
         'language' => 'ru',
@@ -180,7 +181,7 @@ test('a missing approved template does not break the request', function () {
 
 test('typing the exact row title equals picking it', function () {
     $supplier = Contact::factory()->withOpenSessionWindow()->create();
-    $listing = Listing::factory()->published()->for($supplier, 'supplier')->create(['category' => 'Экскаватор']);
+    $listing = Listing::factory()->published()->for($supplier, 'supplier')->create(['category_id' => categoryNamed('Экскаватор')->id]);
 
     $messenger = fakeSearchMessenger();
     $messenger->shouldReceive('sendButtons')->once();
@@ -195,8 +196,8 @@ test('typing the exact row title equals picking it', function () {
 });
 
 test('any other text while choosing is treated as a refined search', function () {
-    $crane = Listing::factory()->published()->create(['category' => 'Автокран', 'description' => 'Кран 25 тонн']);
-    $digger = Listing::factory()->published()->create(['category' => 'Экскаватор', 'description' => 'Гусеничный экскаватор']);
+    $crane = Listing::factory()->published()->create(['category_id' => categoryNamed('Автокран')->id, 'description' => 'Кран 25 тонн']);
+    $digger = Listing::factory()->published()->create(['category_id' => categoryNamed('Экскаватор')->id, 'description' => 'Гусеничный экскаватор']);
 
     $messenger = fakeSearchMessenger();
     $messenger->shouldReceive('sendList')->once()->withArgs(
@@ -212,8 +213,88 @@ test('any other text while choosing is treated as a refined search', function ()
         ->and($session->refresh()->state['offered'])->toBe([$digger->id]);
 });
 
+test('a city query covers listings in the city districts', function () {
+    $city = locationNamed('г.Шымкент');
+    $district = locationNamed('Каратауский район', $city);
+    $listing = Listing::factory()->published()->create([
+        'category_id' => categoryNamed('Автокран')->id,
+        'description' => 'Кран 25 тонн',
+        'location_id' => $district->id,
+    ]);
+
+    $messenger = fakeSearchMessenger();
+    $messenger->shouldReceive('sendList')->once()->withArgs(
+        fn (Contact $contact, string $text, string $button, array $rows): bool => count($rows) === 1
+            && $rows[0]['id'] === "listing:{$listing->id}",
+    );
+
+    $session = searchSession();
+    $outcome = app(CustomerSearchAssistant::class)
+        ->resume($session, customerAiNode(), new InboundMessage(text: 'кран в Шымкенте'));
+
+    expect($outcome)->toBe(AiOutcome::InProgress);
+});
+
+test('a listing outside the requested location subtree is not offered', function () {
+    locationNamed('г.Шымкент');
+    Listing::factory()->published()->create([
+        'category_id' => categoryNamed('Автокран')->id,
+        'description' => 'Кран 25 тонн',
+        'location_id' => locationNamed('г.Астана')->id,
+    ]);
+
+    $messenger = fakeSearchMessenger();
+    $messenger->shouldReceive('sendText')->once()->withArgs(
+        fn (Contact $contact, string $text): bool => str_contains($text, 'ничего не нашлось'),
+    );
+
+    $session = searchSession();
+    $outcome = app(CustomerSearchAssistant::class)
+        ->resume($session, customerAiNode(), new InboundMessage(text: 'кран в Шымкенте'));
+
+    expect($outcome)->toBe(AiOutcome::InProgress)
+        ->and($session->refresh()->state['attempts'])->toBe(1);
+});
+
+test('an empty subtree offers to widen the search one level up and the click is free', function () {
+    $region = locationNamed('область Абай');
+    $district = locationNamed('Абайский район', $region);
+    $village = locationNamed('с.Карааул', $district);
+    $listing = Listing::factory()->published()->create([
+        'category_id' => categoryNamed('Автокран')->id,
+        'description' => 'Кран в райцентре',
+        'location_id' => $district->id,
+    ]);
+
+    $messenger = fakeSearchMessenger();
+    $messenger->shouldReceive('sendButtons')->once()->withArgs(
+        fn (Contact $contact, string $text, array $buttons): bool => str_contains($text, 'Поискать шире')
+            && str_contains($text, 'Абайский район')
+            && $buttons[0]['id'] === CustomerSearchAssistant::BUTTON_EXPAND
+            && mb_strlen($buttons[0]['title']) <= 20,
+    );
+    $messenger->shouldReceive('sendList')->once()->withArgs(
+        fn (Contact $contact, string $text, string $button, array $rows): bool => $rows[0]['id'] === "listing:{$listing->id}",
+    );
+
+    $assistant = app(CustomerSearchAssistant::class);
+    $session = searchSession();
+    $assistant->resume($session, customerAiNode(), new InboundMessage(text: 'кран в Караауле'));
+
+    expect($session->fresh()->state['phase'])->toBe('expanding');
+
+    $fresh = $session->fresh();
+    $outcome = $assistant->resume($fresh, customerAiNode(), new InboundMessage(replyId: CustomerSearchAssistant::BUTTON_EXPAND));
+
+    expect($outcome)->toBe(AiOutcome::InProgress)
+        ->and($fresh->fresh()->state['phase'])->toBe('choosing')
+        // Расширение — наша собственная подсказка: попытка потрачена только
+        // на первоначальную пустую выдачу.
+        ->and($fresh->fresh()->state['attempts'])->toBe(1);
+});
+
 test('a selection of a listing that expired after the search is not accepted', function () {
-    $listing = Listing::factory()->expired()->create(['category' => 'Автокран']);
+    $listing = Listing::factory()->expired()->create(['category_id' => categoryNamed('Автокран')->id]);
 
     $messenger = fakeSearchMessenger();
     $messenger->shouldReceive('sendText')->once(); // «ничего не нашлось» from the re-search fallback

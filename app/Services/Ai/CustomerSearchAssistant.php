@@ -8,10 +8,12 @@ use App\Models\BotScenario;
 use App\Models\BotSession;
 use App\Models\CustomerRequest;
 use App\Models\Listing;
+use App\Models\Location;
 use App\Services\Bot\InboundMessage;
 use App\Services\Bot\ScenarioRunner;
 use App\Services\CustomerRequestNotifier;
 use App\Services\DereuMessenger;
+use App\Services\Locations\LocationResolver;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Str;
 
@@ -39,11 +41,16 @@ class CustomerSearchAssistant
 
     public const string LIST_BUTTON = 'Варианты';
 
+    public const string BUTTON_EXPAND = 'search_expand';
+
+    public const string BUTTON_EXPAND_TITLE = 'Искать шире';
+
     public function __construct(
         private readonly DereuMessenger $messenger,
         private readonly ListingMatcher $matcher,
         private readonly ScenarioRunner $runner,
         private readonly CustomerRequestNotifier $notifier,
+        private readonly LocationResolver $locations,
     ) {}
 
     /**
@@ -51,7 +58,7 @@ class CustomerSearchAssistant
      */
     public function start(BotSession $session, array $node): AiOutcome
     {
-        $session->state = ['phase' => 'searching', 'attempts' => 0, 'query' => null, 'offered' => []];
+        $session->state = ['phase' => 'searching', 'attempts' => 0, 'query' => null, 'offered' => [], 'expand_location_id' => null];
         $session->save();
 
         $this->messenger->sendText(
@@ -68,7 +75,7 @@ class CustomerSearchAssistant
     public function resume(BotSession $session, array $node, InboundMessage $message): AiOutcome
     {
         $state = is_array($session->state) ? $session->state : [];
-        $state += ['phase' => 'searching', 'attempts' => 0, 'query' => null, 'offered' => []];
+        $state += ['phase' => 'searching', 'attempts' => 0, 'query' => null, 'offered' => [], 'expand_location_id' => null];
 
         if ($state['phase'] === 'choosing') {
             $chosen = $this->matchChoice($state['offered'], $message);
@@ -76,6 +83,10 @@ class CustomerSearchAssistant
             if ($chosen !== null) {
                 return $this->placeRequest($session, $state, $chosen);
             }
+        }
+
+        if ($state['phase'] === 'expanding' && $this->matchesExpandButton($message)) {
+            return $this->expandSearch($session, $state);
         }
 
         return $this->search($session, $state, $message);
@@ -98,7 +109,8 @@ class CustomerSearchAssistant
             return AiOutcome::InProgress;
         }
 
-        $matches = $this->matcher->match($query);
+        $location = $this->locations->detectInQuery($query);
+        $matches = $this->matcher->match($query, $location);
 
         if ($matches->isEmpty()) {
             $state['attempts']++;
@@ -113,6 +125,12 @@ class CustomerSearchAssistant
                 return AiOutcome::Completed;
             }
 
+            // The query named a place with nothing inside: offer to climb
+            // one level of the location tree instead of a dead «не нашлось».
+            if ($location !== null && $location->parent_id !== null) {
+                return $this->offerExpansion($session, $state, $query, $location);
+            }
+
             $this->persist($session, $state);
             $this->messenger->sendText(
                 $session->contact,
@@ -122,9 +140,19 @@ class CustomerSearchAssistant
             return AiOutcome::InProgress;
         }
 
+        return $this->offerMatches($session, $state, $query, $matches);
+    }
+
+    /**
+     * @param  array<string, mixed>  $state
+     * @param  Collection<int, Listing>  $matches
+     */
+    protected function offerMatches(BotSession $session, array $state, string $query, Collection $matches): AiOutcome
+    {
         $state['phase'] = 'choosing';
         $state['query'] = $query;
         $state['offered'] = $matches->pluck('id')->all();
+        $state['expand_location_id'] = null;
         $this->persist($session, $state);
 
         $this->messenger->sendList(
@@ -135,6 +163,79 @@ class CustomerSearchAssistant
         );
 
         return AiOutcome::InProgress;
+    }
+
+    /**
+     * @param  array<string, mixed>  $state
+     */
+    protected function offerExpansion(BotSession $session, array $state, string $query, Location $location): AiOutcome
+    {
+        $parent = $location->parent;
+
+        $state['phase'] = 'expanding';
+        $state['query'] = $query;
+        $state['expand_location_id'] = $parent->id;
+        $this->persist($session, $state);
+
+        $this->messenger->sendButtons(
+            $session->contact,
+            sprintf('По «%s» сейчас ничего нет. Поискать шире — %s?', $location->name, $parent->name),
+            [['id' => self::BUTTON_EXPAND, 'title' => self::BUTTON_EXPAND_TITLE]],
+        );
+
+        return AiOutcome::InProgress;
+    }
+
+    /**
+     * Re-runs the saved query one location level up. Expanding is free: it
+     * is our own suggestion, so it never spends a fruitless-search attempt.
+     *
+     * @param  array<string, mixed>  $state
+     */
+    protected function expandSearch(BotSession $session, array $state): AiOutcome
+    {
+        $location = Location::find($state['expand_location_id']);
+        $query = (string) $state['query'];
+
+        if ($location === null || $query === '') {
+            return $this->search($session, $state, new InboundMessage(text: $query));
+        }
+
+        $matches = $this->matcher->match($query, $location);
+
+        if ($matches->isNotEmpty()) {
+            return $this->offerMatches($session, $state, $query, $matches);
+        }
+
+        if ($location->parent_id !== null) {
+            $parent = $location->parent;
+            $state['expand_location_id'] = $parent->id;
+            $this->persist($session, $state);
+
+            $this->messenger->sendButtons(
+                $session->contact,
+                sprintf('По «%s» тоже пусто. Поискать ещё шире — %s?', $location->name, $parent->name),
+                [['id' => self::BUTTON_EXPAND, 'title' => self::BUTTON_EXPAND_TITLE]],
+            );
+
+            return AiOutcome::InProgress;
+        }
+
+        $state['phase'] = 'searching';
+        $state['expand_location_id'] = null;
+        $this->persist($session, $state);
+        $this->messenger->sendText(
+            $session->contact,
+            'Шире искать уже некуда — по всей стране ничего не нашлось. Попробуйте описать иначе: вид техники или услуги.',
+        );
+
+        return AiOutcome::InProgress;
+    }
+
+    protected function matchesExpandButton(InboundMessage $message): bool
+    {
+        return $message->replyId === self::BUTTON_EXPAND
+            || mb_strtolower(trim((string) $message->text)) === mb_strtolower(self::BUTTON_EXPAND_TITLE);
     }
 
     /**
@@ -154,7 +255,7 @@ class CustomerSearchAssistant
             $session->contact,
             sprintf(
                 'Заявка по варианту «%s» отправлена поставщику. Как только он ответит, мы сразу сообщим вам.',
-                $listing->category ?: 'объявление',
+                $listing->category?->name ?: 'объявление',
             ),
         );
 
@@ -220,7 +321,7 @@ class CustomerSearchAssistant
             'title' => $this->rowTitle($listing),
         ];
 
-        $description = implode(' · ', array_filter([$listing->location, $listing->price]));
+        $description = implode(' · ', array_filter([$listing->locationLine(), $listing->price]));
 
         if ($description !== '') {
             $row['description'] = Str::limit($description, self::ROW_DESCRIPTION_LIMIT - 1);
@@ -231,7 +332,7 @@ class CustomerSearchAssistant
 
     protected function rowTitle(Listing $listing): string
     {
-        return Str::limit($listing->category ?: 'Объявление №'.$listing->id, self::ROW_TITLE_LIMIT - 1);
+        return Str::limit($listing->category?->name ?: 'Объявление №'.$listing->id, self::ROW_TITLE_LIMIT - 1);
     }
 
     /**

@@ -7,14 +7,19 @@ use App\Enums\AiOutcome;
 use App\Enums\ListingMediaType;
 use App\Enums\ListingType;
 use App\Models\BotSession;
+use App\Models\Category;
 use App\Models\Listing;
 use App\Models\ListingMedia;
+use App\Models\Location;
 use App\Services\Bot\InboundMessage;
 use App\Enums\AiOperationType;
 use App\Services\Ai\Audit\AiAudit;
 use App\Services\DereuMediaDownloader;
 use App\Services\DereuMessenger;
+use App\Services\Locations\LocationResolver;
+use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Str;
 use Laravel\Ai\Files\Image;
 use Laravel\Ai\Transcription;
 
@@ -39,7 +44,9 @@ class SupplierListingCollector
     private const int MAX_PHOTO_ATTACHMENTS = 5;
 
     /** @var list<string> */
-    private const array REQUIRED_FIELDS = ['category', 'description', 'location', 'price'];
+    private const array REQUIRED_FIELDS = ['category', 'description', 'location_id', 'price'];
+
+    public const string LOCATION_ROW_PREFIX = 'listing_location:';
 
     public const string BUTTON_SUBMIT = 'listing_submit';
 
@@ -58,6 +65,7 @@ class SupplierListingCollector
         private readonly DereuMediaDownloader $mediaDownloader,
         private readonly CtaLinkBuilder $cta,
         private readonly AiAudit $audit,
+        private readonly LocationResolver $locations,
     ) {}
 
     /**
@@ -94,6 +102,10 @@ class SupplierListingCollector
             return $this->handleConfirmation($session, $state, $message);
         }
 
+        if ($state['phase'] === 'locating') {
+            return $this->handleLocating($session, $state, $message);
+        }
+
         return $this->handleCollecting($session, $state, $message);
     }
 
@@ -115,6 +127,19 @@ class SupplierListingCollector
         }
 
         $state['fields'] = $this->extract($session, $state);
+
+        return $this->advance($session, $state);
+    }
+
+    /**
+     * Decide the next step from the collected fields: confirm, ask to pick
+     * one of the matching dictionary locations, clarify, or hand off to the
+     * web form once the clarification limit is spent.
+     *
+     * @param  array<string, mixed>  $state
+     */
+    private function advance(BotSession $session, array $state): AiOutcome
+    {
         $missing = $this->missingFields($state['fields'], $state);
 
         if ($missing === []) {
@@ -123,6 +148,18 @@ class SupplierListingCollector
             $state['phase'] = 'confirming';
             $this->persist($session, $state);
             $this->sendConfirmation($session, $state['fields']);
+
+            return AiOutcome::InProgress;
+        }
+
+        // Several dictionary places match the named location: picking from
+        // the list is not a clarification attempt.
+        $candidates = array_map(intval(...), (array) ($state['fields']['location_candidates'] ?? []));
+
+        if (in_array('location_id', $missing, true) && $candidates !== []) {
+            $state['phase'] = 'locating';
+            $this->persist($session, $state);
+            $this->sendLocationChoices($session, $candidates);
 
             return AiOutcome::InProgress;
         }
@@ -142,10 +179,95 @@ class SupplierListingCollector
         }
 
         $state['attempts']++;
+        $state['phase'] = 'collecting';
         $this->persist($session, $state);
         $this->messenger->sendText($session->contact, $this->clarificationQuestion($state['fields'], $missing));
 
         return AiOutcome::InProgress;
+    }
+
+    /**
+     * The supplier picks one of the matching dictionary locations — by the
+     * list row or by typing a row's title (the scenario-wide convention).
+     * Any other reply is treated as further details.
+     *
+     * @param  array<string, mixed>  $state
+     */
+    private function handleLocating(BotSession $session, array $state, InboundMessage $message): AiOutcome
+    {
+        $candidates = array_map(intval(...), (array) ($state['fields']['location_candidates'] ?? []));
+        $picked = $this->matchLocationChoice($candidates, $message);
+
+        if ($picked !== null) {
+            $state['fields']['location_id'] = $picked->id;
+            $state['fields']['location'] = $picked->name;
+            $state['fields']['location_candidates'] = [];
+            $state['phase'] = 'collecting';
+
+            return $this->advance($session, $state);
+        }
+
+        $state['phase'] = 'collecting';
+
+        return $this->handleCollecting($session, $state, $message);
+    }
+
+    /**
+     * @param  list<int>  $candidates
+     */
+    private function matchLocationChoice(array $candidates, InboundMessage $message): ?Location
+    {
+        if ($candidates === []) {
+            return null;
+        }
+
+        $replyId = (string) $message->replyId;
+
+        if (str_starts_with($replyId, self::LOCATION_ROW_PREFIX)) {
+            $id = (int) Str::after($replyId, self::LOCATION_ROW_PREFIX);
+
+            return in_array($id, $candidates, true) ? Location::find($id) : null;
+        }
+
+        $text = mb_strtolower(trim((string) $message->text));
+
+        if ($text === '') {
+            return null;
+        }
+
+        $byName = Location::query()->whereIn('id', $candidates)->get()
+            ->filter(fn (Location $location): bool => mb_strtolower($location->name) === $text);
+
+        return $byName->count() === 1 ? $byName->first() : null;
+    }
+
+    /**
+     * @param  list<int>  $candidates
+     */
+    private function sendLocationChoices(BotSession $session, array $candidates): void
+    {
+        $rows = Location::query()
+            ->whereIn('id', $candidates)
+            ->orderBy('depth')
+            ->orderBy('id')
+            ->get()
+            ->map(fn (Location $location): array => array_filter([
+                'id' => self::LOCATION_ROW_PREFIX.$location->id,
+                'title' => Str::limit($location->name, 23),
+                'description' => Str::limit(
+                    $location->ancestors()->sortByDesc('depth')->pluck('name')->implode(', '),
+                    71,
+                ) ?: null,
+            ]))
+            ->values()
+            ->all();
+
+        $this->messenger->sendList(
+            $session->contact,
+            'Нашли несколько подходящих мест — уточните, какое из них ваше.',
+            'Выбрать место',
+            $rows,
+        );
     }
 
     /**
@@ -269,13 +391,20 @@ class SupplierListingCollector
     {
         $expectedType = ListingType::tryFrom((string) ($state['listing_type'] ?? ''));
 
+        // A branch with a fixed type offers only categories of that type;
+        // the auto branch offers the whole dictionary.
+        $categories = Category::query()
+            ->when($expectedType !== null, fn ($query) => $query->where('type', $expectedType))
+            ->orderBy('name')
+            ->get();
+
         $prompt = $state['transcript'] !== []
             ? implode("\n", $state['transcript'])
             : 'Поставщик прислал только фотографии — извлеки из них, что сможешь.';
 
-        return $this->audit->run(
+        $fields = $this->audit->run(
             AiOperationType::ListingExtraction,
-            fn (): array => (new ListingExtractionAgent($expectedType))
+            fn (): array => (new ListingExtractionAgent($expectedType, $categories->pluck('name')->all()))
                 ->prompt($prompt, attachments: $this->photoAttachments($state))
                 ->toArray(),
             [
@@ -283,6 +412,69 @@ class SupplierListingCollector
                 'bot_session_id' => $session->id,
                 'listing_id' => $state['draft_id'],
             ],
+        );
+
+        $category = $this->canonicalCategory($fields['category'] ?? null, $categories);
+        $fields['category'] = $category?->name;
+
+        // The dictionary types the category, and the category types the
+        // listing: a resolved category fixes the type even when the model
+        // could not tell it (or contradicted the dictionary).
+        if ($category !== null) {
+            $fields['type'] = $category->type->value;
+        }
+
+        return $this->resolveLocation($fields);
+    }
+
+    /**
+     * The KATO dictionary is the only source of truth for the location:
+     * the extracted wording either resolves to exactly one node, or keeps
+     * a short candidate list for the supplier to pick from, or stays
+     * unresolved and gets asked again.
+     *
+     * @param  array<string, mixed>  $fields
+     * @return array<string, mixed>
+     */
+    private function resolveLocation(array $fields): array
+    {
+        $fields['location_id'] = null;
+        $fields['location_candidates'] = [];
+
+        if (blank($fields['location'] ?? null)) {
+            return $fields;
+        }
+
+        $candidates = $this->locations->resolve((string) $fields['location']);
+
+        if ($candidates->count() === 1) {
+            $fields['location_id'] = $candidates->first()->id;
+            $fields['location'] = $candidates->first()->name;
+        } elseif ($candidates->count() > 1 && $candidates->count() <= LocationResolver::MAX_CANDIDATES) {
+            $fields['location_candidates'] = $candidates->pluck('id')->all();
+        }
+
+        return $fields;
+    }
+
+    /**
+     * The category dictionary is the only source of truth: a value the
+     * extractor returned is kept only when it matches an offered category
+     * (the schema enum already enforces this — the lookup is a safety net),
+     * normalized to the dictionary spelling.
+     *
+     * @param  Collection<int, Category>  $categories
+     */
+    private function canonicalCategory(mixed $name, Collection $categories): ?Category
+    {
+        if (blank($name) || ! is_string($name)) {
+            return null;
+        }
+
+        $needle = mb_strtolower(trim($name));
+
+        return $categories->first(
+            fn (Category $category): bool => mb_strtolower($category->name) === $needle,
         );
     }
 
@@ -350,7 +542,7 @@ class SupplierListingCollector
 
     /**
      * @param  array<string, mixed>  $state
-     * @return array{type: string, category: ?string, description: ?string, location: ?string, price: ?string}
+     * @return array{type: string, category_id: ?int, description: ?string, location_id: ?int, location_detail: ?string, price: ?string}
      */
     private function listingAttributes(array $state): array
     {
@@ -358,9 +550,12 @@ class SupplierListingCollector
 
         return [
             'type' => $this->resolveType($state)->value,
-            'category' => $fields['category'] ?? null,
+            'category_id' => filled($fields['category'] ?? null)
+                ? Category::query()->where('name', $fields['category'])->value('id')
+                : null,
             'description' => $fields['description'] ?? null,
-            'location' => $fields['location'] ?? null,
+            'location_id' => $fields['location_id'] ?? null,
+            'location_detail' => $fields['location_detail'] ?? null,
             'price' => $fields['price'] ?? null,
         ];
     }
@@ -410,6 +605,15 @@ class SupplierListingCollector
             return 'Уточните: вы предлагаете технику в аренду или услугу (работу специалиста)?';
         }
 
+        // The named place did not resolve to the dictionary — the extractor
+        // believes the location is filled, so its question would miss this.
+        if (($missing[0] ?? null) === 'location_id' && filled($fields['location'] ?? null)) {
+            return sprintf(
+                'Не нашли «%s» в справочнике мест. Напишите город, район или село точнее.',
+                $fields['location'],
+            );
+        }
+
         if (filled($fields['clarifying_question'] ?? null)) {
             return (string) $fields['clarifying_question'];
         }
@@ -417,7 +621,7 @@ class SupplierListingCollector
         $questions = [
             'category' => 'Что именно вы предлагаете — какая техника или услуга?',
             'description' => 'Опишите чуть подробнее ваше предложение.',
-            'location' => 'В каком городе или районе это доступно?',
+            'location_id' => 'В каком городе, районе или селе это доступно?',
             'price' => 'Какая цена или тариф?',
         ];
 

@@ -3,14 +3,19 @@
 namespace App\Services\Ai;
 
 use App\Models\Listing;
+use App\Models\Location;
+use App\Services\Locations\LocationName;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Str;
 
 /**
- * Exact text matching of a customer query against searchable listings
- * (published and unexpired) — the MVP algorithm from the spec: the more
- * query words a listing's text contains, the higher it ranks. No semantic
- * search; locations participate as plain text.
+ * Matching of a customer query against searchable listings (published and
+ * unexpired) — the MVP algorithm from the spec: the more query words a
+ * listing's text contains, the higher it ranks. No semantic search.
+ *
+ * When the query names a dictionary location, only that location's subtree
+ * is considered: «кран в Шымкенте» covers the city and its districts.
  */
 class ListingMatcher
 {
@@ -22,7 +27,7 @@ class ListingMatcher
     /**
      * @return Collection<int, Listing>
      */
-    public function match(string $query): Collection
+    public function match(string $query, ?Location $within = null): Collection
     {
         $tokens = $this->tokenize($query);
 
@@ -32,7 +37,11 @@ class ListingMatcher
 
         return Listing::query()
             ->searchable()
-            ->with('supplier')
+            ->with(['supplier', 'category', 'location'])
+            ->when($within, fn (Builder $builder): Builder => $builder->whereHas(
+                'location',
+                fn (Builder $location) => $location->where('path', 'like', $within->path.'%'),
+            ))
             ->get()
             ->map(fn (Listing $listing): array => [
                 'listing' => $listing,
@@ -51,13 +60,19 @@ class ListingMatcher
     protected function score(array $tokens, Listing $listing): int
     {
         $haystack = Str::lower(implode(' ', array_filter([
-            $listing->category,
+            $listing->category?->name,
             $listing->description,
-            $listing->location,
+            $listing->location?->name,
+            $listing->location?->search_name,
+            $listing->location_detail,
             $listing->price,
         ])));
 
-        return count(array_filter($tokens, fn (string $token): bool => str_contains($haystack, $token)));
+        return count(array_filter(
+            $tokens,
+            fn (string $token): bool => str_contains($haystack, $token)
+                || str_contains($haystack, $this->stemmed($token)),
+        ));
     }
 
     /**
@@ -71,5 +86,15 @@ class ListingMatcher
             $matches[0],
             fn (string $token): bool => mb_strlen($token) >= 2,
         )));
+    }
+
+    /**
+     * Case endings must not break the match («в Шымкенте» finds the
+     * listing located in «г.Шымкент») — the location stemmer is light
+     * enough to apply to any query word.
+     */
+    protected function stemmed(string $token): string
+    {
+        return LocationName::searchWords($token)[0] ?? $token;
     }
 }

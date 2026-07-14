@@ -32,9 +32,9 @@ class ScenarioVariableResolver
         };
 
         $value = match ($variable) {
-            ScenarioVariable::ListingCategory => $listing?->category ?: 'без категории',
+            ScenarioVariable::ListingCategory => $listing?->category?->name ?: 'без категории',
             ScenarioVariable::ListingDescription => $listing?->description,
-            ScenarioVariable::ListingLocation => $listing?->location,
+            ScenarioVariable::ListingLocation => $listing?->locationLine(),
             ScenarioVariable::ListingPrice => $listing?->price,
             ScenarioVariable::RequestQuery => $subject instanceof CustomerRequest ? $subject->query_text : null,
             ScenarioVariable::ContactName => $run->contact->profile_name,

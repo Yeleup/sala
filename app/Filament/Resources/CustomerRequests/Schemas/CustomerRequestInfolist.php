@@ -34,7 +34,7 @@ class CustomerRequestInfolist
                     ->columns(2),
                 Section::make('Выбранное объявление')
                     ->schema([
-                        TextEntry::make('listing.category')
+                        TextEntry::make('listing.category.name')
                             ->label('Категория')
                             ->placeholder('—')
                             ->url(fn (CustomerRequest $record): string => ListingResource::getUrl('view', ['record' => $record->listing_id])),

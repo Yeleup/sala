@@ -52,16 +52,23 @@ function fakeCollectorMessenger(): MockInterface
 }
 
 /**
+ * Ответ экстрактора; категория «Трактор» и локация «г.Шымкент» заводятся в
+ * справочники, потому что коллектор принимает значения только из них.
+ *
  * @param  array<string, mixed>  $overrides
  * @return array<string, mixed>
  */
 function fullExtraction(array $overrides = []): array
 {
+    categoryNamed('Трактор');
+    locationNamed('г.Шымкент');
+
     return array_merge([
         'type' => 'equipment',
         'category' => 'Трактор',
         'description' => 'Трактор в аренду с водителем',
         'location' => 'Шымкент',
+        'location_detail' => null,
         'price' => '10000 тг/час',
         'clarifying_question' => '',
         'summary' => 'Трактор, Шымкент, 10000 тг/ч',
@@ -100,8 +107,8 @@ test('a complete description creates a draft and asks for confirmation', functio
         ->contact_id->toBe($session->contact_id)
         ->status->toBe(ListingStatus::Draft)
         ->type->toBe(ListingType::Equipment)
-        ->category->toBe('Трактор')
-        ->location->toBe('Шымкент')
+        ->category->name->toBe('Трактор')
+        ->location->name->toBe('г.Шымкент')
         ->price->toBe('10000 тг/час');
 });
 
@@ -138,7 +145,7 @@ test('exhausting the clarification limit saves the partial draft and hands off t
     expect($outcome)->toBe(AiOutcome::Completed)
         ->and(Listing::sole())
         ->status->toBe(ListingStatus::Draft)
-        ->category->toBe('Трактор')
+        ->category->name->toBe('Трактор')
         ->price->toBeNull();
 });
 
@@ -284,9 +291,48 @@ test('an unreadable follow-up does not spend a clarification attempt', function 
     ListingExtractionAgent::assertNeverPrompted();
 });
 
-test('an undetermined type in the auto branch asks about it instead of defaulting to equipment', function () {
+test('a category outside the dictionary never reaches the draft and is asked again', function () {
     ListingExtractionAgent::fake([
-        fullExtraction(['type' => null, 'clarifying_question' => 'Какая цена?']),
+        fullExtraction(['category' => 'Дирижабль', 'clarifying_question' => 'Что именно за техника?']),
+    ]);
+    $session = collectorSession();
+
+    fakeCollectorMessenger()->shouldReceive('sendText')->once()
+        ->withArgs(fn (Contact $to, string $text) => $text === 'Что именно за техника?');
+
+    $outcome = app(SupplierListingCollector::class)
+        ->resume($session, supplierAiNode(), new InboundMessage(text: 'Сдаю дирижабль в Шымкенте, 10000 тг/час'));
+
+    expect($outcome)->toBe(AiOutcome::InProgress)
+        ->and($session->fresh()->state['fields']['category'])->toBeNull()
+        ->and(Listing::count())->toBe(0);
+});
+
+test('the extractor category is normalized to the dictionary spelling', function () {
+    ListingExtractionAgent::fake([fullExtraction(['category' => 'трактор'])]);
+    $session = collectorSession();
+
+    fakeCollectorMessenger()->shouldReceive('sendButtons')->once();
+
+    app(SupplierListingCollector::class)
+        ->resume($session, supplierAiNode(), new InboundMessage(text: 'Сдаю трактор в Шымкенте, 10000 тг/час'));
+
+    expect(Listing::sole())->category->name->toBe('Трактор');
+});
+
+test('the extraction schema and prompt hard-limit the category to the dictionary', function () {
+    $agent = new ListingExtractionAgent(null, ['Автокран', 'Сварщик']);
+
+    $categorySchema = $agent->schema(new Illuminate\JsonSchema\JsonSchemaTypeFactory)['category']->toArray();
+
+    expect($categorySchema['enum'])->toContain('Автокран')->toContain('Сварщик')
+        ->and((string) $agent->instructions())->toContain('- Автокран')->toContain('- Сварщик');
+});
+
+test('an undetermined type in the auto branch asks about it instead of defaulting to equipment', function () {
+    // Без категории тип вывести не из чего: категория определила бы тип сама.
+    ListingExtractionAgent::fake([
+        fullExtraction(['type' => null, 'category' => null, 'clarifying_question' => 'Какая цена?']),
     ]);
     $session = collectorSession(['listing_type' => null]);
 
@@ -296,6 +342,105 @@ test('an undetermined type in the auto branch asks about it instead of defaultin
     $node = ['id' => 'collect', 'type' => 'ai', 'task' => 'collect_listing'];
     $outcome = app(SupplierListingCollector::class)
         ->resume($session, $node, new InboundMessage(text: 'Сдаю в Шымкенте, 10000 тг/час'));
+
+    expect($outcome)->toBe(AiOutcome::InProgress)
+        ->and($session->fresh()->state['attempts'])->toBe(1)
+        ->and(Listing::count())->toBe(0);
+});
+
+test('in the auto branch a resolved category determines the type without asking', function () {
+    categoryNamed('Сварщик', ListingType::Service);
+    ListingExtractionAgent::fake([
+        fullExtraction(['type' => null, 'category' => 'Сварщик', 'summary' => 'Сварщик, Шымкент, 10000 тг/час']),
+    ]);
+    $session = collectorSession(['listing_type' => null]);
+
+    fakeCollectorMessenger()->shouldReceive('sendButtons')->once();
+
+    $node = ['id' => 'collect', 'type' => 'ai', 'task' => 'collect_listing'];
+    $outcome = app(SupplierListingCollector::class)
+        ->resume($session, $node, new InboundMessage(text: 'Сварщик с выездом, Шымкент, 10000 тг/час'));
+
+    expect($outcome)->toBe(AiOutcome::InProgress)
+        ->and(Listing::sole())
+        ->type->toBe(ListingType::Service)
+        ->category->name->toBe('Сварщик');
+});
+
+test('a fixed-type branch does not accept a category of the other type', function () {
+    categoryNamed('Сварщик', ListingType::Service);
+    ListingExtractionAgent::fake([
+        fullExtraction(['category' => 'Сварщик', 'clarifying_question' => 'Что именно за техника?']),
+    ]);
+    $session = collectorSession(); // ветка «техника»
+
+    fakeCollectorMessenger()->shouldReceive('sendText')->once()
+        ->withArgs(fn (Contact $to, string $text) => $text === 'Что именно за техника?');
+
+    $outcome = app(SupplierListingCollector::class)
+        ->resume($session, supplierAiNode(), new InboundMessage(text: 'Предлагаю услуги сварщика в Шымкенте'));
+
+    expect($outcome)->toBe(AiOutcome::InProgress)
+        ->and($session->fresh()->state['fields']['category'])->toBeNull()
+        ->and(Listing::count())->toBe(0);
+});
+
+test('an ambiguous location sends a pick list without spending an attempt', function () {
+    $abai = locationNamed('область Абай');
+    $abaiDistrict = locationNamed('Абайский район', $abai);
+    $shymkentDistrict = locationNamed('Абайский район', locationNamed('г.Шымкент'));
+
+    ListingExtractionAgent::fake([fullExtraction(['location' => 'Абайский район'])]);
+    $session = collectorSession();
+
+    fakeCollectorMessenger()->shouldReceive('sendList')->once()
+        ->withArgs(fn (Contact $to, string $text, string $button, array $rows) => str_contains($text, 'уточните')
+            && count($rows) === 2
+            && collect($rows)->pluck('id')->contains('listing_location:'.$abaiDistrict->id)
+            && collect($rows)->pluck('id')->contains('listing_location:'.$shymkentDistrict->id));
+
+    $outcome = app(SupplierListingCollector::class)
+        ->resume($session, supplierAiNode(), new InboundMessage(text: 'Трактор, Абайский район, 10000 тг/час'));
+
+    expect($outcome)->toBe(AiOutcome::InProgress)
+        ->and($session->fresh()->state['phase'])->toBe('locating')
+        ->and($session->fresh()->state['attempts'])->toBe(0);
+});
+
+test('picking a location from the list resolves it and continues to confirmation', function () {
+    locationNamed('Абайский район', locationNamed('область Абай'));
+    $picked = locationNamed('Абайский район', locationNamed('г.Шымкент'));
+
+    ListingExtractionAgent::fake([fullExtraction(['location' => 'Абайский район'])]);
+    $session = collectorSession();
+
+    $messenger = fakeCollectorMessenger();
+    $messenger->shouldReceive('sendList')->once();
+    $messenger->shouldReceive('sendButtons')->once()
+        ->withArgs(fn (Contact $to, string $text) => str_contains($text, 'Всё верно?'));
+
+    $collector = app(SupplierListingCollector::class);
+    $collector->resume($session, supplierAiNode(), new InboundMessage(text: 'Трактор, Абайский район, 10000 тг/час'));
+
+    $outcome = $collector->resume(
+        $session->fresh(),
+        supplierAiNode(),
+        new InboundMessage(replyId: 'listing_location:'.$picked->id),
+    );
+
+    expect($outcome)->toBe(AiOutcome::InProgress)
+        ->and(Listing::sole()->location_id)->toBe($picked->id);
+});
+
+test('a location outside the dictionary is asked again with the not-found hint', function () {
+    ListingExtractionAgent::fake([fullExtraction(['location' => 'Хогвартс'])]);
+    $session = collectorSession();
+
+    fakeCollectorMessenger()->shouldReceive('sendText')->once()
+        ->withArgs(fn (Contact $to, string $text) => str_contains($text, 'Не нашли «Хогвартс»'));
+
+    $outcome = app(SupplierListingCollector::class)
+        ->resume($session, supplierAiNode(), new InboundMessage(text: 'Трактор, Хогвартс, 10000 тг/час'));
 
     expect($outcome)->toBe(AiOutcome::InProgress)
         ->and($session->fresh()->state['attempts'])->toBe(1)

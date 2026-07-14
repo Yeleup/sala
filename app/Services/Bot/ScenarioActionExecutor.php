@@ -81,7 +81,7 @@ class ScenarioActionExecutor
         $text = match ($request->status) {
             CustomerRequestStatus::Accepted => sprintf(
                 'Поставщик согласился по вашей заявке («%s»). Свяжитесь с ним: +%s',
-                $request->listing->category ?: 'объявление',
+                $request->listing->category?->name ?: 'объявление',
                 ltrim($request->listing->supplier->phone, '+'),
             ),
             CustomerRequestStatus::Declined => 'К сожалению, поставщик отказался по вашей заявке. Напишите нам — подберём другие варианты.',

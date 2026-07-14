@@ -24,7 +24,7 @@ class CustomerRequestsTable
                     ->label('Запрос')
                     ->limit(40)
                     ->searchable(),
-                TextColumn::make('listing.category')
+                TextColumn::make('listing.category.name')
                     ->label('Объявление')
                     ->placeholder('—'),
                 TextColumn::make('listing.supplier.phone')

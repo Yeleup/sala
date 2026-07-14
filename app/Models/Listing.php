@@ -13,6 +13,7 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Support\Facades\Storage;
 use InvalidArgumentException;
 use LogicException;
 
@@ -21,7 +22,7 @@ use LogicException;
  * free-form supplier input; every business field except the type may stay
  * empty until the supplier completes it via the web interface.
  */
-#[Fillable(['contact_id', 'type', 'category', 'description', 'location', 'price', 'status', 'rejection_reason', 'expires_at', 'renewal_requested_at'])]
+#[Fillable(['contact_id', 'type', 'category_id', 'description', 'location_id', 'location_detail', 'price', 'status', 'rejection_reason', 'expires_at', 'renewal_requested_at'])]
 class Listing extends Model
 {
     /** @use HasFactory<ListingFactory> */
@@ -36,10 +37,46 @@ class Listing extends Model
         'status' => ListingStatus::Draft->value,
     ];
 
+    /**
+     * Media rows go away with the listing via the DB cascade, but the
+     * files on disk would be orphaned without this hook.
+     */
+    protected static function booted(): void
+    {
+        static::deleting(function (Listing $listing): void {
+            $listing->media()->get()->each(
+                fn (ListingMedia $media) => Storage::disk($media->disk)->delete($media->path),
+            );
+        });
+    }
+
     /** @return BelongsTo<Contact, $this> */
     public function supplier(): BelongsTo
     {
         return $this->belongsTo(Contact::class, 'contact_id');
+    }
+
+    /** @return BelongsTo<Category, $this> */
+    public function category(): BelongsTo
+    {
+        return $this->belongsTo(Category::class);
+    }
+
+    /** @return BelongsTo<Location, $this> */
+    public function location(): BelongsTo
+    {
+        return $this->belongsTo(Location::class);
+    }
+
+    /**
+     * The location as the customer sees it: the KATO node name plus the
+     * supplier's free-text detail («г.Шымкент, центр»).
+     */
+    public function locationLine(): ?string
+    {
+        $parts = array_filter([$this->location?->name, $this->location_detail]);
+
+        return $parts === [] ? null : implode(', ', $parts);
     }
 
     /** @return HasMany<ListingMedia, $this> */

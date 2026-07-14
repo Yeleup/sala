@@ -29,9 +29,15 @@ class UpdateSupplierListingRequest extends FormRequest
     {
         return [
             'type' => ['required', Rule::enum(ListingType::class)],
-            'category' => ['required', 'string', 'max:255'],
+            'category_id' => [
+                'required',
+                'integer',
+                // A listing's category must carry the listing's type.
+                Rule::exists('categories', 'id')->where('type', (string) $this->input('type')),
+            ],
             'description' => ['required', 'string', 'max:2000'],
-            'location' => ['required', 'string', 'max:255'],
+            'location_id' => ['required', 'integer', Rule::exists('locations', 'id')],
+            'location_detail' => ['nullable', 'string', 'max:255'],
             'price' => ['required', 'string', 'max:255'],
         ];
     }
@@ -46,6 +52,10 @@ class UpdateSupplierListingRequest extends FormRequest
             'string' => 'Поле «:attribute» должно быть текстом.',
             'max' => 'Поле «:attribute» слишком длинное (не более :max символов).',
             'enum' => 'Выберите тип: техника или услуга.',
+            'category_id.integer' => 'Выберите категорию из списка.',
+            'category_id.exists' => 'Категория не соответствует выбранному типу — выберите категорию из списка нужного типа.',
+            'location_id.integer' => 'Выберите локацию из подсказок.',
+            'location_id.exists' => 'Выберите локацию из подсказок.',
         ];
     }
 
@@ -56,9 +66,10 @@ class UpdateSupplierListingRequest extends FormRequest
     {
         return [
             'type' => 'тип',
-            'category' => 'категория',
+            'category_id' => 'категория',
             'description' => 'описание',
-            'location' => 'локация',
+            'location_id' => 'локация',
+            'location_detail' => 'уточнение адреса',
             'price' => 'цена/тариф',
         ];
     }

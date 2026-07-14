@@ -3,8 +3,11 @@
 namespace App\Filament\Resources\Listings;
 
 use App\Enums\ListingStatus;
+use App\Filament\Resources\Listings\Pages\CreateListing;
+use App\Filament\Resources\Listings\Pages\EditListing;
 use App\Filament\Resources\Listings\Pages\ListListings;
 use App\Filament\Resources\Listings\Pages\ViewListing;
+use App\Filament\Resources\Listings\Schemas\ListingForm;
 use App\Filament\Resources\Listings\Schemas\ListingInfolist;
 use App\Filament\Resources\Listings\Tables\ListingsTable;
 use App\Models\Listing;
@@ -18,9 +21,10 @@ use Filament\Support\Icons\Heroicon;
 use Filament\Tables\Table;
 
 /**
- * Moderation queue: the operator approves or rejects listings submitted by
- * suppliers. Listing content is edited only by the supplier via the web
- * interface, so apart from the moderation actions the resource is read-only.
+ * Listings in the admin: the moderation queue (approve/reject) plus full
+ * CRUD for the operator — creating a listing on a supplier's behalf,
+ * editing its business fields and deleting (including bulk delete).
+ * Status transitions stay behind the dedicated lifecycle actions.
  */
 class ListingResource extends Resource
 {
@@ -33,6 +37,11 @@ class ListingResource extends Resource
     protected static ?string $pluralModelLabel = 'объявления';
 
     protected static ?int $navigationSort = 1;
+
+    public static function form(Schema $schema): Schema
+    {
+        return ListingForm::configure($schema);
+    }
 
     public static function infolist(Schema $schema): Schema
     {
@@ -88,11 +97,36 @@ class ListingResource extends Resource
             });
     }
 
+    /**
+     * A draft or a rejected listing goes to the moderation queue; without
+     * this the operator could not publish a listing created in the admin.
+     */
+    public static function submitForModerationAction(): Action
+    {
+        return Action::make('submitForModeration')
+            ->label('На модерацию')
+            ->icon(Heroicon::OutlinedPaperAirplane)
+            ->visible(fn (Listing $record): bool => in_array($record->status, [ListingStatus::Draft, ListingStatus::Rejected], true))
+            ->requiresConfirmation()
+            ->modalHeading('Отправить на модерацию?')
+            ->modalDescription('Объявление попадёт в очередь модерации, откуда его можно одобрить или отклонить.')
+            ->action(function (Listing $record): void {
+                $record->submitForModeration();
+
+                Notification::make()
+                    ->title('Объявление отправлено на модерацию')
+                    ->success()
+                    ->send();
+            });
+    }
+
     public static function getPages(): array
     {
         return [
             'index' => ListListings::route('/'),
+            'create' => CreateListing::route('/create'),
             'view' => ViewListing::route('/{record}'),
+            'edit' => EditListing::route('/{record}/edit'),
         ];
     }
 }

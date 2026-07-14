@@ -52,3 +52,24 @@ function connectedDereuCompany(array $attributes = []): \App\Models\DereuCompany
 {
     return \App\Models\DereuCompany::factory()->create(array_merge(['external_id' => 'org_test'], $attributes));
 }
+
+/**
+ * Категория из операторского справочника (создаётся при первом обращении) —
+ * для объявлений в тестах: `'category_id' => categoryNamed('Автокран')->id`.
+ */
+function categoryNamed(string $name, \App\Enums\ListingType $type = \App\Enums\ListingType::Equipment): \App\Models\Category
+{
+    return \App\Models\Category::query()->firstOrCreate(['name' => $name], ['type' => $type]);
+}
+
+/**
+ * Узел справочника локаций КАТО (создаётся при первом обращении) — для
+ * объявлений в тестах: `'location_id' => locationNamed('г.Шымкент')->id`.
+ */
+function locationNamed(string $name, ?\App\Models\Location $parent = null): \App\Models\Location
+{
+    return \App\Models\Location::query()->firstOrCreate([
+        'name' => $name,
+        'parent_id' => $parent?->id,
+    ]);
+}

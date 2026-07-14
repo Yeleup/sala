@@ -3,6 +3,9 @@
 namespace App\Filament\Resources\Contacts\Tables;
 
 use App\Models\Contact;
+use Filament\Actions\DeleteAction;
+use Filament\Actions\DeleteBulkAction;
+use Filament\Actions\EditAction;
 use Filament\Actions\ViewAction;
 use Filament\Tables\Columns\IconColumn;
 use Filament\Tables\Columns\TextColumn;
@@ -39,6 +42,17 @@ class ContactsTable
             ])
             ->recordActions([
                 ViewAction::make(),
+                EditAction::make(),
+                DeleteAction::make()
+                    ->label('Удалить')
+                    ->modalHeading('Удалить контакт?')
+                    ->modalDescription('Контакт удаляется безвозвратно вместе с его объявлениями, заявками и историей диалога.'),
+            ])
+            ->toolbarActions([
+                DeleteBulkAction::make()
+                    ->label('Удалить выбранные')
+                    ->modalHeading('Удалить выбранные контакты?')
+                    ->modalDescription('Контакты удаляются безвозвратно вместе с их объявлениями, заявками и историей диалогов.'),
             ])
             ->defaultSort('id', 'desc');
     }

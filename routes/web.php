@@ -1,11 +1,18 @@
 <?php
 
+use App\Http\Controllers\LocationSearchController;
 use App\Http\Controllers\SupplierListingController;
 use Illuminate\Support\Facades\Route;
 
 Route::get('/', function () {
     return view('welcome');
 });
+
+/**
+ * Location dictionary autocomplete: public read-only reference data used
+ * by the supplier web form.
+ */
+Route::get('/locations/search', LocationSearchController::class)->name('locations.search');
 
 /**
  * Supplier web portal (Module 3). Every route requires a valid signed URL:

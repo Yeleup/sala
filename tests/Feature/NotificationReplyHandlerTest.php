@@ -21,7 +21,7 @@ function pendingRequest(): CustomerRequest
 {
     $supplier = Contact::factory()->withOpenSessionWindow()->create();
     $customer = Contact::factory()->withOpenSessionWindow()->create();
-    $listing = Listing::factory()->published()->for($supplier, 'supplier')->create(['category' => 'Автокран']);
+    $listing = Listing::factory()->published()->for($supplier, 'supplier')->create(['category_id' => categoryNamed('Автокран')->id]);
 
     return CustomerRequest::factory()->create([
         'contact_id' => $customer->id,

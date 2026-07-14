@@ -99,6 +99,8 @@ describe('обёртка AiAudit', function () {
 
 describe('интеграция с коллектором', function () {
     test('извлечение объявления оставляет операцию с попыткой, токенами и связями', function () {
+        categoryNamed('Трактор');
+        locationNamed('г.Шымкент');
         ListingExtractionAgent::fake([[
             'type' => 'equipment',
             'category' => 'Трактор',

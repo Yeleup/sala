@@ -4,7 +4,7 @@
     @forelse ($listings as $listing)
         <article class="card">
             <div class="meta">
-                <strong>{{ $listing->category ?: 'Без категории' }}</strong>
+                <strong>{{ $listing->category?->name ?: 'Без категории' }}</strong>
                 <x-supplier.status-badge :status="$listing->status" />
             </div>
             <p class="muted" style="margin: 0.25rem 0 0;">{{ $listing->type->getLabel() }}</p>
@@ -14,7 +14,7 @@
             @endif
 
             <p class="muted" style="margin: 0.5rem 0 0;">
-                {{ collect([$listing->location, $listing->price])->filter()->join(' · ') ?: 'Локация и цена не указаны' }}
+                {{ collect([$listing->locationLine(), $listing->price])->filter()->join(' · ') ?: 'Локация и цена не указаны' }}
             </p>
 
             @if ($listing->status === \App\Enums\ListingStatus::Published && $listing->expires_at)

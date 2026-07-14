@@ -26,7 +26,7 @@ function expiringListing(array $supplierStates = ['withOpenSessionWindow']): Lis
     return Listing::factory()
         ->published()
         ->for($supplier->create(), 'supplier')
-        ->create(['category' => 'Автокран', 'expires_at' => now()->addHours(12)]);
+        ->create(['category_id' => categoryNamed('Автокран')->id, 'expires_at' => now()->addHours(12)]);
 }
 
 describe('ежедневный опрос актуальности', function () {

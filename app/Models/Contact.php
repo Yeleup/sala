@@ -19,6 +19,18 @@ class Contact extends Model
     use HasFactory;
 
     /**
+     * The DB cascade would remove the contact's listings behind Eloquent's
+     * back, leaving their media files orphaned on disk — so the listings
+     * are deleted through the model to fire their own cleanup hook.
+     */
+    protected static function booted(): void
+    {
+        static::deleting(function (Contact $contact): void {
+            $contact->listings()->get()->each->delete();
+        });
+    }
+
+    /**
      * WhatsApp allows free session messages only within 24 hours of the
      * contact's last inbound message; outside the window only paid
      * template messages are deliverable.

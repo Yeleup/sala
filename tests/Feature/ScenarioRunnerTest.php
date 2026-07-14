@@ -56,7 +56,7 @@ function runnerPendingRequest(array $supplierStates = ['withOpenSessionWindow'])
     }
 
     $customer = Contact::factory()->withOpenSessionWindow()->create();
-    $listing = Listing::factory()->published()->for($supplier->create(), 'supplier')->create(['category' => 'Автокран']);
+    $listing = Listing::factory()->published()->for($supplier->create(), 'supplier')->create(['category_id' => categoryNamed('Автокран')->id]);
 
     return CustomerRequest::factory()->create([
         'contact_id' => $customer->id,
@@ -225,7 +225,7 @@ describe('сценарий «Продление объявления»', functio
         installFlowScenarios();
         $supplier = Contact::factory()->withOpenSessionWindow()->create();
         $listing = Listing::factory()->published()->for($supplier, 'supplier')
-            ->create(['category' => 'Экскаватор', 'expires_at' => now()->addHours(12)]);
+            ->create(['category_id' => categoryNamed('Экскаватор')->id, 'expires_at' => now()->addHours(12)]);
 
         $messenger = runnerMessenger();
         $messenger->shouldReceive('sendButtons')->once()->withArgs(
@@ -244,7 +244,7 @@ describe('сценарий «Продление объявления»', functio
         installFlowScenarios();
         $supplier = Contact::factory()->withOpenSessionWindow()->create();
         $listing = Listing::factory()->published()->for($supplier, 'supplier')
-            ->create(['category' => 'Экскаватор', 'expires_at' => now()->addHours(12)]);
+            ->create(['category_id' => categoryNamed('Экскаватор')->id, 'expires_at' => now()->addHours(12)]);
 
         $messenger = runnerMessenger();
         $messenger->shouldReceive('sendButtons')->once();
@@ -299,7 +299,7 @@ describe('сценарий «Продление объявления»', functio
         installFlowScenarios();
         $supplier = Contact::factory()->withOpenSessionWindow()->create();
         $listing = Listing::factory()->published()->for($supplier, 'supplier')
-            ->create(['category' => 'Кран', 'expires_at' => now()->addHours(12)]);
+            ->create(['category_id' => categoryNamed('Кран')->id, 'expires_at' => now()->addHours(12)]);
 
         $messenger = runnerMessenger();
         $messenger->shouldReceive('sendButtons')->once();

@@ -18,20 +18,39 @@ use Stringable;
  *
  * The extractor never invents data: a field it cannot find stays null, and
  * clarifying_question names the single most important missing field so the
- * collector can ask for it.
+ * collector can ask for it. The category is constrained to the operator's
+ * dictionary both in the prompt and in the response schema, so the model
+ * physically cannot return a category outside the list.
  */
 #[Temperature(0.1)]
 class ListingExtractionAgent implements Agent, HasStructuredOutput
 {
     use Promptable;
 
-    public function __construct(private readonly ?ListingType $expectedType = null) {}
+    /**
+     * @param  list<string>  $categories  Dictionary of allowed category names.
+     */
+    public function __construct(
+        private readonly ?ListingType $expectedType = null,
+        private readonly array $categories = [],
+    ) {}
 
     public function instructions(): Stringable|string
     {
         $typeHint = $this->expectedType === null
-            ? 'Определи тип: "equipment" — аренда/предложение техники, "service" — услуга (например, сварщик, грузчик). Если тип неясен даже из фото — оставь type равным null, не угадывай.'
+            ? 'Определи тип: "equipment" — аренда/предложение техники, "service" — услуга (например, сварщик, грузчик). Тип должен соответствовать выбранной категории. Если тип неясен даже из фото — оставь type равным null, не угадывай.'
             : sprintf('Это объявление типа "%s" — используй именно его.', $this->expectedType->value);
+
+        $categoryHint = $this->categories === []
+            ? 'справочник категорий пуст — всегда оставляй category равным null.'
+            : 'выбери одну категорию СТРОГО из списка ниже — дословно, как в списке. Не придумывай и не перефразируй категории; если ни одна не подходит или ты не уверен — оставь null.';
+
+        $categoryList = $this->categories === []
+            ? ''
+            : "\n\nДоступные категории (только из этого списка):\n".implode("\n", array_map(
+                fn (string $category): string => '- '.$category,
+                $this->categories,
+            ));
 
         return <<<PROMPT
         Ты — оператор сервиса аренды спецтехники и услуг. Из сообщений поставщика на русском или
@@ -41,9 +60,13 @@ class ListingExtractionAgent implements Agent, HasStructuredOutput
 
         Поля:
         - type: {$typeHint}
-        - category: вид техники или услуги (кран, экскаватор, трактор, сварщик, грузчик).
+        - category: {$categoryHint}
         - description: суть предложения своими словами, кратко.
-        - location: населённый пункт/район текстом, как написал поставщик («Шымкент, центр»). Не выдумывай город.
+        - location: где находится техника или оказывается услуга — ТОЛЬКО название места в именительном
+          падеже, без слов «в», «город», «село»: «Шымкент», «Аксуат», «Ауэзовский район». Самое точное из
+          названного: район города, город или село. Не выдумывай место.
+        - location_detail: уточнение внутри места, если поставщик его назвал («центр», «мкр Нурсат»,
+          «вдоль трассы»). Нет уточнения — null.
         - price: цена или тариф так, как указал поставщик («10000 тг/час», «договорная»).
 
         Правила:
@@ -51,7 +74,7 @@ class ListingExtractionAgent implements Agent, HasStructuredOutput
         - Учитывай все сообщения поставщика вместе, более поздние уточняют более ранние.
         - clarifying_question: если не хватает category, description, location или price — задай ОДИН короткий
           вопрос на русском про самое важное недостающее поле. Если всё есть — пустая строка.
-        - summary: короткая сводка объявления на русском для подтверждения («Трактор, Шымкент, 10000 тг/ч»).
+        - summary: короткая сводка объявления на русском для подтверждения («Трактор, Шымкент, 10000 тг/ч»).{$categoryList}
         PROMPT;
     }
 
@@ -62,9 +85,12 @@ class ListingExtractionAgent implements Agent, HasStructuredOutput
     {
         return [
             'type' => $schema->string()->enum(['equipment', 'service'])->nullable(),
-            'category' => $schema->string()->nullable(),
+            'category' => $this->categories === []
+                ? $schema->string()->nullable()
+                : $schema->string()->enum($this->categories)->nullable(),
             'description' => $schema->string()->nullable(),
             'location' => $schema->string()->nullable(),
+            'location_detail' => $schema->string()->nullable(),
             'price' => $schema->string()->nullable(),
             'clarifying_question' => $schema->string()->nullable(),
             'summary' => $schema->string()->nullable(),

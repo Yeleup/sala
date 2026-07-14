@@ -5,6 +5,9 @@ namespace App\Filament\Resources\Listings\Tables;
 use App\Enums\ListingStatus;
 use App\Enums\ListingType;
 use App\Filament\Resources\Listings\ListingResource;
+use Filament\Actions\DeleteAction;
+use Filament\Actions\DeleteBulkAction;
+use Filament\Actions\EditAction;
 use Filament\Actions\ViewAction;
 use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Filters\SelectFilter;
@@ -25,11 +28,11 @@ class ListingsTable
                 TextColumn::make('type')
                     ->label('Тип')
                     ->badge(),
-                TextColumn::make('category')
+                TextColumn::make('category.name')
                     ->label('Категория')
                     ->searchable()
                     ->placeholder('—'),
-                TextColumn::make('location')
+                TextColumn::make('location.name')
                     ->label('Локация')
                     ->searchable()
                     ->placeholder('—'),
@@ -57,11 +60,26 @@ class ListingsTable
                 SelectFilter::make('type')
                     ->label('Тип')
                     ->options(ListingType::class),
+                SelectFilter::make('category_id')
+                    ->label('Категория')
+                    ->relationship('category', 'name'),
             ])
             ->recordActions([
                 ViewAction::make(),
+                EditAction::make(),
+                ListingResource::submitForModerationAction(),
                 ListingResource::approveAction(),
                 ListingResource::rejectAction(),
+                DeleteAction::make()
+                    ->label('Удалить')
+                    ->modalHeading('Удалить объявление?')
+                    ->modalDescription('Объявление удаляется безвозвратно вместе с медиа и заявками по нему.'),
+            ])
+            ->toolbarActions([
+                DeleteBulkAction::make()
+                    ->label('Удалить выбранные')
+                    ->modalHeading('Удалить выбранные объявления?')
+                    ->modalDescription('Объявления удаляются безвозвратно вместе с медиа и заявками по ним.'),
             ])
             ->defaultSort('created_at');
     }

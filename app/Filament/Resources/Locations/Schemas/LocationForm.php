@@ -3,7 +3,7 @@
 namespace App\Filament\Resources\Locations\Schemas;
 
 use App\Models\Location;
-use App\Services\Locations\LocationName;
+use App\Services\Locations\LocationResolver;
 use Filament\Forms\Components\Select;
 use Filament\Forms\Components\TextInput;
 use Filament\Schemas\Components\Utilities\Get;
@@ -37,12 +37,8 @@ class LocationForm
                     ->label('Находится в')
                     ->searchable()
                     ->placeholder('Поиск: область, район, город')
-                    ->getSearchResultsUsing(fn (string $search): array => Location::query()
-                        ->where('search_name', 'like', LocationName::searchKey($search).'%')
-                        ->orderBy('depth')
-                        ->orderBy('name')
-                        ->limit(20)
-                        ->get()
+                    ->getSearchResultsUsing(fn (string $search): array => app(LocationResolver::class)
+                        ->suggest($search, 20)
                         ->mapWithKeys(fn (Location $location): array => [$location->id => $location->label()])
                         ->all())
                     ->getOptionLabelUsing(fn (mixed $value): ?string => Location::find($value)?->label())

@@ -64,12 +64,29 @@ test('автокомплит локаций отдаёт совпадения п
         ->assertOk()
         ->assertJsonPath('0.label', 'Каратауский район, г.Шымкент');
 
-    $this->getJson('/locations/search?q=шымк')
-        ->assertOk()
-        ->assertJsonCount(1)
-        ->assertJsonPath('0.label', 'г.Шымкент');
-
     $this->getJson('/locations/search?q=')
         ->assertOk()
         ->assertExactJson([]);
+});
+
+test('автокомплит показывает найденный узел вместе с его районами', function () {
+    importSampleKatoTree();
+
+    // Город первым, за ним всё, что внутри него.
+    $this->getJson('/locations/search?q=шымкент')
+        ->assertOk()
+        ->assertJsonCount(3)
+        ->assertJsonPath('0.label', 'г.Шымкент')
+        ->assertJsonPath('1.label', 'Абайский район, г.Шымкент')
+        ->assertJsonPath('2.label', 'Каратауский район, г.Шымкент');
+});
+
+test('несколько слов в автокомплите сужают ветку', function () {
+    importSampleKatoTree();
+
+    // «Абайский район» есть и в области Абай — но ветка задана Шымкентом.
+    $this->getJson('/locations/search?q=шымкент абай')
+        ->assertOk()
+        ->assertJsonCount(1)
+        ->assertJsonPath('0.label', 'Абайский район, г.Шымкент');
 });

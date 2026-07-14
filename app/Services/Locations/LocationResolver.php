@@ -92,6 +92,58 @@ class LocationResolver
     }
 
     /**
+     * Autocomplete suggestions: nodes whose name starts with the typed
+     * words — plus everything inside them, so «Шымкент» offers the city
+     * and its districts. Several words narrow the branch: «Шымкент Абай…»
+     * offers only nodes inside Шымкент. Parents come before children.
+     *
+     * @return Collection<int, Location>
+     */
+    public function suggest(string $search, int $limit = 10): Collection
+    {
+        $words = LocationName::searchWords($search);
+
+        if ($words === []) {
+            return new Collection;
+        }
+
+        $nodeKey = array_pop($words);
+        $branchKey = implode(' ', $words);
+
+        $anchors = Location::query()
+            ->where('search_name', 'like', ($branchKey === '' ? $nodeKey : $branchKey).'%')
+            ->orderBy('depth')
+            ->limit(5)
+            ->get();
+
+        $query = Location::query()->orderBy('depth')->orderBy('name')->limit($limit);
+
+        // «Шымкент Абайский»: the first word anchors the branch, the last
+        // one filters the nodes inside it.
+        if ($branchKey !== '' && $anchors->isNotEmpty()) {
+            return $query
+                ->where('search_name', 'like', $nodeKey.'%')
+                ->where(function ($constraint) use ($anchors): void {
+                    foreach ($anchors as $anchor) {
+                        $constraint->orWhere('path', 'like', $anchor->path.'%');
+                    }
+                })
+                ->get();
+        }
+
+        // One word: the matching nodes themselves and their subtrees.
+        return $query
+            ->where(function ($constraint) use ($nodeKey, $anchors): void {
+                $constraint->where('search_name', 'like', $nodeKey.'%');
+
+                foreach ($anchors as $anchor) {
+                    $constraint->orWhere('path', 'like', $anchor->path.'%');
+                }
+            })
+            ->get();
+    }
+
+    /**
      * KATO wraps cities into same-named administrative nodes («Семей Г.А.»
      * → «г.Семей»); when both match, only the deepest (the actual place)
      * stays a candidate.

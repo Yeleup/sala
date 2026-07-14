@@ -5,7 +5,7 @@ namespace App\Filament\Resources\Listings\Schemas;
 use App\Enums\ListingType;
 use App\Models\Contact;
 use App\Models\Location;
-use App\Services\Locations\LocationName;
+use App\Services\Locations\LocationResolver;
 use Filament\Forms\Components\Select;
 use Filament\Forms\Components\Textarea;
 use Filament\Forms\Components\TextInput;
@@ -65,12 +65,8 @@ class ListingForm
                     ->label('Локация')
                     ->searchable()
                     ->placeholder('Поиск: город, район или село')
-                    ->getSearchResultsUsing(fn (string $search): array => Location::query()
-                        ->where('search_name', 'like', LocationName::searchKey($search).'%')
-                        ->orderBy('depth')
-                        ->orderBy('name')
-                        ->limit(20)
-                        ->get()
+                    ->getSearchResultsUsing(fn (string $search): array => app(LocationResolver::class)
+                        ->suggest($search, 20)
                         ->mapWithKeys(fn (Location $location): array => [$location->id => $location->label()])
                         ->all())
                     ->getOptionLabelUsing(fn (mixed $value): ?string => Location::find($value)?->label()),

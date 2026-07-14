@@ -3,13 +3,14 @@
 namespace App\Http\Controllers;
 
 use App\Models\Location;
-use App\Services\Locations\LocationName;
+use App\Services\Locations\LocationResolver;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
 /**
  * Autocomplete for the supplier web form: public read-only dictionary
- * lookup, top matches by the normalized name prefix.
+ * lookup. A matched node brings its subtree along, so typing a city also
+ * offers the city's districts.
  */
 class LocationSearchController extends Controller
 {
@@ -18,20 +19,9 @@ class LocationSearchController extends Controller
     /**
      * Handle the incoming request.
      */
-    public function __invoke(Request $request): JsonResponse
+    public function __invoke(Request $request, LocationResolver $resolver): JsonResponse
     {
-        $key = LocationName::searchKey((string) $request->query('q', ''));
-
-        if ($key === '') {
-            return response()->json([]);
-        }
-
-        $locations = Location::query()
-            ->where('search_name', 'like', $key.'%')
-            ->orderBy('depth')
-            ->orderBy('name')
-            ->limit(self::MAX_RESULTS)
-            ->get();
+        $locations = $resolver->suggest((string) $request->query('q', ''), self::MAX_RESULTS);
 
         return response()->json($locations->map(fn (Location $location): array => [
             'id' => $location->id,

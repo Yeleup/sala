@@ -1,10 +1,13 @@
 <?php
 
+use App\Enums\AiCostStatus;
 use App\Filament\Pages\AiUsageReport;
 use App\Models\AiAttempt;
 use App\Models\AiOperation;
+use App\Models\ChannelMessage;
 use App\Models\Contact;
 use App\Models\User;
+use App\Models\WhatsappTemplate;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Livewire\Livewire;
 
@@ -52,5 +55,39 @@ test('период отсекает старые вызовы', function () {
 test('пустой период не ломает страницу', function () {
     Livewire::test(AiUsageReport::class)
         ->assertOk()
-        ->assertSee('За период вызовов не было.');
+        ->assertSee('За период вызовов не было.')
+        ->assertSee('За период шаблонов не отправлялось.')
+        ->assertSee('За период сообщений не было.');
+});
+
+test('отчёт считает расходы на шаблоны только по доставленным и показывает счётчики сообщений', function () {
+    $template = WhatsappTemplate::factory()->approved()->create(['name' => 'listing_renewal_report']);
+
+    // Доставленный шаблон входит в сумму; в очереди — только в счётчик отправленных.
+    ChannelMessage::factory()->template($template)->delivered()->create([
+        'estimated_cost_usd' => '0.045000',
+        'cost_status' => AiCostStatus::Estimated,
+    ]);
+    ChannelMessage::factory()->template($template)->create([
+        'estimated_cost_usd' => '0.045000',
+        'cost_status' => AiCostStatus::Estimated,
+    ]);
+    ChannelMessage::factory()->template($template)->delivered()->create([
+        'estimated_cost_usd' => null,
+        'cost_status' => AiCostStatus::Unknown,
+    ]);
+    ChannelMessage::factory()->template($template)->create([
+        'created_at' => now()->subDays(40),
+        'estimated_cost_usd' => '9.000000',
+        'cost_status' => AiCostStatus::Estimated,
+    ]);
+    ChannelMessage::factory()->create(['text' => 'Входящее для счётчиков']);
+
+    Livewire::test(AiUsageReport::class)
+        ->assertOk()
+        ->assertSee('$0.0450')
+        ->assertDontSee('9.0000')
+        ->assertSee('listing_renewal_report')
+        ->assertSee('Утилитарный')
+        ->assertSee('1 сообщение(й) без тарифа — не входят в сумму');
 });

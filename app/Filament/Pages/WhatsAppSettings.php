@@ -3,6 +3,7 @@
 namespace App\Filament\Pages;
 
 use App\Enums\DereuCompanyStatus;
+use App\Filament\Clusters\WhatsApp\WhatsAppCluster;
 use App\Models\DereuCompany;
 use App\Services\DereuConnect;
 use App\Services\DereuPlatformClient;
@@ -31,13 +32,17 @@ use Throwable;
  */
 class WhatsAppSettings extends Page
 {
-    protected static ?string $slug = 'whatsapp';
+    protected static ?string $slug = 'settings';
 
-    protected static string|BackedEnum|null $navigationIcon = Heroicon::OutlinedChatBubbleLeftRight;
+    protected static string|BackedEnum|null $navigationIcon = Heroicon::OutlinedCog6Tooth;
 
-    protected static ?string $navigationLabel = 'WhatsApp';
+    protected static ?string $cluster = WhatsAppCluster::class;
+
+    protected static ?string $navigationLabel = 'Настройки';
 
     protected static ?string $title = 'Настройки WhatsApp';
+
+    protected static ?int $navigationSort = 3;
 
     /**
      * Lifetime of the signed connect payload and its one-time nonce.

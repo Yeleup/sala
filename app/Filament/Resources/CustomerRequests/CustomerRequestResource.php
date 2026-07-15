@@ -2,6 +2,7 @@
 
 namespace App\Filament\Resources\CustomerRequests;
 
+use App\Filament\Clusters\Marketplace\MarketplaceCluster;
 use App\Filament\Resources\CustomerRequests\Pages\ListCustomerRequests;
 use App\Filament\Resources\CustomerRequests\Pages\ViewCustomerRequest;
 use App\Filament\Resources\CustomerRequests\Schemas\CustomerRequestInfolist;
@@ -22,6 +23,8 @@ class CustomerRequestResource extends Resource
     protected static ?string $model = CustomerRequest::class;
 
     protected static string|BackedEnum|null $navigationIcon = Heroicon::OutlinedInbox;
+
+    protected static ?string $cluster = MarketplaceCluster::class;
 
     protected static ?string $modelLabel = 'заявка';
 

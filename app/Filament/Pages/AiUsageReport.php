@@ -5,7 +5,11 @@ namespace App\Filament\Pages;
 use App\Enums\AiAttemptStatus;
 use App\Enums\AiCostStatus;
 use App\Enums\AiOperationType;
+use App\Enums\ChannelDirection;
+use App\Enums\ChannelMessageStatus;
+use App\Enums\WhatsappTemplateCategory;
 use App\Models\AiAttempt;
+use App\Models\ChannelMessage;
 use BackedEnum;
 use Filament\Pages\Page;
 use Filament\Support\Icons\Heroicon;
@@ -14,25 +18,30 @@ use Illuminate\Support\Collection;
 use Livewire\Attributes\Url;
 
 /**
- * Operator report over the AI audit journal: money by day, model,
- * function and contact, plus request counts, errors and latency. The
- * money column is an estimate from the stored tariff snapshots; calls
- * whose model has no configured tariff are counted separately as
- * «без тарифа» (see config/ai-pricing.php).
+ * Operator expense report: the AI audit journal (money by day, model,
+ * function and contact, plus request counts, errors and latency) and the
+ * WhatsApp template message spend (Meta bills per delivered template
+ * message — only delivered/read ones enter the sums). Money columns are
+ * estimates from the stored tariff snapshots; calls or messages without a
+ * configured tariff are counted separately as «без тарифа» (see
+ * config/ai-pricing.php and config/whatsapp-pricing.php).
  */
 class AiUsageReport extends Page
 {
+    /** Statuses Meta actually bills a template message for. */
+    private const BILLABLE_STATUSES = [ChannelMessageStatus::Delivered, ChannelMessageStatus::Read];
+
     protected static ?string $slug = 'ai-usage';
 
     protected string $view = 'filament.pages.ai-usage-report';
 
     protected static string|BackedEnum|null $navigationIcon = Heroicon::OutlinedChartBar;
 
-    protected static ?string $navigationLabel = 'Отчёт AI';
+    protected static ?string $navigationLabel = 'Расходы';
 
-    protected static ?string $title = 'AI: запросы и расходы';
+    protected static ?string $title = 'Расходы: AI и WhatsApp';
 
-    protected static ?int $navigationSort = 8;
+    protected static ?int $navigationSort = 5;
 
     #[Url]
     public int $days = 30;
@@ -146,10 +155,111 @@ class AiUsageReport extends Page
     }
 
     /**
+     * @return array{sent: int, billable: int, failed: int, cost_usd: string, unknown_cost: int}
+     */
+    public function whatsappSummary(): array
+    {
+        $billable = $this->billableStatusValues();
+
+        $row = $this->templateMessages()
+            ->selectRaw('count(*) as sent')
+            ->selectRaw('count(*) filter (where status in (?, ?)) as billable', $billable)
+            ->selectRaw('count(*) filter (where status = ?) as failed', [ChannelMessageStatus::Failed->value])
+            ->selectRaw('coalesce(sum(estimated_cost_usd) filter (where status in (?, ?)), 0) as cost', $billable)
+            ->selectRaw('count(*) filter (where cost_status = ? and status in (?, ?)) as unknown_cost', [AiCostStatus::Unknown->value, ...$billable])
+            ->first();
+
+        return [
+            'sent' => (int) $row->sent,
+            'billable' => (int) $row->billable,
+            'failed' => (int) $row->failed,
+            'cost_usd' => number_format((float) $row->cost, 4),
+            'unknown_cost' => (int) $row->unknown_cost,
+        ];
+    }
+
+    /**
+     * @return Collection<int, object>
+     */
+    public function whatsappByDay(): Collection
+    {
+        $billable = $this->billableStatusValues();
+
+        return $this->templateMessages()
+            ->selectRaw('date(created_at) as day')
+            ->selectRaw('count(*) as sent')
+            ->selectRaw('count(*) filter (where status in (?, ?)) as billable', $billable)
+            ->selectRaw('count(*) filter (where status = ?) as failed', [ChannelMessageStatus::Failed->value])
+            ->selectRaw('coalesce(sum(estimated_cost_usd) filter (where status in (?, ?)), 0) as cost', $billable)
+            ->groupBy('day')
+            ->orderByDesc('day')
+            ->get();
+    }
+
+    /**
+     * @return Collection<int, object>
+     */
+    public function whatsappByTemplate(): Collection
+    {
+        $billable = $this->billableStatusValues();
+
+        return $this->templateMessages()
+            ->leftJoin('whatsapp_templates', 'whatsapp_templates.id', '=', 'channel_messages.whatsapp_template_id')
+            ->selectRaw("coalesce(whatsapp_templates.name, '—') as name")
+            ->selectRaw('whatsapp_templates.category as category')
+            ->selectRaw('count(*) as sent')
+            ->selectRaw('count(*) filter (where channel_messages.status in (?, ?)) as billable', $billable)
+            ->selectRaw('coalesce(sum(channel_messages.estimated_cost_usd) filter (where channel_messages.status in (?, ?)), 0) as cost', $billable)
+            ->groupBy('name', 'category')
+            ->orderByDesc('cost')
+            ->get()
+            ->each(function (object $row): void {
+                $row->category_label = $row->category !== null
+                    ? (WhatsappTemplateCategory::tryFrom($row->category)?->getLabel() ?? $row->category)
+                    : '—';
+            });
+    }
+
+    /**
+     * @return Collection<int, object>
+     */
+    public function messagesByDay(): Collection
+    {
+        return ChannelMessage::query()
+            ->where('created_at', '>=', now()->subDays($this->days))
+            ->selectRaw('date(created_at) as day')
+            ->selectRaw('count(*) filter (where direction = ?) as inbound', [ChannelDirection::Inbound->value])
+            ->selectRaw('count(*) filter (where direction = ?) as outbound', [ChannelDirection::Outbound->value])
+            ->selectRaw("count(*) filter (where type = 'template') as templates")
+            ->selectRaw('count(*) filter (where status = ?) as failed', [ChannelMessageStatus::Failed->value])
+            ->groupBy('day')
+            ->orderByDesc('day')
+            ->get();
+    }
+
+    /**
      * @return Builder<AiAttempt>
      */
     protected function attempts(): Builder
     {
         return AiAttempt::query()->where('ai_attempts.created_at', '>=', now()->subDays($this->days));
+    }
+
+    /**
+     * @return Builder<ChannelMessage>
+     */
+    protected function templateMessages(): Builder
+    {
+        return ChannelMessage::query()
+            ->where('type', 'template')
+            ->where('channel_messages.created_at', '>=', now()->subDays($this->days));
+    }
+
+    /**
+     * @return list<string>
+     */
+    protected function billableStatusValues(): array
+    {
+        return array_map(fn (ChannelMessageStatus $status): string => $status->value, self::BILLABLE_STATUSES);
     }
 }

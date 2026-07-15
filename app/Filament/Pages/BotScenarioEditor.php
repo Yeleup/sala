@@ -44,6 +44,8 @@ class BotScenarioEditor extends Page
 
     protected static ?string $title = 'Сценарии бота';
 
+    protected static ?int $navigationSort = 1;
+
     #[Url(as: 'scenario')]
     public ?int $scenarioId = null;
 

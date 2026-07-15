@@ -10,6 +10,7 @@ use App\Filament\Resources\Listings\Pages\ListListings;
 use App\Filament\Resources\Listings\Pages\ViewListing;
 use App\Filament\Resources\Listings\Schemas\ListingForm;
 use App\Filament\Resources\Listings\Schemas\ListingInfolist;
+use App\Filament\Clusters\Marketplace\MarketplaceCluster;
 use App\Filament\Resources\Listings\Tables\ListingsTable;
 use App\Models\Listing;
 use BackedEnum;
@@ -32,6 +33,8 @@ class ListingResource extends Resource
     protected static ?string $model = Listing::class;
 
     protected static string|BackedEnum|null $navigationIcon = Heroicon::OutlinedRectangleStack;
+
+    protected static ?string $cluster = MarketplaceCluster::class;
 
     protected static ?string $modelLabel = 'объявление';
 

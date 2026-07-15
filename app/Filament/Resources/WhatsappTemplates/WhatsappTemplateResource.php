@@ -2,6 +2,7 @@
 
 namespace App\Filament\Resources\WhatsappTemplates;
 
+use App\Filament\Clusters\WhatsApp\WhatsAppCluster;
 use App\Filament\Resources\WhatsappTemplates\Pages\CreateWhatsappTemplate;
 use App\Filament\Resources\WhatsappTemplates\Pages\ListWhatsappTemplates;
 use App\Filament\Resources\WhatsappTemplates\Schemas\WhatsappTemplateForm;
@@ -25,11 +26,17 @@ class WhatsappTemplateResource extends Resource
 
     protected static string|BackedEnum|null $navigationIcon = Heroicon::OutlinedDocumentText;
 
+    protected static ?string $cluster = WhatsAppCluster::class;
+
+    protected static ?string $slug = 'templates';
+
     protected static ?string $modelLabel = 'шаблон WhatsApp';
 
     protected static ?string $pluralModelLabel = 'шаблоны WhatsApp';
 
-    protected static ?int $navigationSort = 7;
+    protected static ?string $navigationLabel = 'Шаблоны';
+
+    protected static ?int $navigationSort = 2;
 
     public static function form(Schema $schema): Schema
     {

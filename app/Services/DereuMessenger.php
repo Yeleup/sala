@@ -25,6 +25,8 @@ use RuntimeException;
  */
 class DereuMessenger
 {
+    public function __construct(private readonly WhatsappCostEstimator $costs) {}
+
     public function sendText(Contact $contact, string $text): void
     {
         $this->send($contact, 'text', ['body' => $text]);
@@ -136,7 +138,7 @@ class DereuMessenger
             $payload['components'] = $components;
         }
 
-        $this->send($contact, 'template', $payload);
+        $this->send($contact, 'template', $payload, $template);
     }
 
     /**
@@ -160,7 +162,7 @@ class DereuMessenger
     /**
      * @param  array<string, mixed>  $payload
      */
-    protected function send(Contact $contact, string $type, array $payload): void
+    protected function send(Contact $contact, string $type, array $payload, ?WhatsappTemplate $template = null): void
     {
         if ($type !== 'template' && ! $contact->hasOpenSessionWindow()) {
             throw new SessionWindowClosed($contact);
@@ -189,6 +191,10 @@ class DereuMessenger
             'payload' => $payload,
             'dereu_message_id' => $response->json('id'),
             'status' => ChannelMessageStatus::Queued,
+            ...($template === null ? [] : [
+                'whatsapp_template_id' => $template->id,
+                ...$this->costs->estimate($template->category),
+            ]),
         ]);
     }
 

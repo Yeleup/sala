@@ -62,6 +62,12 @@ class Contact extends Model
         return $this->hasMany(CustomerRequest::class);
     }
 
+    /** @return HasMany<ChannelMessage, $this> */
+    public function channelMessages(): HasMany
+    {
+        return $this->hasMany(ChannelMessage::class);
+    }
+
     /**
      * @return array{last_inbound_at: 'datetime'}
      */

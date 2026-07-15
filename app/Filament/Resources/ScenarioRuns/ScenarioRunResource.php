@@ -31,6 +31,8 @@ class ScenarioRunResource extends Resource
 
     protected static ?string $navigationLabel = 'Запуски';
 
+    protected static ?int $navigationSort = 2;
+
     public static function table(Table $table): Table
     {
         return ScenarioRunsTable::configure($table);

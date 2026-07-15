@@ -170,6 +170,39 @@ describe('ответы по токену flow:{token}:{option}', function () {
             ->and($run->refresh()->status)->toBe(ScenarioRunStatus::Completed);
     });
 
+    test('уведомление заказчика без категории строится без скобок и слова «объявление»', function () {
+        installFlowScenarios();
+
+        $customer = Contact::factory()->withOpenSessionWindow()->create();
+        $supplier = Contact::factory()->withOpenSessionWindow()->create();
+        $listing = Listing::factory()->published()->for($supplier, 'supplier')->create(['category_id' => null]);
+        $request = CustomerRequest::factory()->create([
+            'contact_id' => $customer->id,
+            'listing_id' => $listing->id,
+            'query_text' => 'нужен кран',
+        ]);
+
+        $messenger = runnerMessenger();
+        $messenger->shouldReceive('sendButtons')->once();
+        $messenger->shouldReceive('sendText')->once()->withArgs(
+            fn (Contact $contact, string $text): bool => $contact->is($supplier) && str_contains($text, 'сообщим заказчику'),
+        );
+        $messenger->shouldReceive('sendText')->once()->withArgs(
+            fn (Contact $contact, string $text): bool => $contact->is($customer)
+                && $text === sprintf('Поставщик согласился по вашей заявке. Свяжитесь с ним: +%s', ltrim($supplier->phone, '+')),
+        );
+
+        $scenario = BotScenario::publishedForTrigger(BotScenarioTrigger::NewCustomerRequest);
+        $run = app(ScenarioRunner::class)->launch($scenario, $supplier, $request);
+
+        app(ScenarioRunReplyHandler::class)->handle(
+            $supplier,
+            new InboundMessage(replyId: "flow:{$run->token}:accept"),
+        );
+
+        expect($request->refresh()->status)->toBe(CustomerRequestStatus::Accepted);
+    });
+
     test('решение окончательно: клик по второй кнопке завершённого запуска ничего не меняет', function () {
         [$run, $request, $supplier, $messenger] = launchedRequestRun();
 

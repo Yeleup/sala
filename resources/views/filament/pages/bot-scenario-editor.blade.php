@@ -426,6 +426,15 @@
                             return []
                         }
 
+                        if (node.type === 'start' && ! this.config.runBased) {
+                            // Главный диалог: необязательный второй выход для
+                            // тех, кто уже общался с ботом раньше.
+                            return [
+                                { key: 'continue', label: 'Первое обращение' },
+                                { key: 'returning', label: 'Повторное обращение' },
+                            ]
+                        }
+
                         return [{ key: 'continue', label: 'Продолжить' }]
                     },
 

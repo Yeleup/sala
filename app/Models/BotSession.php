@@ -17,7 +17,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  * silence the dialog is considered finished (mirrors the WhatsApp
  * session window).
  */
-#[Fillable(['contact_id', 'bot_scenario_id', 'scenario_version', 'current_node_id', 'current_node_fingerprint', 'state'])]
+#[Fillable(['contact_id', 'bot_scenario_id', 'scenario_version', 'current_node_id', 'current_node_fingerprint', 'state', 'last_dialog_ended_at'])]
 class BotSession extends Model
 {
     /** @use HasFactory<BotSessionFactory> */
@@ -30,13 +30,24 @@ class BotSession extends Model
     }
 
     /**
-     * @return array{state: 'array'}
+     * @return array{state: 'array', last_dialog_ended_at: 'datetime'}
      */
     protected function casts(): array
     {
         return [
             'state' => 'array',
+            'last_dialog_ended_at' => 'datetime',
         ];
+    }
+
+    /**
+     * Whether this contact has already finished at least one dialog with
+     * the bot — the signal the Start block's «Повторное обращение» output
+     * branches on to skip the first-time greeting.
+     */
+    public function hasCompletedDialog(): bool
+    {
+        return $this->last_dialog_ended_at !== null;
     }
 
     /** @return BelongsTo<BotScenario, $this> */

@@ -380,6 +380,184 @@ test('while the AI keeps the turn the contact waits at the AI block, and complet
     expect(BotSession::sole()->current_node_id)->toBeNull();
 });
 
+/**
+ * Меню ролей, ветка поставщика (текст) и AI-поиск заказчика — чтобы
+ * проверять маршрутизацию нажатий кнопок в обход AI-блока.
+ */
+function botMenuWithAiDefinition(): array
+{
+    return [
+        'nodes' => [
+            ['id' => 'start', 'type' => 'start'],
+            ['id' => 'greeting', 'type' => 'text', 'text' => 'Привет!'],
+            ['id' => 'menu', 'type' => 'buttons', 'text' => 'Кто вы?', 'options' => [
+                ['id' => 'supplier', 'title' => 'Я поставщик'],
+                ['id' => 'customer', 'title' => 'Я заказчик'],
+            ]],
+            ['id' => 'supplier_branch', 'type' => 'text', 'text' => 'Ветка поставщика'],
+            ['id' => 'search', 'type' => 'ai', 'task' => 'customer_search'],
+            ['id' => 'after_search', 'type' => 'text', 'text' => 'Спасибо!'],
+        ],
+        'edges' => [
+            ['from' => 'start', 'output' => 'continue', 'to' => 'greeting'],
+            ['from' => 'greeting', 'output' => 'continue', 'to' => 'menu'],
+            ['from' => 'menu', 'output' => 'option:supplier', 'to' => 'supplier_branch'],
+            ['from' => 'menu', 'output' => 'option:customer', 'to' => 'search'],
+            ['from' => 'search', 'output' => 'continue', 'to' => 'after_search'],
+        ],
+    ];
+}
+
+test('a scenario button pressed while at an AI block routes to its branch and never reaches the AI', function () {
+    $scenario = BotScenario::factory()->published(botMenuWithAiDefinition())->create();
+    $contact = Contact::factory()->create();
+    $session = botSessionWaitingAt($scenario, $contact, 'search');
+    $session->update(['state' => ['phase' => 'searching', 'attempts' => 2, 'query' => 'кран']]);
+
+    $assistant = test()->mock(AiAssistant::class);
+    $assistant->shouldNotReceive('resume');
+    $assistant->shouldNotReceive('start');
+
+    fakeBotMessenger()->shouldReceive('sendText')->once()
+        ->withArgs(fn (Contact $to, string $text) => $text === 'Ветка поставщика');
+
+    // Стейл-кнопка «Я поставщик» из прежнего меню — это явное «хочу не это».
+    app(BotEngine::class)->handle($contact, new InboundMessage(text: 'Я поставщик', replyId: 'supplier'));
+
+    expect($session->fresh())
+        ->current_node_id->toBeNull()
+        ->state->toBeNull();
+});
+
+test('a button that is not in the current graph tells the contact it is stale and repeats the step', function () {
+    $scenario = BotScenario::factory()->published(botMenuWithAiDefinition())->create();
+    $contact = Contact::factory()->create();
+    $session = botSessionWaitingAt($scenario, $contact, 'menu');
+
+    $messenger = fakeBotMessenger();
+    $messenger->shouldReceive('sendText')->once()
+        ->withArgs(fn (Contact $to, string $text) => str_contains($text, 'прежней версии'));
+    $messenger->shouldReceive('sendButtons')->once()
+        ->withArgs(fn (Contact $to, string $text) => $text === 'Кто вы?');
+
+    app(BotEngine::class)->handle($contact, new InboundMessage(text: 'Устаревшая кнопка', replyId: 'ghost_from_old_version'));
+
+    expect($session->fresh()->current_node_id)->toBe('menu');
+});
+
+test('a runtime button unknown to the graph still reaches the AI block that owns it', function () {
+    $scenario = BotScenario::factory()->published(botMenuWithAiDefinition())->create();
+    $contact = Contact::factory()->create();
+    botSessionWaitingAt($scenario, $contact, 'search');
+
+    $assistant = test()->mock(AiAssistant::class);
+    $assistant->shouldReceive('resume')->once()
+        ->withArgs(fn (BotSession $session, array $node, InboundMessage $message) => $message->replyId === 'search_to_menu')
+        ->andReturn(AiOutcome::Completed);
+
+    fakeBotMessenger()->shouldReceive('sendText')->once()
+        ->withArgs(fn (Contact $to, string $text) => $text === 'Спасибо!');
+
+    app(BotEngine::class)->handle($contact, new InboundMessage(text: 'В меню', replyId: 'search_to_menu'));
+});
+
+/**
+ * Старт с двумя выходами: полное приветствие для первого обращения и
+ * «Повторное обращение» сразу к меню.
+ */
+function botReturningStartDefinition(bool $connectReturning = true): array
+{
+    $definition = [
+        'nodes' => [
+            ['id' => 'start', 'type' => 'start'],
+            ['id' => 'greeting', 'type' => 'text', 'text' => 'Здравствуйте, это сервис!'],
+            ['id' => 'menu', 'type' => 'buttons', 'text' => 'Что вы хотите?', 'options' => [
+                ['id' => 'customer', 'title' => 'Найти технику'],
+            ]],
+        ],
+        'edges' => [
+            ['from' => 'start', 'output' => 'continue', 'to' => 'greeting'],
+            ['from' => 'greeting', 'output' => 'continue', 'to' => 'menu'],
+        ],
+    ];
+
+    if ($connectReturning) {
+        $definition['edges'][] = ['from' => 'start', 'output' => 'returning', 'to' => 'menu'];
+    }
+
+    return $definition;
+}
+
+test('a returning contact skips the greeting through the start returning output', function () {
+    $scenario = BotScenario::factory()->published(botReturningStartDefinition())->create();
+    $contact = Contact::factory()->create();
+    BotSession::factory()->create([
+        'contact_id' => $contact->id,
+        'bot_scenario_id' => $scenario->id,
+        'scenario_version' => 1,
+        'current_node_id' => null,
+        'last_dialog_ended_at' => now()->subHour(),
+    ]);
+
+    $messenger = fakeBotMessenger();
+    $messenger->shouldNotReceive('sendText'); // без приветствия
+    $messenger->shouldReceive('sendButtons')->once()
+        ->withArgs(fn (Contact $to, string $text) => $text === 'Что вы хотите?');
+
+    app(BotEngine::class)->handle($contact, new InboundMessage(text: 'Привет снова'));
+
+    expect(BotSession::sole()->current_node_id)->toBe('menu');
+});
+
+test('a first-time contact gets the full greeting even when the returning output is wired', function () {
+    BotScenario::factory()->published(botReturningStartDefinition())->create();
+    $contact = Contact::factory()->create();
+
+    $messenger = fakeBotMessenger();
+    $messenger->shouldReceive('sendText')->once()
+        ->withArgs(fn (Contact $to, string $text) => $text === 'Здравствуйте, это сервис!');
+    $messenger->shouldReceive('sendButtons')->once();
+
+    app(BotEngine::class)->handle($contact, new InboundMessage(text: 'Привет'));
+
+    expect(BotSession::sole()->current_node_id)->toBe('menu');
+});
+
+test('without a returning output even a known contact gets the greeting', function () {
+    $scenario = BotScenario::factory()->published(botReturningStartDefinition(connectReturning: false))->create();
+    $contact = Contact::factory()->create();
+    BotSession::factory()->create([
+        'contact_id' => $contact->id,
+        'bot_scenario_id' => $scenario->id,
+        'scenario_version' => 1,
+        'current_node_id' => null,
+        'last_dialog_ended_at' => now()->subHour(),
+    ]);
+
+    $messenger = fakeBotMessenger();
+    $messenger->shouldReceive('sendText')->once()
+        ->withArgs(fn (Contact $to, string $text) => $text === 'Здравствуйте, это сервис!');
+    $messenger->shouldReceive('sendButtons')->once();
+
+    app(BotEngine::class)->handle($contact, new InboundMessage(text: 'Привет снова'));
+
+    expect(BotSession::sole()->current_node_id)->toBe('menu');
+});
+
+test('finishing a dialog marks the contact as having completed one', function () {
+    $scenario = BotScenario::factory()->published(botMenuDefinition())->create();
+    $contact = Contact::factory()->create();
+    $session = botSessionWaitingAt($scenario, $contact, 'menu');
+
+    fakeBotMessenger()->shouldReceive('sendText')->once(); // ветка поставщика — текст, диалог завершается
+
+    app(BotEngine::class)->handle($contact, new InboundMessage(text: 'Поставщик', replyId: 'supplier'));
+
+    expect($session->fresh())
+        ->current_node_id->toBeNull()
+        ->last_dialog_ended_at->not->toBeNull();
+});
+
 test('a cycle of auto-advancing blocks is capped and the dialog is parked', function () {
     BotScenario::factory()->published([
         'nodes' => [

@@ -28,6 +28,8 @@ class BotEngine
 
     private const string DEFAULT_LIST_BUTTON = 'Выбрать';
 
+    private const string STALE_BUTTON_NOTICE = 'Эта кнопка из прежней версии бота и больше не действует.';
+
     public function __construct(
         private readonly DereuMessenger $messenger,
         private readonly AiAssistant $aiAssistant,
@@ -73,6 +75,14 @@ class BotEngine
         $node = $definition->node($session->current_node_id);
         $type = $definition->nodeType($node);
 
+        // A pressed scenario button routes by its machine id — even when it
+        // came from an earlier bot message and no longer matches the block
+        // the contact is standing on. This must run before the AI block, so
+        // a stray button press is never swallowed as a search query.
+        if (filled($message->replyId) && $this->routeButton($session, $contact, $scenario, $definition, $node, $type, $message)) {
+            return;
+        }
+
         if ($type === BotNodeType::AiInput) {
             $this->resumeAi($session, $contact, $definition, $node, $message);
 
@@ -86,6 +96,78 @@ class BotEngine
         }
 
         $this->handleMenuReply($session, $contact, $definition, $node, $message);
+    }
+
+    /**
+     * Handle a pressed button by its machine id. Returns true when it fully
+     * handled the message; false to let the normal per-block flow run.
+     *
+     * @param  array<string, mixed>|null  $node
+     */
+    private function routeButton(BotSession $session, Contact $contact, BotScenario $scenario, ScenarioDefinition $definition, ?array $node, ?BotNodeType $type, InboundMessage $message): bool
+    {
+        $owner = $definition->optionOwner((string) $message->replyId);
+
+        if ($owner !== null) {
+            // The current block's own option — matchOption handles it below.
+            if ($node !== null && $owner['node_id'] === ($node['id'] ?? null)) {
+                return false;
+            }
+
+            // A button from another section (an earlier menu still visible in
+            // the chat): honour it, discarding any unfinished AI progress —
+            // the contact explicitly asked for a different branch.
+            $this->routeToOption($session, $contact, $definition, $owner);
+
+            return true;
+        }
+
+        // Not a published-graph button. An AI block owns runtime buttons of
+        // its own (result rows, «Искать шире», «В меню») — leave them to the
+        // assistant.
+        if ($type === BotNodeType::AiInput) {
+            return false;
+        }
+
+        // A button from an older published version: nothing in the current
+        // graph answers to it.
+        $this->handleStaleButton($session, $contact, $scenario, $definition, $node, $type);
+
+        return true;
+    }
+
+    /**
+     * @param  array{node_id: string, option_id: string}  $owner
+     */
+    private function routeToOption(BotSession $session, Contact $contact, ScenarioDefinition $definition, array $owner): void
+    {
+        // Jumping away from an AI block abandons its working memory.
+        if ($session->state !== null) {
+            $session->state = null;
+        }
+
+        $target = $definition->target($owner['node_id'], ScenarioDefinition::optionOutput($owner['option_id']));
+
+        $this->advance($session, $contact, $definition, $target);
+    }
+
+    /**
+     * @param  array<string, mixed>|null  $node
+     */
+    private function handleStaleButton(BotSession $session, Contact $contact, BotScenario $scenario, ScenarioDefinition $definition, ?array $node, ?BotNodeType $type): void
+    {
+        $this->messenger->sendText($contact, self::STALE_BUTTON_NOTICE);
+
+        // Waiting on a menu — repeat the step the contact is actually on.
+        if ($node !== null && $type?->waitsForInput() === true) {
+            $this->sendMenu($contact, $definition, $node);
+            $session->save();
+
+            return;
+        }
+
+        // Nothing awaited — start a fresh dialog from «Старт».
+        $this->restart($session, $contact, $scenario, $definition);
     }
 
     /**
@@ -150,7 +232,7 @@ class BotEngine
 
             switch ($type) {
                 case BotNodeType::Start:
-                    $nodeId = $definition->target($node['id'], ScenarioDefinition::OUTPUT_CONTINUE);
+                    $nodeId = $definition->target($node['id'], $this->startOutput($session, $definition, $node['id']));
                     break;
 
                 case BotNodeType::Text:
@@ -262,6 +344,21 @@ class BotEngine
         $this->messenger->sendList($contact, $text, (string) ($node['button'] ?? self::DEFAULT_LIST_BUTTON), $options);
     }
 
+    /**
+     * Which Start output a fresh dialog follows: the optional «Повторное
+     * обращение» output for a contact who already finished a dialog before
+     * (and only when that output is wired), otherwise the default greeting.
+     */
+    private function startOutput(BotSession $session, ScenarioDefinition $definition, string $startId): string
+    {
+        if ($session->hasCompletedDialog()
+            && $definition->target($startId, ScenarioDefinition::OUTPUT_RETURNING) !== null) {
+            return ScenarioDefinition::OUTPUT_RETURNING;
+        }
+
+        return ScenarioDefinition::OUTPUT_CONTINUE;
+    }
+
     private function waitAt(BotSession $session, string $nodeId, string $fingerprint): void
     {
         $session->current_node_id = $nodeId;
@@ -273,6 +370,7 @@ class BotEngine
     {
         $session->current_node_id = null;
         $session->current_node_fingerprint = null;
+        $session->last_dialog_ended_at = now();
         $session->save();
     }
 }

@@ -105,10 +105,12 @@ test('a brand in the query ranks the branded listing first', function () {
     expect($outcome)->toBe(AiOutcome::InProgress);
 });
 
-test('a fruitless search asks to rephrase without ending the block', function () {
+test('a fruitless search asks to rephrase with a way back to the menu', function () {
     $messenger = fakeSearchMessenger();
-    $messenger->shouldReceive('sendText')->once()->withArgs(
-        fn (Contact $contact, string $text): bool => str_contains($text, 'ничего не нашлось'),
+    $messenger->shouldReceive('sendButtons')->once()->withArgs(
+        fn (Contact $contact, string $text, array $buttons): bool => str_contains($text, 'ничего не нашлось')
+            && $buttons[0]['id'] === CustomerSearchAssistant::BUTTON_MENU
+            && $buttons[0]['title'] === CustomerSearchAssistant::BUTTON_MENU_TITLE,
     );
 
     $session = searchSession();
@@ -117,6 +119,16 @@ test('a fruitless search asks to rephrase without ending the block', function ()
 
     expect($outcome)->toBe(AiOutcome::InProgress)
         ->and($session->refresh()->state['attempts'])->toBe(1);
+});
+
+test('pressing «В меню» at a dead-end releases the contact from the search block', function () {
+    fakeSearchMessenger()->shouldNotReceive('sendText', 'sendButtons', 'sendList');
+
+    $session = searchSession(['attempts' => 1]);
+    $outcome = app(CustomerSearchAssistant::class)
+        ->resume($session, customerAiNode(), new InboundMessage(text: 'В меню', replyId: CustomerSearchAssistant::BUTTON_MENU));
+
+    expect($outcome)->toBe(AiOutcome::Completed);
 });
 
 test('the third fruitless search releases the contact back to the scenario', function () {
@@ -268,8 +280,9 @@ test('a listing outside the requested location subtree is not offered', function
     ]);
 
     $messenger = fakeSearchMessenger();
-    $messenger->shouldReceive('sendText')->once()->withArgs(
-        fn (Contact $contact, string $text): bool => str_contains($text, 'ничего не нашлось'),
+    $messenger->shouldReceive('sendButtons')->once()->withArgs(
+        fn (Contact $contact, string $text, array $buttons): bool => str_contains($text, 'ничего не нашлось')
+            && $buttons[0]['id'] === CustomerSearchAssistant::BUTTON_MENU,
     );
 
     $session = searchSession();
@@ -315,6 +328,28 @@ test('an empty subtree offers to widen the search one level up and the click is 
         // Расширение — наша собственная подсказка: попытка потрачена только
         // на первоначальную пустую выдачу.
         ->and($fresh->fresh()->state['attempts'])->toBe(1);
+});
+
+test('when there is nowhere wider to search the dead-end offers a way back to the menu', function () {
+    $region = locationNamed('область Абай'); // верхний уровень дерева локаций
+
+    $messenger = fakeSearchMessenger();
+    $messenger->shouldReceive('sendButtons')->once()->withArgs(
+        fn (Contact $contact, string $text, array $buttons): bool => str_contains($text, 'Шире искать уже некуда')
+            && $buttons[0]['id'] === CustomerSearchAssistant::BUTTON_MENU,
+    );
+
+    $session = searchSession([
+        'phase' => 'expanding',
+        'query' => 'кран',
+        'expand_location_id' => $region->id,
+        'attempts' => 1,
+    ]);
+    $outcome = app(CustomerSearchAssistant::class)
+        ->resume($session, customerAiNode(), new InboundMessage(replyId: CustomerSearchAssistant::BUTTON_EXPAND));
+
+    expect($outcome)->toBe(AiOutcome::InProgress)
+        ->and($session->refresh()->state['phase'])->toBe('searching');
 });
 
 test('a selection of a listing that expired after the search is not accepted', function () {

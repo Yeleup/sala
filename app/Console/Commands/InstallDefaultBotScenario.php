@@ -118,6 +118,8 @@ class InstallDefaultBotScenario extends Command
             ],
             'edges' => [
                 ['from' => 'start', 'output' => 'continue', 'to' => 'greeting'],
+                // Повторное обращение: без приветствия — сразу меню действий.
+                ['from' => 'start', 'output' => 'returning', 'to' => 'main_menu'],
                 ['from' => 'greeting', 'output' => 'continue', 'to' => 'main_menu'],
                 ['from' => 'main_menu', 'output' => 'option:supplier', 'to' => 'supplier_type'],
                 ['from' => 'main_menu', 'output' => 'option:customer', 'to' => 'customer_search'],

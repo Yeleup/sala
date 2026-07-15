@@ -23,7 +23,10 @@ test('the installer publishes the reference main dialog with every MVP branch', 
         ->toMatchArray(['task' => 'collect_listing', 'listing_type' => 'service'])
         ->and($nodes->firstWhere('id', 'customer_search')['task'])->toBe('customer_search')
         ->and($nodes->firstWhere('id', 'my_listings')['type'])->toBe('my_listings')
-        ->and($definition->startNodeId())->toBe('start');
+        ->and($definition->startNodeId())->toBe('start')
+        // Повторное обращение ведёт сразу к меню, минуя приветствие.
+        ->and($definition->target('start', ScenarioDefinition::OUTPUT_RETURNING))->toBe('main_menu')
+        ->and($definition->target('start', ScenarioDefinition::OUTPUT_CONTINUE))->toBe('greeting');
 });
 
 test('the installer publishes the flow scenarios next to the main dialog', function () {

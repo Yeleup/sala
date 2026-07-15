@@ -36,6 +36,13 @@ class ScenarioDefinition
 {
     public const string OUTPUT_CONTINUE = 'continue';
 
+    /**
+     * The Start block's optional second output: taken instead of "continue"
+     * for a contact who has already finished a dialog before, so the
+     * scenario can skip the first-time greeting.
+     */
+    public const string OUTPUT_RETURNING = 'returning';
+
     public const string OUTPUT_FALLBACK = 'fallback';
 
     /** The branches of a «Условие» block. */
@@ -114,6 +121,27 @@ class ScenarioDefinition
     public function options(array $node): array
     {
         return array_values($node['options'] ?? []);
+    }
+
+    /**
+     * Locate the block that owns the option with the given id anywhere in
+     * the graph (option ids are unique graph-wide). Lets the engine route a
+     * pressed scenario button to its branch even when the contact is no
+     * longer standing on that block.
+     *
+     * @return array{node_id: string, option_id: string}|null
+     */
+    public function optionOwner(string $optionId): ?array
+    {
+        foreach ($this->definition['nodes'] ?? [] as $node) {
+            foreach ($this->options($node) as $option) {
+                if (($option['id'] ?? null) === $optionId) {
+                    return ['node_id' => (string) $node['id'], 'option_id' => $optionId];
+                }
+            }
+        }
+
+        return null;
     }
 
     /**

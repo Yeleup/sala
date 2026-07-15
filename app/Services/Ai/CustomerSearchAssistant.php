@@ -45,6 +45,13 @@ class CustomerSearchAssistant
 
     public const string BUTTON_EXPAND_TITLE = 'Искать шире';
 
+    /** Releases the contact from a dead-end search back to the main dialog. */
+    public const string BUTTON_MENU = 'search_to_menu';
+
+    public const string BUTTON_MENU_TITLE = 'В меню';
+
+    private const string QUERY_EXAMPLE = 'например: «кран 25 тонн, Шымкент»';
+
     public function __construct(
         private readonly DereuMessenger $messenger,
         private readonly ListingMatcher $matcher,
@@ -76,6 +83,12 @@ class CustomerSearchAssistant
     {
         $state = is_array($session->state) ? $session->state : [];
         $state += ['phase' => 'searching', 'attempts' => 0, 'query' => null, 'offered' => [], 'expand_location_id' => null];
+
+        // «В меню» from a dead-end search releases the contact to the main
+        // dialog regardless of the phase — routed strictly by button id.
+        if ($message->replyId === self::BUTTON_MENU) {
+            return AiOutcome::Completed;
+        }
 
         if ($state['phase'] === 'choosing') {
             $chosen = $this->matchChoice($state['offered'], $message);
@@ -132,9 +145,9 @@ class CustomerSearchAssistant
             }
 
             $this->persist($session, $state);
-            $this->messenger->sendText(
-                $session->contact,
-                'По запросу ничего не нашлось. Попробуйте описать иначе: вид техники или услуги и город.',
+            $this->sendDeadEnd(
+                $session,
+                sprintf('По запросу ничего не нашлось. Попробуйте описать иначе — вид техники или услуги и город, %s.', self::QUERY_EXAMPLE),
             );
 
             return AiOutcome::InProgress;
@@ -224,12 +237,26 @@ class CustomerSearchAssistant
         $state['phase'] = 'searching';
         $state['expand_location_id'] = null;
         $this->persist($session, $state);
-        $this->messenger->sendText(
-            $session->contact,
-            'Шире искать уже некуда — по всей стране ничего не нашлось. Попробуйте описать иначе: вид техники или услуги.',
+        $this->sendDeadEnd(
+            $session,
+            sprintf('Шире искать уже некуда — по всей стране ничего не нашлось. Попробуйте описать иначе, %s.', self::QUERY_EXAMPLE),
         );
 
         return AiOutcome::InProgress;
+    }
+
+    /**
+     * A fruitless search that still waits for the contact: the prompt to
+     * rephrase plus a «В меню» button so the contact is never stuck without
+     * a way back to the main dialog.
+     */
+    protected function sendDeadEnd(BotSession $session, string $text): void
+    {
+        $this->messenger->sendButtons(
+            $session->contact,
+            $text,
+            [['id' => self::BUTTON_MENU, 'title' => self::BUTTON_MENU_TITLE]],
+        );
     }
 
     protected function matchesExpandButton(InboundMessage $message): bool

@@ -78,12 +78,13 @@ class ScenarioActionExecutor
      */
     protected function notifyCustomer(CustomerRequest $request): void
     {
+        $category = $request->listing->category?->name;
+        $phone = ltrim($request->listing->supplier->phone, '+');
+
         $text = match ($request->status) {
-            CustomerRequestStatus::Accepted => sprintf(
-                'Поставщик согласился по вашей заявке («%s»). Свяжитесь с ним: +%s',
-                $request->listing->category?->name ?: 'объявление',
-                ltrim($request->listing->supplier->phone, '+'),
-            ),
+            CustomerRequestStatus::Accepted => $category
+                ? sprintf('Поставщик согласился по вашей заявке («%s»). Свяжитесь с ним: +%s', $category, $phone)
+                : sprintf('Поставщик согласился по вашей заявке. Свяжитесь с ним: +%s', $phone),
             CustomerRequestStatus::Declined => 'К сожалению, поставщик отказался по вашей заявке. Напишите нам — подберём другие варианты.',
             CustomerRequestStatus::Pending => null,
         };

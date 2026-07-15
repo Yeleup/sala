@@ -23,6 +23,7 @@ class DatabaseSeeder extends Seeder
         ]);
 
         $this->call(CategorySeeder::class);
+        $this->call(BrandSeeder::class);
         $this->call(LocationSeeder::class);
 
         if (app()->environment('local')) {

@@ -29,7 +29,7 @@ class WhatsappTemplateResource extends Resource
 
     protected static ?string $pluralModelLabel = 'шаблоны WhatsApp';
 
-    protected static ?int $navigationSort = 6;
+    protected static ?int $navigationSort = 7;
 
     public static function form(Schema $schema): Schema
     {

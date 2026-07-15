@@ -11,6 +11,15 @@ class EditListing extends EditRecord
 {
     protected static string $resource = ListingResource::class;
 
+    /**
+     * @param  array<string, mixed>  $data
+     * @return array<string, mixed>
+     */
+    protected function mutateFormDataBeforeSave(array $data): array
+    {
+        return ListingResource::dropBrandForService($data);
+    }
+
     protected function getHeaderActions(): array
     {
         return [

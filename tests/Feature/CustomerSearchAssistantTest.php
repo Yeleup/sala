@@ -81,6 +81,30 @@ test('a query returns a ranked list of matching published listings', function ()
         ->and($session->state['offered'])->toBe([$crane25->id, $crane10->id]);
 });
 
+test('a brand in the query ranks the branded listing first', function () {
+    $shymkent = locationNamed('г.Шымкент');
+    $hitachi = Listing::factory()->published()->create([
+        'category_id' => categoryNamed('Экскаватор')->id, 'brand_id' => brandNamed('Hitachi')->id,
+        'description' => 'Гусеничный', 'location_id' => $shymkent->id,
+    ]);
+    $noBrand = Listing::factory()->published()->create([
+        'category_id' => categoryNamed('Экскаватор')->id, 'brand_id' => null,
+        'description' => 'Колёсный', 'location_id' => $shymkent->id,
+    ]);
+
+    $messenger = fakeSearchMessenger();
+    $messenger->shouldReceive('sendList')->once()->withArgs(
+        fn (Contact $contact, string $text, string $button, array $rows): bool => count($rows) === 2
+            && $rows[0]['id'] === "listing:{$hitachi->id}"
+            && $rows[1]['id'] === "listing:{$noBrand->id}",
+    );
+
+    $outcome = app(CustomerSearchAssistant::class)
+        ->resume(searchSession(), customerAiNode(), new InboundMessage(text: 'нужен экскаватор Hitachi'));
+
+    expect($outcome)->toBe(AiOutcome::InProgress);
+});
+
 test('a fruitless search asks to rephrase without ending the block', function () {
     $messenger = fakeSearchMessenger();
     $messenger->shouldReceive('sendText')->once()->withArgs(

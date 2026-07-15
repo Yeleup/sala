@@ -66,6 +66,7 @@ function fullExtraction(array $overrides = []): array
     return array_merge([
         'type' => 'equipment',
         'category' => 'Трактор',
+        'brand' => null,
         'description' => 'Трактор в аренду с водителем',
         'location' => 'Шымкент',
         'location_detail' => null,
@@ -327,6 +328,87 @@ test('the extraction schema and prompt hard-limit the category to the dictionary
 
     expect($categorySchema['enum'])->toContain('Автокран')->toContain('Сварщик')
         ->and((string) $agent->instructions())->toContain('- Автокран')->toContain('- Сварщик');
+});
+
+test('a named brand from the dictionary lands on the draft and in the summary', function () {
+    brandNamed('Hitachi');
+    ListingExtractionAgent::fake([fullExtraction(['brand' => 'Hitachi', 'summary' => null])]);
+    $session = collectorSession();
+
+    // Пустой summary включает сводку-фолбэк — она должна содержать марку.
+    fakeCollectorMessenger()->shouldReceive('sendButtons')->once()
+        ->withArgs(fn (Contact $to, string $text) => str_contains($text, 'Трактор Hitachi'));
+
+    app(SupplierListingCollector::class)
+        ->resume($session, supplierAiNode(), new InboundMessage(text: 'Сдаю трактор Хитачи в Шымкенте, 10000 тг/час'));
+
+    expect(Listing::sole())->brand->name->toBe('Hitachi');
+});
+
+test('the extractor brand is normalized to the dictionary spelling', function () {
+    brandNamed('Hitachi');
+    ListingExtractionAgent::fake([fullExtraction(['brand' => 'hitachi'])]);
+    $session = collectorSession();
+
+    fakeCollectorMessenger()->shouldReceive('sendButtons')->once();
+
+    app(SupplierListingCollector::class)
+        ->resume($session, supplierAiNode(), new InboundMessage(text: 'Сдаю трактор hitachi в Шымкенте, 10000 тг/час'));
+
+    expect(Listing::sole())->brand->name->toBe('Hitachi');
+});
+
+test('a brand outside the dictionary is dropped without a clarifying question', function () {
+    ListingExtractionAgent::fake([fullExtraction(['brand' => 'Цеппелин'])]);
+    $session = collectorSession();
+
+    // Марка необязательна: подтверждение отправляется сразу, попытки не тратятся.
+    fakeCollectorMessenger()->shouldReceive('sendButtons')->once()
+        ->withArgs(fn (Contact $to, string $text) => str_contains($text, 'Всё верно?'));
+
+    $outcome = app(SupplierListingCollector::class)
+        ->resume($session, supplierAiNode(), new InboundMessage(text: 'Сдаю трактор Цеппелин в Шымкенте, 10000 тг/час'));
+
+    expect($outcome)->toBe(AiOutcome::InProgress)
+        ->and($session->fresh()->state['attempts'])->toBe(0)
+        ->and(Listing::sole()->brand_id)->toBeNull();
+});
+
+test('a service listing never carries a brand even when the extractor returned one', function () {
+    brandNamed('Hitachi');
+    categoryNamed('Сварщик', ListingType::Service);
+    ListingExtractionAgent::fake([
+        fullExtraction(['type' => null, 'category' => 'Сварщик', 'brand' => 'Hitachi', 'summary' => 'Сварщик, Шымкент']),
+    ]);
+    $session = collectorSession(['listing_type' => null]);
+
+    fakeCollectorMessenger()->shouldReceive('sendButtons')->once();
+
+    $node = ['id' => 'collect', 'type' => 'ai', 'task' => 'collect_listing'];
+    app(SupplierListingCollector::class)
+        ->resume($session, $node, new InboundMessage(text: 'Сварщик с выездом, Шымкент, 10000 тг/час'));
+
+    expect(Listing::sole())
+        ->type->toBe(ListingType::Service)
+        ->brand_id->toBeNull();
+});
+
+test('the extraction schema and prompt hard-limit the brand to the dictionary', function () {
+    $agent = new ListingExtractionAgent(null, ['Автокран'], ['Hitachi', 'CAT']);
+
+    $brandSchema = $agent->schema(new Illuminate\JsonSchema\JsonSchemaTypeFactory)['brand']->toArray();
+
+    expect($brandSchema['enum'])->toContain('Hitachi')->toContain('CAT')
+        ->and((string) $agent->instructions())->toContain('- Hitachi')->toContain('- CAT');
+});
+
+test('an empty brand dictionary degrades the schema and tells the model to keep null', function () {
+    $agent = new ListingExtractionAgent(null, ['Автокран']);
+
+    $brandSchema = $agent->schema(new Illuminate\JsonSchema\JsonSchemaTypeFactory)['brand']->toArray();
+
+    expect($brandSchema)->not->toHaveKey('enum')
+        ->and((string) $agent->instructions())->toContain('справочник марок пуст');
 });
 
 test('an undetermined type in the auto branch asks about it instead of defaulting to equipment', function () {

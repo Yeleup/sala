@@ -24,7 +24,7 @@
     @forelse ($listings as $listing)
         <article class="card">
             <div class="meta">
-                <strong>{{ $listing->category?->name ?: 'Без категории' }}</strong>
+                <strong>{{ collect([$listing->category?->name ?: 'Без категории', $listing->brand?->name])->filter()->join(' ') }}</strong>
                 <x-supplier.status-badge :status="$listing->status" />
             </div>
             <p class="muted" style="margin: 0.25rem 0 0;">{{ $listing->type->getLabel() }}</p>

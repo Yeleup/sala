@@ -2,6 +2,7 @@
 
 namespace App\Filament\Resources\Listings\Schemas;
 
+use App\Enums\ListingType;
 use App\Models\Listing;
 use Filament\Infolists\Components\ImageEntry;
 use Filament\Infolists\Components\TextEntry;
@@ -25,6 +26,10 @@ class ListingInfolist
                         TextEntry::make('category.name')
                             ->label('Категория')
                             ->placeholder('Не указана'),
+                        TextEntry::make('brand.name')
+                            ->label('Марка')
+                            ->placeholder('Не указана')
+                            ->visible(fn (Listing $record): bool => $record->type === ListingType::Equipment),
                         TextEntry::make('description')
                             ->label('Описание')
                             ->placeholder('Не указано')

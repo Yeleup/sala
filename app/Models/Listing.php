@@ -22,7 +22,7 @@ use LogicException;
  * free-form supplier input; every business field except the type may stay
  * empty until the supplier completes it via the web interface.
  */
-#[Fillable(['contact_id', 'type', 'category_id', 'description', 'location_id', 'location_detail', 'price', 'status', 'rejection_reason', 'expires_at', 'renewal_requested_at'])]
+#[Fillable(['contact_id', 'type', 'category_id', 'brand_id', 'description', 'location_id', 'location_detail', 'price', 'status', 'rejection_reason', 'expires_at', 'renewal_requested_at'])]
 class Listing extends Model
 {
     /** @use HasFactory<ListingFactory> */
@@ -66,6 +66,12 @@ class Listing extends Model
     public function category(): BelongsTo
     {
         return $this->belongsTo(Category::class);
+    }
+
+    /** @return BelongsTo<Brand, $this> */
+    public function brand(): BelongsTo
+    {
+        return $this->belongsTo(Brand::class);
     }
 
     /** @return BelongsTo<Location, $this> */

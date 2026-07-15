@@ -63,6 +63,15 @@ function categoryNamed(string $name, \App\Enums\ListingType $type = \App\Enums\L
 }
 
 /**
+ * Марка из операторского справочника (создаётся при первом обращении) —
+ * для объявлений в тестах: `'brand_id' => brandNamed('Hitachi')->id`.
+ */
+function brandNamed(string $name): \App\Models\Brand
+{
+    return \App\Models\Brand::query()->firstOrCreate(['name' => $name]);
+}
+
+/**
  * Узел справочника локаций КАТО (создаётся при первом обращении) — для
  * объявлений в тестах: `'location_id' => locationNamed('г.Шымкент')->id`.
  */

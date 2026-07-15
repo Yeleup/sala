@@ -32,6 +32,10 @@ class ListingsTable
                     ->label('Категория')
                     ->searchable()
                     ->placeholder('—'),
+                TextColumn::make('brand.name')
+                    ->label('Марка')
+                    ->searchable()
+                    ->placeholder('—'),
                 TextColumn::make('location.name')
                     ->label('Локация')
                     ->searchable()

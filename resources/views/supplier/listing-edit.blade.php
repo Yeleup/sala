@@ -45,6 +45,20 @@
                     @error('category_id') <p class="error">{{ $message }}</p> @enderror
                 </div>
 
+                @if ($brands->isNotEmpty())
+                    <div class="field" id="brand-field">
+                        <label for="brand_id">Марка (необязательно)</label>
+                        <select id="brand_id" name="brand_id">
+                            <option value="" @selected(old('brand_id', $listing->brand_id) === null)>— без марки —</option>
+                            @foreach ($brands as $brand)
+                                <option value="{{ $brand->id }}" @selected((int) old('brand_id', $listing->brand_id) === $brand->id)>{{ $brand->name }}</option>
+                            @endforeach
+                        </select>
+                        <p class="muted" style="margin: 0.25rem 0 0;">Производитель техники; у услуг марки нет.</p>
+                        @error('brand_id') <p class="error">{{ $message }}</p> @enderror
+                    </div>
+                @endif
+
                 <div class="field">
                     <label for="description">Описание</label>
                     <textarea id="description" name="description" rows="4" placeholder="Что предлагаете, характеристики, условия">{{ old('description', $listing->description) }}</textarea>
@@ -103,6 +117,27 @@
 
             <script>
                 (function () {
+                    const typeSelect = document.getElementById('type');
+                    const brandField = document.getElementById('brand-field');
+
+                    if (!brandField) {
+                        return;
+                    }
+
+                    function toggleBrandField() {
+                        const isService = typeSelect.value === @json(\App\Enums\ListingType::Service->value);
+                        brandField.style.display = isService ? 'none' : '';
+
+                        if (isService) {
+                            document.getElementById('brand_id').value = '';
+                        }
+                    }
+
+                    typeSelect.addEventListener('change', toggleBrandField);
+                    toggleBrandField();
+                })();
+
+                (function () {
                     const input = document.getElementById('location_search');
                     const datalist = document.getElementById('location-options');
                     const hidden = document.getElementById('location_id');
@@ -155,6 +190,10 @@
                 <dd>{{ $listing->type->getLabel() }}</dd>
                 <dt>Категория</dt>
                 <dd>{{ $listing->category?->name ?: '—' }}</dd>
+                @if ($listing->type === \App\Enums\ListingType::Equipment)
+                    <dt>Марка</dt>
+                    <dd>{{ $listing->brand?->name ?: '—' }}</dd>
+                @endif
                 <dt>Описание</dt>
                 <dd>{{ $listing->description ?: '—' }}</dd>
                 <dt>Локация</dt>

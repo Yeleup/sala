@@ -12,4 +12,13 @@ use Filament\Resources\Pages\CreateRecord;
 class CreateListing extends CreateRecord
 {
     protected static string $resource = ListingResource::class;
+
+    /**
+     * @param  array<string, mixed>  $data
+     * @return array<string, mixed>
+     */
+    protected function mutateFormDataBeforeCreate(array $data): array
+    {
+        return ListingResource::dropBrandForService($data);
+    }
 }

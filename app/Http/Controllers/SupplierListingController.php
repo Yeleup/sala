@@ -6,6 +6,7 @@ use App\Enums\ListingMediaType;
 use App\Enums\ListingStatus;
 use App\Http\Requests\UpdateSupplierListingRequest;
 use App\Http\Requests\UpdateSupplierNameRequest;
+use App\Models\Brand;
 use App\Models\Category;
 use App\Models\Contact;
 use App\Models\Listing;
@@ -28,7 +29,7 @@ class SupplierListingController extends Controller
 
     public function index(Contact $contact): View
     {
-        $listings = $contact->listings()->with(['category', 'location'])->latest()->get();
+        $listings = $contact->listings()->with(['category', 'brand', 'location'])->latest()->get();
 
         return view('supplier.listings-index', [
             'contact' => $contact,
@@ -50,6 +51,7 @@ class SupplierListingController extends Controller
         return view('supplier.listing-edit', [
             'listing' => $listing,
             'categories' => Category::query()->orderBy('name')->get(),
+            'brands' => Brand::query()->orderBy('name')->get(),
             'editable' => $this->isEditable($listing),
             'indexUrl' => $this->links->myListingsUrl($listing->supplier),
             'updateUrl' => $this->links->updateUrl($listing),

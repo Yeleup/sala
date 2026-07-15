@@ -46,8 +46,13 @@ class ListingForm
                     ->required()
                     ->live()
                     // Switching the type invalidates the picked category —
-                    // the dictionary types each category.
-                    ->afterStateUpdated(fn (Set $set) => $set('category_id', null))
+                    // the dictionary types each category. The brand must be
+                    // cleared here too: hiding its field alone would keep a
+                    // stale brand on a listing switched to «услуга».
+                    ->afterStateUpdated(function (Set $set): void {
+                        $set('category_id', null);
+                        $set('brand_id', null);
+                    })
                     ->validationMessages(['required' => 'Выберите тип объявления.']),
                 Select::make('category_id')
                     ->label('Категория')
@@ -61,6 +66,14 @@ class ListingForm
                     ->preload()
                     ->placeholder('Без категории')
                     ->helperText('Список зависит от выбранного типа.'),
+                Select::make('brand_id')
+                    ->label('Марка')
+                    ->relationship('brand', 'name')
+                    ->searchable()
+                    ->preload()
+                    ->placeholder('Без марки')
+                    ->helperText('Марка есть только у техники.')
+                    ->visible(fn (Get $get): bool => self::isEquipment($get('type'))),
                 Textarea::make('description')
                     ->label('Описание')
                     ->rows(4)
@@ -110,5 +123,14 @@ class ListingForm
                     ->reorderable(false)
                     ->columnSpanFull(),
             ]);
+    }
+
+    /**
+     * A live Select holds the raw option value while a hydrated record
+     * holds the cast enum — the visibility check must accept both.
+     */
+    private static function isEquipment(mixed $type): bool
+    {
+        return ($type instanceof ListingType ? $type : ListingType::tryFrom((string) $type)) === ListingType::Equipment;
     }
 }

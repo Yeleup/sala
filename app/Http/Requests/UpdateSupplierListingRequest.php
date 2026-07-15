@@ -26,6 +26,18 @@ class UpdateSupplierListingRequest extends FormRequest
     }
 
     /**
+     * Services carry no brand: a brand left over from the equipment state
+     * of the form is dropped silently — the field is optional, so unlike
+     * the category it must never block the submission.
+     */
+    protected function prepareForValidation(): void
+    {
+        if ($this->input('type') === ListingType::Service->value) {
+            $this->merge(['brand_id' => null]);
+        }
+    }
+
+    /**
      * @return array<string, array<int, mixed>>
      */
     public function rules(): array
@@ -38,6 +50,7 @@ class UpdateSupplierListingRequest extends FormRequest
                 // A listing's category must carry the listing's type.
                 Rule::exists('categories', 'id')->where('type', (string) $this->input('type')),
             ],
+            'brand_id' => ['nullable', 'integer', Rule::exists('brands', 'id')],
             'description' => ['required', 'string', 'max:2000'],
             'location_id' => ['required', 'integer', Rule::exists('locations', 'id')],
             'location_detail' => ['nullable', 'string', 'max:255'],
@@ -92,6 +105,8 @@ class UpdateSupplierListingRequest extends FormRequest
             'enum' => 'Выберите тип: техника или услуга.',
             'category_id.integer' => 'Выберите категорию из списка.',
             'category_id.exists' => 'Категория не соответствует выбранному типу — выберите категорию из списка нужного типа.',
+            'brand_id.integer' => 'Выберите марку из списка.',
+            'brand_id.exists' => 'Выберите марку из списка.',
             'location_id.integer' => 'Выберите локацию из подсказок.',
             'location_id.exists' => 'Выберите локацию из подсказок.',
             'photos.*.image' => 'Файл «:attribute» не является изображением.',
@@ -108,6 +123,7 @@ class UpdateSupplierListingRequest extends FormRequest
         return [
             'type' => 'тип',
             'category_id' => 'категория',
+            'brand_id' => 'марка',
             'description' => 'описание',
             'location_id' => 'локация',
             'location_detail' => 'уточнение адреса',

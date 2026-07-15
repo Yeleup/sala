@@ -268,6 +268,65 @@ describe('редактирование', function () {
         expect($listing->refresh())->status->toBe(ListingStatus::Draft);
     });
 
+    test('марка сохраняется вместе с объявлением', function () {
+        $listing = Listing::factory()->create();
+
+        $response = $this->post(portalLinks()->updateUrl($listing), supplierListingPayload($listing, [
+            'brand_id' => brandNamed('Hitachi')->id,
+        ]));
+
+        $response->assertRedirect();
+        expect($listing->refresh())
+            ->status->toBe(ListingStatus::PendingModeration)
+            ->brand->name->toBe('Hitachi');
+    });
+
+    test('марка необязательна — без неё объявление уходит на модерацию', function () {
+        $listing = Listing::factory()->create();
+
+        $this->post(portalLinks()->updateUrl($listing), supplierListingPayload($listing));
+
+        expect($listing->refresh())
+            ->status->toBe(ListingStatus::PendingModeration)
+            ->brand_id->toBeNull();
+    });
+
+    test('марка вне справочника не принимается', function () {
+        $listing = Listing::factory()->create();
+
+        $response = $this->post(portalLinks()->updateUrl($listing), supplierListingPayload($listing, [
+            'brand_id' => 999999,
+        ]));
+
+        $response->assertSessionHasErrors(['brand_id']);
+        expect($listing->refresh())->status->toBe(ListingStatus::Draft);
+    });
+
+    test('смена типа на услугу молча сбрасывает марку', function () {
+        $listing = Listing::factory()->create(['brand_id' => brandNamed('Hitachi')->id]);
+
+        $response = $this->post(portalLinks()->updateUrl($listing), supplierListingPayload($listing, [
+            'type' => ListingType::Service->value,
+            'category_id' => categoryNamed('Сварщик', ListingType::Service)->id,
+            'brand_id' => $listing->brand_id,
+        ]));
+
+        $response->assertSessionDoesntHaveErrors();
+        expect($listing->refresh())
+            ->status->toBe(ListingStatus::PendingModeration)
+            ->brand_id->toBeNull();
+    });
+
+    test('форма показывает выбор марки, когда справочник заполнен', function () {
+        brandNamed('Hitachi');
+        $listing = Listing::factory()->create();
+
+        $this->get(portalLinks()->editUrl($listing))
+            ->assertOk()
+            ->assertSee('Марка (необязательно)')
+            ->assertSee('Hitachi');
+    });
+
     test('опубликованное объявление сохранить нельзя', function () {
         $listing = Listing::factory()->published()->create();
 

@@ -37,7 +37,7 @@ class ListingMatcher
 
         return Listing::query()
             ->searchable()
-            ->with(['supplier', 'category', 'location'])
+            ->with(['supplier', 'category', 'brand', 'location'])
             ->when($within, fn (Builder $builder): Builder => $builder->whereHas(
                 'location',
                 fn (Builder $location) => $location->where('path', 'like', $within->path.'%'),
@@ -61,6 +61,7 @@ class ListingMatcher
     {
         $haystack = Str::lower(implode(' ', array_filter([
             $listing->category?->name,
+            $listing->brand?->name,
             $listing->description,
             $listing->location?->name,
             $listing->location?->search_name,

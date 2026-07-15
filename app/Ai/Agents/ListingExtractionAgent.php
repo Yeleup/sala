@@ -18,9 +18,10 @@ use Stringable;
  *
  * The extractor never invents data: a field it cannot find stays null, and
  * clarifying_question names the single most important missing field so the
- * collector can ask for it. The category is constrained to the operator's
- * dictionary both in the prompt and in the response schema, so the model
- * physically cannot return a category outside the list.
+ * collector can ask for it. The category and the brand are constrained to
+ * the operator's dictionaries both in the prompt and in the response
+ * schema, so the model physically cannot return a value outside the lists.
+ * Unlike the category, the brand is optional and never asked about.
  */
 #[Temperature(0.1)]
 class ListingExtractionAgent implements Agent, HasStructuredOutput
@@ -29,10 +30,12 @@ class ListingExtractionAgent implements Agent, HasStructuredOutput
 
     /**
      * @param  list<string>  $categories  Dictionary of allowed category names.
+     * @param  list<string>  $brands  Dictionary of allowed equipment brand names.
      */
     public function __construct(
         private readonly ?ListingType $expectedType = null,
         private readonly array $categories = [],
+        private readonly array $brands = [],
     ) {}
 
     public function instructions(): Stringable|string
@@ -52,6 +55,17 @@ class ListingExtractionAgent implements Agent, HasStructuredOutput
                 $this->categories,
             ));
 
+        $brandHint = $this->brands === []
+            ? 'справочник марок пуст — всегда оставляй brand равным null.'
+            : 'марка (производитель) техники, если поставщик назвал её текстом или голосом, — СТРОГО из списка ниже, дословно. Не выдумывай марку и не угадывай её по фото или модели; если марка не названа, её нет в списке или это услуга — оставь null. Марка необязательна: никогда не задавай уточняющий вопрос про неё.';
+
+        $brandList = $this->brands === []
+            ? ''
+            : "\n\nДоступные марки (только из этого списка):\n".implode("\n", array_map(
+                fn (string $brand): string => '- '.$brand,
+                $this->brands,
+            ));
+
         return <<<PROMPT
         Ты — оператор сервиса аренды спецтехники и услуг. Из сообщений поставщика на русском или
         казахском извлеки поля объявления. Поставщик пишет свободным текстом, наговаривает голосом
@@ -61,6 +75,7 @@ class ListingExtractionAgent implements Agent, HasStructuredOutput
         Поля:
         - type: {$typeHint}
         - category: {$categoryHint}
+        - brand: {$brandHint}
         - description: суть предложения своими словами, кратко.
         - location: где находится техника или оказывается услуга — ТОЛЬКО название места в именительном
           падеже, без слов «в», «город», «село»: «Шымкент», «Аксуат», «Ауэзовский район». Самое точное из
@@ -74,7 +89,8 @@ class ListingExtractionAgent implements Agent, HasStructuredOutput
         - Учитывай все сообщения поставщика вместе, более поздние уточняют более ранние.
         - clarifying_question: если не хватает category, description, location или price — задай ОДИН короткий
           вопрос на русском про самое важное недостающее поле. Если всё есть — пустая строка.
-        - summary: короткая сводка объявления на русском для подтверждения («Трактор, Шымкент, 10000 тг/ч»).{$categoryList}
+        - summary: короткая сводка объявления на русском для подтверждения, с маркой, если она есть
+          («Трактор Hitachi, Шымкент, 10000 тг/ч»).{$categoryList}{$brandList}
         PROMPT;
     }
 
@@ -88,6 +104,9 @@ class ListingExtractionAgent implements Agent, HasStructuredOutput
             'category' => $this->categories === []
                 ? $schema->string()->nullable()
                 : $schema->string()->enum($this->categories)->nullable(),
+            'brand' => $this->brands === []
+                ? $schema->string()->nullable()
+                : $schema->string()->enum($this->brands)->nullable(),
             'description' => $schema->string()->nullable(),
             'location' => $schema->string()->nullable(),
             'location_detail' => $schema->string()->nullable(),

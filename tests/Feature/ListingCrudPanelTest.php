@@ -6,6 +6,7 @@ use App\Enums\ListingType;
 use App\Filament\Resources\Listings\Pages\CreateListing;
 use App\Filament\Resources\Listings\Pages\EditListing;
 use App\Filament\Resources\Listings\Pages\ListListings;
+use App\Models\Brand;
 use App\Models\Category;
 use App\Models\Contact;
 use App\Models\CustomerRequest;
@@ -73,6 +74,35 @@ test('оператор редактирует бизнес-поля объявл
         ->category->name->toBe('Экскаватор')
         ->description->toBe('Гусеничный экскаватор')
         ->price->toBe('15000 тг/ч');
+});
+
+test('оператор задаёт объявлению марку из справочника', function () {
+    $listing = Listing::factory()->create();
+    $brand = Brand::factory()->create(['name' => 'Hitachi']);
+
+    Livewire::test(EditListing::class, ['record' => $listing->id])
+        ->fillForm(['brand_id' => $brand->id])
+        ->call('save')
+        ->assertHasNoFormErrors();
+
+    expect($listing->refresh())->brand->name->toBe('Hitachi');
+});
+
+test('смена типа на услугу убирает марку с объявления', function () {
+    $listing = Listing::factory()->create(['brand_id' => Brand::factory()->create()->id]);
+    $serviceCategory = Category::factory()->service()->create();
+
+    Livewire::test(EditListing::class, ['record' => $listing->id])
+        ->fillForm([
+            'type' => ListingType::Service->value,
+            'category_id' => $serviceCategory->id,
+        ])
+        ->call('save')
+        ->assertHasNoFormErrors();
+
+    expect($listing->refresh())
+        ->type->toBe(ListingType::Service)
+        ->brand_id->toBeNull();
 });
 
 test('оператор добавляет фото объявлению через форму', function () {

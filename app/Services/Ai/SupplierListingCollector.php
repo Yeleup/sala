@@ -7,6 +7,7 @@ use App\Enums\AiOutcome;
 use App\Enums\ListingMediaType;
 use App\Enums\ListingType;
 use App\Models\BotSession;
+use App\Models\Brand;
 use App\Models\Category;
 use App\Models\Listing;
 use App\Models\ListingMedia;
@@ -398,13 +399,19 @@ class SupplierListingCollector
             ->orderBy('name')
             ->get();
 
+        // Services carry no brand, so the service branch never sees the
+        // brand dictionary at all.
+        $brands = $expectedType === ListingType::Service
+            ? new Collection
+            : Brand::query()->orderBy('name')->get();
+
         $prompt = $state['transcript'] !== []
             ? implode("\n", $state['transcript'])
             : 'Поставщик прислал только фотографии — извлеки из них, что сможешь.';
 
         $fields = $this->audit->run(
             AiOperationType::ListingExtraction,
-            fn (): array => (new ListingExtractionAgent($expectedType, $categories->pluck('name')->all()))
+            fn (): array => (new ListingExtractionAgent($expectedType, $categories->pluck('name')->all(), $brands->pluck('name')->all()))
                 ->prompt($prompt, attachments: $this->photoAttachments($state))
                 ->toArray(),
             [
@@ -423,6 +430,12 @@ class SupplierListingCollector
         if ($category !== null) {
             $fields['type'] = $category->type->value;
         }
+
+        // The brand check runs after the type is settled: a category that
+        // resolved the listing into a service drops the brand with it.
+        $fields['brand'] = ($fields['type'] ?? null) === ListingType::Service->value
+            ? null
+            : $this->canonicalBrand($fields['brand'] ?? null, $brands)?->name;
 
         return $this->resolveLocation($fields);
     }
@@ -475,6 +488,28 @@ class SupplierListingCollector
 
         return $categories->first(
             fn (Category $category): bool => mb_strtolower($category->name) === $needle,
+        );
+    }
+
+    /**
+     * The brand dictionary is the only source of truth: a value the
+     * extractor returned is kept only when it matches an offered brand
+     * (the schema enum already enforces this — the lookup is a safety net),
+     * normalized to the dictionary spelling. Unlike the category, a
+     * dropped brand is never asked about — the field is optional.
+     *
+     * @param  Collection<int, Brand>  $brands
+     */
+    private function canonicalBrand(mixed $name, Collection $brands): ?Brand
+    {
+        if (blank($name) || ! is_string($name)) {
+            return null;
+        }
+
+        $needle = mb_strtolower(trim($name));
+
+        return $brands->first(
+            fn (Brand $brand): bool => mb_strtolower($brand->name) === $needle,
         );
     }
 
@@ -542,7 +577,7 @@ class SupplierListingCollector
 
     /**
      * @param  array<string, mixed>  $state
-     * @return array{type: string, category_id: ?int, description: ?string, location_id: ?int, location_detail: ?string, price: ?string}
+     * @return array{type: string, category_id: ?int, brand_id: ?int, description: ?string, location_id: ?int, location_detail: ?string, price: ?string}
      */
     private function listingAttributes(array $state): array
     {
@@ -552,6 +587,9 @@ class SupplierListingCollector
             'type' => $this->resolveType($state)->value,
             'category_id' => filled($fields['category'] ?? null)
                 ? Category::query()->where('name', $fields['category'])->value('id')
+                : null,
+            'brand_id' => $this->resolveType($state) === ListingType::Equipment && filled($fields['brand'] ?? null)
+                ? Brand::query()->where('name', $fields['brand'])->value('id')
                 : null,
             'description' => $fields['description'] ?? null,
             'location_id' => $fields['location_id'] ?? null,
@@ -588,7 +626,9 @@ class SupplierListingCollector
      */
     private function buildSummary(array $fields): string
     {
-        return collect([$fields['category'] ?? null, $fields['location'] ?? null, $fields['price'] ?? null])
+        $offer = collect([$fields['category'] ?? null, $fields['brand'] ?? null])->filter()->implode(' ');
+
+        return collect([$offer, $fields['location'] ?? null, $fields['price'] ?? null])
             ->filter()
             ->implode(', ');
     }

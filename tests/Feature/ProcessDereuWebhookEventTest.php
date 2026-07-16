@@ -54,6 +54,34 @@ test('an interactive reply reaches the engine with its option id', function () {
     ]));
 });
 
+test('an interactive reply Meta could not deliver reaches the engine as an unrecognized press', function () {
+    test()->mock(BotEngine::class)
+        ->shouldReceive('handle')->once()
+        ->withArgs(fn (Contact $contact, InboundMessage $message) => $message->unrecognizedPress === true
+            && $message->replyId === null
+            && $message->text === null);
+
+    runDereuWebhookJob(inboundMessageEvent([
+        'type' => 'interactive',
+        'payload' => [
+            'errors' => [
+                ['code' => 131000, 'title' => 'Something went wrong', 'error_data' => ['details' => 'Unsupported webhook payload']],
+            ],
+        ],
+    ]));
+});
+
+test('an interactive event with a null payload reaches the engine as an unrecognized press', function () {
+    test()->mock(BotEngine::class)
+        ->shouldReceive('handle')->once()
+        ->withArgs(fn (Contact $contact, InboundMessage $message) => $message->unrecognizedPress === true);
+
+    runDereuWebhookJob(inboundMessageEvent([
+        'type' => 'interactive',
+        'payload' => null,
+    ]));
+});
+
 test('an already processed event is not processed again', function () {
     test()->mock(BotEngine::class)->shouldNotReceive('handle');
 

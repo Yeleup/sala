@@ -134,6 +134,59 @@ test('an unrecognized reply without a fallback repeats the current step', functi
     expect($session->fresh()->current_node_id)->toBe('menu');
 });
 
+test('a free-text digit picks the option at that position', function () {
+    $scenario = BotScenario::factory()->published(botMenuDefinition())->create();
+    $contact = Contact::factory()->create();
+    botSessionWaitingAt($scenario, $contact, 'menu');
+
+    fakeBotMessenger()->shouldReceive('sendText')->once()
+        ->withArgs(fn (Contact $to, string $text) => $text === 'Ветка заказчика');
+
+    app(BotEngine::class)->handle($contact, new InboundMessage(text: '2'));
+});
+
+test('a digit outside the option range is treated as an unmatched reply', function () {
+    $scenario = BotScenario::factory()->published(botMenuDefinition())->create();
+    $contact = Contact::factory()->create();
+    $session = botSessionWaitingAt($scenario, $contact, 'menu');
+
+    fakeBotMessenger()->shouldReceive('sendButtons')->once()
+        ->withArgs(fn (Contact $to, string $text) => $text === 'Кто вы?');
+
+    app(BotEngine::class)->handle($contact, new InboundMessage(text: '9'));
+
+    expect($session->fresh()->current_node_id)->toBe('menu');
+});
+
+test('an option titled with a digit is matched by its title over the numeric index', function () {
+    $definition = [
+        'nodes' => [
+            ['id' => 'start', 'type' => 'start'],
+            ['id' => 'menu', 'type' => 'buttons', 'text' => 'Выберите', 'options' => [
+                ['id' => 'first', 'title' => 'Первый'],
+                ['id' => 'literal_one', 'title' => '1'],
+            ]],
+            ['id' => 'first_branch', 'type' => 'text', 'text' => 'Ветка первого'],
+            ['id' => 'literal_branch', 'type' => 'text', 'text' => 'Ветка «1»'],
+        ],
+        'edges' => [
+            ['from' => 'start', 'output' => 'continue', 'to' => 'menu'],
+            ['from' => 'menu', 'output' => 'option:first', 'to' => 'first_branch'],
+            ['from' => 'menu', 'output' => 'option:literal_one', 'to' => 'literal_branch'],
+        ],
+    ];
+    $scenario = BotScenario::factory()->published($definition)->create();
+    $contact = Contact::factory()->create();
+    botSessionWaitingAt($scenario, $contact, 'menu');
+
+    // «1» is the title of the second option — it must win over "pick option
+    // number 1" (which would be «Первый»).
+    fakeBotMessenger()->shouldReceive('sendText')->once()
+        ->withArgs(fn (Contact $to, string $text) => $text === 'Ветка «1»');
+
+    app(BotEngine::class)->handle($contact, new InboundMessage(text: '1'));
+});
+
 test('picking a list row moves the contact along that output', function () {
     $definition = [
         'nodes' => [
@@ -443,6 +496,93 @@ test('a button that is not in the current graph tells the contact it is stale an
     app(BotEngine::class)->handle($contact, new InboundMessage(text: 'Устаревшая кнопка', replyId: 'ghost_from_old_version'));
 
     expect($session->fresh()->current_node_id)->toBe('menu');
+});
+
+test('an unrecognized button press at a menu step explains and repeats it as numbered text', function () {
+    $scenario = BotScenario::factory()->published(botMenuDefinition())->create();
+    $contact = Contact::factory()->create();
+    $session = botSessionWaitingAt($scenario, $contact, 'menu');
+
+    $messenger = fakeBotMessenger();
+    $messenger->shouldReceive('sendText')->once()
+        ->withArgs(fn (Contact $to, string $text) => str_contains($text, 'Ответьте цифрой'));
+    $messenger->shouldReceive('sendText')->once()
+        ->withArgs(fn (Contact $to, string $text) => str_contains($text, 'Кто вы?')
+            && str_contains($text, '1. Поставщик')
+            && str_contains($text, '2. Заказчик'));
+
+    app(BotEngine::class)->handle($contact, new InboundMessage(unrecognizedPress: true));
+
+    expect($session->fresh()->current_node_id)->toBe('menu');
+});
+
+test('a digit reply picks the first option, restoring the dialog after an earlier unrecognized press', function () {
+    $scenario = BotScenario::factory()->published(botMenuDefinition())->create();
+    $contact = Contact::factory()->create();
+    botSessionWaitingAt($scenario, $contact, 'menu');
+
+    fakeBotMessenger()->shouldReceive('sendText')->once()
+        ->withArgs(fn (Contact $to, string $text) => $text === 'Ветка поставщика');
+
+    app(BotEngine::class)->handle($contact, new InboundMessage(text: '1'));
+});
+
+test('an unrecognized button press at an AI block asks to type and leaves the AI state untouched', function () {
+    $scenario = BotScenario::factory()->published(botMenuWithAiDefinition())->create();
+    $contact = Contact::factory()->create();
+    $session = botSessionWaitingAt($scenario, $contact, 'search');
+    $session->update(['state' => ['phase' => 'searching', 'attempts' => 1, 'query' => 'кран']]);
+
+    $assistant = test()->mock(AiAssistant::class);
+    $assistant->shouldNotReceive('start');
+    $assistant->shouldNotReceive('resume');
+
+    fakeBotMessenger()->shouldReceive('sendText')->once()
+        ->withArgs(fn (Contact $to, string $text) => str_contains($text, 'напишите'));
+
+    app(BotEngine::class)->handle($contact, new InboundMessage(unrecognizedPress: true));
+
+    expect($session->fresh())
+        ->current_node_id->toBe('search')
+        ->state->toBe(['phase' => 'searching', 'attempts' => 1, 'query' => 'кран']);
+});
+
+test('an unrecognized button press with no active dialog explains and starts a new one', function () {
+    BotScenario::factory()->published(botMenuDefinition())->create();
+    $contact = Contact::factory()->create();
+
+    $messenger = fakeBotMessenger();
+    $messenger->shouldReceive('sendText')->once()
+        ->withArgs(fn (Contact $to, string $text) => str_contains($text, 'заявки') || str_contains($text, 'объявлении'));
+    $messenger->shouldReceive('sendText')->once()
+        ->withArgs(fn (Contact $to, string $text) => $text === 'Привет!');
+    $messenger->shouldReceive('sendButtons')->once();
+
+    app(BotEngine::class)->handle($contact, new InboundMessage(unrecognizedPress: true));
+
+    expect(BotSession::sole()->current_node_id)->toBe('menu');
+});
+
+test('an unrecognized button press after a finished dialog explains and starts a new one', function () {
+    $scenario = BotScenario::factory()->published(botMenuDefinition())->create();
+    $contact = Contact::factory()->create();
+    BotSession::factory()->create([
+        'contact_id' => $contact->id,
+        'bot_scenario_id' => $scenario->id,
+        'scenario_version' => 1,
+        'current_node_id' => null,
+    ]);
+
+    $messenger = fakeBotMessenger();
+    $messenger->shouldReceive('sendText')->once()
+        ->withArgs(fn (Contact $to, string $text) => str_contains($text, 'заявки') || str_contains($text, 'объявлении'));
+    $messenger->shouldReceive('sendText')->once()
+        ->withArgs(fn (Contact $to, string $text) => $text === 'Привет!');
+    $messenger->shouldReceive('sendButtons')->once();
+
+    app(BotEngine::class)->handle($contact, new InboundMessage(unrecognizedPress: true));
+
+    expect(BotSession::sole()->current_node_id)->toBe('menu');
 });
 
 test('a runtime button unknown to the graph still reaches the AI block that owns it', function () {

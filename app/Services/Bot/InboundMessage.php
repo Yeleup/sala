@@ -13,6 +13,12 @@ use App\Models\DereuWebhookEvent;
  * option, so title matching works either way; for media — the caption).
  * mediaId/mediaType are set for photo and voice messages so the AI
  * assistant can download and process them.
+ *
+ * unrecognizedPress is set when a button/list press could not be resolved:
+ * Meta fails to deliver button_reply content for some WhatsApp Web devices
+ * migrated to LID identifiers, forwarding an error object instead (or,
+ * previously, an empty payload). Which button was pressed is unrecoverable;
+ * text and replyId stay empty.
  */
 class InboundMessage
 {
@@ -21,6 +27,7 @@ class InboundMessage
         public readonly ?string $replyId = null,
         public readonly ?ListingMediaType $mediaType = null,
         public readonly ?string $mediaId = null,
+        public readonly bool $unrecognizedPress = false,
     ) {}
 
     public static function fromWebhookEvent(DereuWebhookEvent $event): self
@@ -52,7 +59,7 @@ class InboundMessage
         $reply = $payload['button_reply'] ?? $payload['list_reply'] ?? null;
 
         if (! is_array($reply)) {
-            return new self();
+            return new self(unrecognizedPress: true);
         }
 
         return new self(text: $reply['title'] ?? null, replyId: $reply['id'] ?? null);

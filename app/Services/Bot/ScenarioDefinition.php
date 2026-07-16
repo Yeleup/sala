@@ -197,8 +197,11 @@ class ScenarioDefinition
 
     /**
      * Match an inbound message against the block's options: by the pressed
-     * button / picked row id, or by free text equal to an option title
-     * (case-insensitive, trimmed — per the constructor rules).
+     * button / picked row id, by free text equal to an option title
+     * (case-insensitive, trimmed — per the constructor rules), or by a
+     * free-text number N picking the N-th option (1-indexed) — title match
+     * takes priority, so an option titled with a digit stays reachable by
+     * its title.
      *
      * @param  array<string, mixed>  $node
      */
@@ -223,6 +226,14 @@ class ScenarioDefinition
         foreach ($options as $option) {
             if (mb_strtolower(trim($option['title'])) === $text) {
                 return $option['id'];
+            }
+        }
+
+        if (ctype_digit($text)) {
+            $index = ((int) $text) - 1;
+
+            if (isset($options[$index])) {
+                return $options[$index]['id'];
             }
         }
 

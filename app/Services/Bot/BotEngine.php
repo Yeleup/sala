@@ -30,6 +30,17 @@ class BotEngine
 
     private const string STALE_BUTTON_NOTICE = 'Эта кнопка из прежней версии бота и больше не действует.';
 
+    /**
+     * Meta fails to deliver which button was pressed for some WhatsApp Web
+     * devices migrated to LID identifiers (escalated to Meta, no ETA) — the
+     * choice is unrecoverable, so the contact is asked to answer again.
+     */
+    private const string UNRECOGNIZED_PRESS_MENU_NOTICE = 'Не получилось распознать нажатие кнопки (такое бывает в WhatsApp Web). Ответьте цифрой:';
+
+    private const string UNRECOGNIZED_PRESS_AI_NOTICE = 'Не получилось распознать нажатие кнопки — напишите, пожалуйста, текстом.';
+
+    private const string UNRECOGNIZED_PRESS_IDLE_NOTICE = 'Не получилось распознать нажатие кнопки. Если это была кнопка из уведомления о заявке или объявлении — ответьте, пожалуйста, с телефона.';
+
     public function __construct(
         private readonly DereuMessenger $messenger,
         private readonly AiAssistant $aiAssistant,
@@ -62,6 +73,10 @@ class BotEngine
         $session = BotSession::query()->firstOrNew(['contact_id' => $contact->id]);
 
         if ($this->startsNewDialog($session, $scenario, $definition)) {
+            if ($message->unrecognizedPress) {
+                $this->messenger->sendText($contact, self::UNRECOGNIZED_PRESS_IDLE_NOTICE);
+            }
+
             $this->restart($session, $contact, $scenario, $definition);
 
             return;
@@ -74,6 +89,15 @@ class BotEngine
 
         $node = $definition->node($session->current_node_id);
         $type = $definition->nodeType($node);
+
+        // A button press Meta could not deliver content for cannot be
+        // resolved (no token, no title) — handle it before routing/AI/
+        // matchOption, so it is never treated as free text or an AI answer.
+        if ($message->unrecognizedPress) {
+            $this->handleUnrecognizedPress($session, $contact, $scenario, $definition, $node, $type);
+
+            return;
+        }
 
         // A pressed scenario button routes by its machine id — even when it
         // came from an earlier bot message and no longer matches the block
@@ -168,6 +192,52 @@ class BotEngine
 
         // Nothing awaited — start a fresh dialog from «Старт».
         $this->restart($session, $contact, $scenario, $definition);
+    }
+
+    /**
+     * A button press whose content Meta failed to deliver: repeat the step
+     * with an explanation so the contact can answer again, without ever
+     * feeding the unresolved press into matchOption or the AI assistant.
+     *
+     * @param  array<string, mixed>|null  $node
+     */
+    private function handleUnrecognizedPress(BotSession $session, Contact $contact, BotScenario $scenario, ScenarioDefinition $definition, ?array $node, ?BotNodeType $type): void
+    {
+        if ($type === BotNodeType::AiInput) {
+            $this->messenger->sendText($contact, self::UNRECOGNIZED_PRESS_AI_NOTICE);
+            $session->save();
+
+            return;
+        }
+
+        if ($node !== null && $type?->waitsForInput() === true) {
+            $this->messenger->sendText($contact, self::UNRECOGNIZED_PRESS_MENU_NOTICE);
+            $this->sendNumberedMenu($contact, $definition, $node);
+            $session->save();
+
+            return;
+        }
+
+        $this->messenger->sendText($contact, self::UNRECOGNIZED_PRESS_IDLE_NOTICE);
+        $this->restart($session, $contact, $scenario, $definition);
+    }
+
+    /**
+     * The same block a button-menu step would send, but as plain numbered
+     * text — the fallback when the contact cannot press buttons (their
+     * press was lost) and must answer with a digit instead.
+     *
+     * @param  array<string, mixed>  $node
+     */
+    private function sendNumberedMenu(Contact $contact, ScenarioDefinition $definition, array $node): void
+    {
+        $lines = [(string) ($node['text'] ?? '')];
+
+        foreach ($definition->options($node) as $index => $option) {
+            $lines[] = ($index + 1).'. '.($option['title'] ?? '');
+        }
+
+        $this->messenger->sendText($contact, trim(implode("\n", array_filter($lines, fn (string $line): bool => $line !== ''))));
     }
 
     /**

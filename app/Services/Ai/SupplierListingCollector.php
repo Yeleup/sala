@@ -18,6 +18,7 @@ use App\Services\Ai\Audit\AiAudit;
 use App\Services\DereuMediaDownloader;
 use App\Services\DereuMessenger;
 use App\Services\Locations\LocationResolver;
+use App\Support\WhatsappText;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
@@ -254,10 +255,10 @@ class SupplierListingCollector
             ->get()
             ->map(fn (Location $location): array => array_filter([
                 'id' => self::LOCATION_ROW_PREFIX.$location->id,
-                'title' => Str::limit($location->name, 23),
-                'description' => Str::limit(
+                'title' => WhatsappText::clamp($location->name, 24),
+                'description' => WhatsappText::clamp(
                     $location->ancestors()->sortByDesc('depth')->pluck('name')->implode(', '),
-                    71,
+                    72,
                 ) ?: null,
             ]))
             ->values()

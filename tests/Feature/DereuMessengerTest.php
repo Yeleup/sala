@@ -112,6 +112,87 @@ test('a list is sent as an interactive list message with a single section', func
         ]);
 });
 
+test('an interactive list clamps oversized fields to WhatsApp limits, ellipsis included', function () {
+    fakeDereuSendAccepted();
+    connectedDereuCompany();
+    $contact = Contact::factory()->withOpenSessionWindow()->create();
+
+    $longTitle = str_repeat('Экскаваторы гусеничные ', 3); // well over 24 chars, multibyte
+    $longDescription = str_repeat('Алматы, ул. Абая, ', 6); // well over 72 chars, multibyte
+
+    app(DereuMessenger::class)->sendList($contact, 'Выберите категорию', str_repeat('Категории техники ', 3), [
+        ['id' => str_repeat('x', 250), 'title' => $longTitle, 'description' => $longDescription],
+    ]);
+
+    Http::assertSent(function (Request $request) {
+        $row = $request['payload']['action']['sections'][0]['rows'][0];
+
+        expect(mb_strlen($row['id']))->toBeLessThanOrEqual(200)
+            ->and(mb_strlen($row['title']))->toBeLessThanOrEqual(24)
+            ->and($row['title'])->toEndWith('…')
+            ->and(mb_strlen($row['description']))->toBeLessThanOrEqual(72)
+            ->and($row['description'])->toEndWith('…')
+            ->and(mb_strlen($request['payload']['action']['button']))->toBeLessThanOrEqual(20);
+
+        return true;
+    });
+});
+
+test('interactive buttons clamp oversized titles and body to WhatsApp limits', function () {
+    fakeDereuSendAccepted();
+    connectedDereuCompany();
+    $contact = Contact::factory()->withOpenSessionWindow()->create();
+
+    $longBody = str_repeat('Уточните, пожалуйста, ваш выбор из предложенных вариантов. ', 30);
+    $longTitle = 'Очень длинное название кнопки, которое точно превышает лимит';
+
+    app(DereuMessenger::class)->sendButtons($contact, $longBody, [
+        ['id' => 'supplier', 'title' => $longTitle],
+    ]);
+
+    Http::assertSent(function (Request $request) {
+        expect(mb_strlen($request['payload']['body']['text']))->toBeLessThanOrEqual(1024);
+
+        $reply = $request['payload']['action']['buttons'][0]['reply'];
+        expect(mb_strlen($reply['title']))->toBeLessThanOrEqual(20)
+            ->and($reply['title'])->toEndWith('…');
+
+        return true;
+    });
+});
+
+test('a cta_url button text is clamped to the WhatsApp limit', function () {
+    fakeDereuSendAccepted();
+    connectedDereuCompany();
+    $contact = Contact::factory()->withOpenSessionWindow()->create();
+
+    app(DereuMessenger::class)->sendCtaUrl($contact, 'Откройте форму', 'Очень длинный текст кнопки', 'https://app.test/form');
+
+    Http::assertSent(function (Request $request) {
+        $displayText = $request['payload']['action']['parameters']['display_text'];
+        expect(mb_strlen($displayText))->toBeLessThanOrEqual(20)
+            ->and($displayText)->toEndWith('…');
+
+        return true;
+    });
+});
+
+test('short interactive texts are left untouched', function () {
+    fakeDereuSendAccepted();
+    connectedDereuCompany();
+    $contact = Contact::factory()->withOpenSessionWindow()->create();
+
+    app(DereuMessenger::class)->sendList($contact, 'Выберите', 'Категории', [
+        ['id' => 'crane', 'title' => 'Кран', 'description' => 'Алматы'],
+    ]);
+
+    Http::assertSent(fn (Request $request) => $request['payload']['action']['sections'][0]['rows'][0] === [
+        'id' => 'crane',
+        'title' => 'Кран',
+        'description' => 'Алматы',
+    ]);
+});
+
 test('sending fails when no company is connected', function () {
     Http::fake();
     $contact = Contact::factory()->withOpenSessionWindow()->create();

@@ -9,6 +9,7 @@ use App\Models\ChannelMessage;
 use App\Models\Contact;
 use App\Models\DereuCompany;
 use App\Models\WhatsappTemplate;
+use App\Support\WhatsappText;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\PendingRequest;
 use Illuminate\Support\Facades\Http;
@@ -25,6 +26,21 @@ use RuntimeException;
  */
 class DereuMessenger
 {
+    /** WhatsApp Cloud API interactive field limits — sending anything longer fails the whole request. */
+    private const int BUTTON_TITLE_LIMIT = 20;
+
+    private const int BUTTON_ID_LIMIT = 256;
+
+    private const int BODY_LIMIT = 1024;
+
+    private const int LIST_BODY_LIMIT = 4096;
+
+    private const int LIST_ROW_ID_LIMIT = 200;
+
+    private const int LIST_ROW_TITLE_LIMIT = 24;
+
+    private const int LIST_ROW_DESCRIPTION_LIMIT = 72;
+
     public function __construct(private readonly WhatsappCostEstimator $costs) {}
 
     public function sendText(Contact $contact, string $text): void
@@ -39,11 +55,14 @@ class DereuMessenger
     {
         $this->send($contact, 'interactive', [
             'type' => 'button',
-            'body' => ['text' => $text],
+            'body' => ['text' => WhatsappText::clamp($text, self::BODY_LIMIT)],
             'action' => [
                 'buttons' => array_map(fn (array $button): array => [
                     'type' => 'reply',
-                    'reply' => ['id' => $button['id'], 'title' => $button['title']],
+                    'reply' => [
+                        'id' => WhatsappText::clamp($button['id'], self::BUTTON_ID_LIMIT),
+                        'title' => WhatsappText::clamp($button['title'], self::BUTTON_TITLE_LIMIT),
+                    ],
                 ], $buttons),
             ],
         ]);
@@ -59,10 +78,13 @@ class DereuMessenger
     {
         $this->send($contact, 'interactive', [
             'type' => 'cta_url',
-            'body' => ['text' => $text],
+            'body' => ['text' => WhatsappText::clamp($text, self::BODY_LIMIT)],
             'action' => [
                 'name' => 'cta_url',
-                'parameters' => ['display_text' => $buttonText, 'url' => $url],
+                'parameters' => [
+                    'display_text' => WhatsappText::clamp($buttonText, self::BUTTON_TITLE_LIMIT),
+                    'url' => $url,
+                ],
             ],
         ]);
     }
@@ -74,15 +96,17 @@ class DereuMessenger
     {
         $this->send($contact, 'interactive', [
             'type' => 'list',
-            'body' => ['text' => $text],
+            'body' => ['text' => WhatsappText::clamp($text, self::LIST_BODY_LIMIT)],
             'action' => [
-                'button' => $button,
+                'button' => WhatsappText::clamp($button, self::BUTTON_TITLE_LIMIT),
                 'sections' => [
                     [
                         'rows' => array_map(fn (array $row): array => array_filter([
-                            'id' => $row['id'],
-                            'title' => $row['title'],
-                            'description' => $row['description'] ?? null,
+                            'id' => WhatsappText::clamp($row['id'], self::LIST_ROW_ID_LIMIT),
+                            'title' => WhatsappText::clamp($row['title'], self::LIST_ROW_TITLE_LIMIT),
+                            'description' => isset($row['description'])
+                                ? WhatsappText::clamp($row['description'], self::LIST_ROW_DESCRIPTION_LIMIT)
+                                : null,
                         ], fn (mixed $value): bool => $value !== null), $rows),
                     ],
                 ],

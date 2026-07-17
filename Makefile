@@ -193,6 +193,8 @@ test:
 		DB_DATABASE="$${DB_TEST_DATABASE:-laravel_app_testing}" \
 		DB_USERNAME="$$DB_USERNAME" \
 		DB_PASSWORD="$$DB_PASSWORD" \
+		QUEUE_CONNECTION=sync \
+		CACHE_STORE=array \
 		php artisan test $(test_args)
 
 test-worktree:
@@ -206,6 +208,8 @@ test-worktree:
 		DB_DATABASE="$${DB_TEST_DATABASE:-laravel_app_testing}" \
 		DB_USERNAME="$$DB_USERNAME" \
 		DB_PASSWORD="$$DB_PASSWORD" \
+		QUEUE_CONNECTION=sync \
+		CACHE_STORE=array \
 		php artisan test $(test_args)
 
 deploy:

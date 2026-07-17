@@ -3,8 +3,12 @@
 use App\Enums\ListingStatus;
 use App\Models\Listing;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Laravel\Ai\Embeddings;
 
 uses(RefreshDatabase::class);
+
+// Публикация синхронно (очередь sync) запускает генерацию эмбеддинга.
+beforeEach(fn () => Embeddings::fake());
 
 test('a draft goes to moderation when the supplier submits it', function () {
     $listing = Listing::factory()->create();

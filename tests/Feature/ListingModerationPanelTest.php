@@ -15,12 +15,16 @@ use App\Models\ListingMedia;
 use App\Models\User;
 use Filament\Actions\Testing\TestAction;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Laravel\Ai\Embeddings;
 use Livewire\Livewire;
 
 uses(RefreshDatabase::class);
 
 beforeEach(function () {
     $this->actingAs(User::factory()->create());
+
+    // Одобрение синхронно (очередь sync) запускает генерацию эмбеддинга.
+    Embeddings::fake();
 });
 
 test('guests are redirected to the panel login', function () {

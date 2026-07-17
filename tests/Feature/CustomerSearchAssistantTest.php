@@ -12,9 +12,14 @@ use App\Services\Bot\InboundMessage;
 use App\Services\DereuMessenger;
 use App\Services\WhatsappTemplateLibrary;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Laravel\Ai\Embeddings;
 use Mockery\MockInterface;
 
 uses(RefreshDatabase::class);
+
+// Гибридный поиск векторизует запрос; объявления без эмбеддингов
+// ранжируются по словам — прежние ожидания тестов не меняются.
+beforeEach(fn () => Embeddings::fake());
 
 /**
  * @return array<string, mixed>

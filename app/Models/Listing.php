@@ -5,6 +5,7 @@ namespace App\Models;
 use App\Enums\ListingMediaType;
 use App\Enums\ListingStatus;
 use App\Enums\ListingType;
+use App\Jobs\GenerateListingEmbedding;
 use Database\Factories\ListingFactory;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Attributes\Scope;
@@ -13,6 +14,7 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 use Illuminate\Support\Facades\Storage;
 use InvalidArgumentException;
 use LogicException;
@@ -44,8 +46,19 @@ class Listing extends Model
     ];
 
     /**
+     * The searchable text fields whose change makes the semantic search
+     * vector stale (see ListingEmbeddings::sourceText()).
+     */
+    private const array EMBEDDING_SOURCE_FIELDS = ['status', 'type', 'category_id', 'brand_id', 'description', 'location_id', 'location_detail'];
+
+    /**
      * Media rows go away with the listing via the DB cascade, but the
      * files on disk would be orphaned without this hook.
+     *
+     * The saved hook keeps the semantic search vector fresh: it fires on
+     * approve() (the status transition into search) and on edits of a
+     * published listing's searchable text (the operator may edit any
+     * status without re-moderation). renew() and archive() do not match.
      */
     protected static function booted(): void
     {
@@ -53,6 +66,12 @@ class Listing extends Model
             $listing->media()->get()->each(
                 fn (ListingMedia $media) => Storage::disk($media->disk)->delete($media->path),
             );
+        });
+
+        static::saved(function (Listing $listing): void {
+            if ($listing->status === ListingStatus::Published && $listing->wasChanged(self::EMBEDDING_SOURCE_FIELDS)) {
+                GenerateListingEmbedding::dispatch($listing);
+            }
         });
     }
 
@@ -113,6 +132,12 @@ class Listing extends Model
     public function customerRequests(): HasMany
     {
         return $this->hasMany(CustomerRequest::class);
+    }
+
+    /** @return HasOne<ListingEmbedding, $this> */
+    public function embedding(): HasOne
+    {
+        return $this->hasOne(ListingEmbedding::class);
     }
 
     /**

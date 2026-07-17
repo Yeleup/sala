@@ -23,6 +23,9 @@ return [
         // Дефолтная модель транскрибации — заполните актуальный тариф.
         'gpt-4o-transcribe-diarize' => ['input' => null, 'output' => null, 'cache_read' => null, 'cache_write' => null],
 
+        // Модель эмбеддингов для векторного поиска: у неё нет output-токенов.
+        'text-embedding-3-small' => ['input' => 0.02, 'output' => null, 'cache_read' => null, 'cache_write' => null],
+
         'gpt-4o' => ['input' => 2.50, 'output' => 10.00, 'cache_read' => 1.25, 'cache_write' => null],
         'gpt-4o-mini' => ['input' => 0.15, 'output' => 0.60, 'cache_read' => 0.075, 'cache_write' => null],
         'gpt-4.1' => ['input' => 2.00, 'output' => 8.00, 'cache_read' => 0.50, 'cache_write' => null],

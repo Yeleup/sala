@@ -10,6 +10,8 @@ use Illuminate\Events\Dispatcher;
 use Illuminate\Support\Str;
 use Laravel\Ai\Events\AgentFailedOver;
 use Laravel\Ai\Events\AgentPrompted;
+use Laravel\Ai\Events\EmbeddingsGenerated;
+use Laravel\Ai\Events\GeneratingEmbeddings;
 use Laravel\Ai\Events\GeneratingTranscription;
 use Laravel\Ai\Events\PromptingAgent;
 use Laravel\Ai\Events\TranscriptionGenerated;
@@ -38,6 +40,8 @@ class RecordAiAttempts
             AgentFailedOver::class => 'onAgentFailedOver',
             GeneratingTranscription::class => 'onGeneratingTranscription',
             TranscriptionGenerated::class => 'onTranscriptionGenerated',
+            GeneratingEmbeddings::class => 'onGeneratingEmbeddings',
+            EmbeddingsGenerated::class => 'onEmbeddingsGenerated',
         ];
     }
 
@@ -107,6 +111,36 @@ class RecordAiAttempts
             usage: $event->response->usage,
             pending: $pending,
             response: Str::limit($event->response->text, self::TEXT_LIMIT),
+        );
+    }
+
+    public function onGeneratingEmbeddings(GeneratingEmbeddings $event): void
+    {
+        $this->state->begin(
+            $event->invocationId,
+            Str::limit(implode("\n", $event->prompt->inputs), self::TEXT_LIMIT),
+            $event->provider->name(),
+            $event->model,
+            ['dimensions' => $event->prompt->dimensions, 'inputs' => count($event->prompt->inputs)],
+        );
+    }
+
+    /**
+     * The embeddings response reports a bare token count — for the cost
+     * estimate they are all input tokens (embedding models produce no
+     * completion). The vectors themselves are not journaled.
+     */
+    public function onEmbeddingsGenerated(EmbeddingsGenerated $event): void
+    {
+        $pending = $this->state->finish($event->invocationId);
+
+        $this->record(
+            invocationId: $event->invocationId,
+            provider: $event->response->meta->provider ?? $event->provider->name(),
+            model: $event->response->meta->model ?? $event->model,
+            usage: new Usage(promptTokens: $event->response->tokens),
+            pending: $pending,
+            response: null,
         );
     }
 

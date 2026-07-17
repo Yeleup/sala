@@ -14,6 +14,11 @@ use App\Models\DereuWebhookEvent;
  * mediaId/mediaType are set for photo and voice messages so the AI
  * assistant can download and process them.
  *
+ * voiceContents/transcription are filled for voice messages by the AI
+ * entry point (see ScenarioAiAssistant), which downloads and transcribes
+ * the audio before any task handler runs; both stay null when the voice
+ * could not be downloaded or transcribed.
+ *
  * unrecognizedPress is set when a button/list press could not be resolved:
  * Meta fails to deliver button_reply content for some WhatsApp Web devices
  * migrated to LID identifiers, forwarding an error object instead (or,
@@ -28,7 +33,27 @@ class InboundMessage
         public readonly ?ListingMediaType $mediaType = null,
         public readonly ?string $mediaId = null,
         public readonly bool $unrecognizedPress = false,
+        public readonly ?string $voiceContents = null,
+        public readonly ?string $transcription = null,
     ) {}
+
+    public function isVoice(): bool
+    {
+        return $this->mediaType === ListingMediaType::Audio && $this->hasMedia();
+    }
+
+    public function withVoice(string $contents, string $transcription): self
+    {
+        return new self(
+            text: $this->text,
+            replyId: $this->replyId,
+            mediaType: $this->mediaType,
+            mediaId: $this->mediaId,
+            unrecognizedPress: $this->unrecognizedPress,
+            voiceContents: $contents,
+            transcription: $transcription,
+        );
+    }
 
     public static function fromWebhookEvent(DereuWebhookEvent $event): self
     {

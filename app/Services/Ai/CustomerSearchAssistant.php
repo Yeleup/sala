@@ -20,10 +20,11 @@ use Illuminate\Support\Str;
 
 /**
  * The customer branch of the AI module (docs/modules/ai-assistant.md):
- * asks what the customer needs, matches the free-text query against
- * published listings, offers the ranked results as a WhatsApp list, and
- * turns the chosen option into a customer request with a supplier
- * notification. Equipment is never locked by a request.
+ * asks what the customer needs (typed or as a voice message, transcribed
+ * upstream by ScenarioAiAssistant), matches the query against published
+ * listings, offers the ranked results as a WhatsApp list, and turns the
+ * chosen option into a customer request with a supplier notification.
+ * Equipment is never locked by a request.
  */
 class CustomerSearchAssistant
 {
@@ -112,6 +113,23 @@ class CustomerSearchAssistant
     protected function search(BotSession $session, array $state, InboundMessage $message): AiOutcome
     {
         $query = trim((string) $message->text);
+
+        if ($query === '' && $message->isVoice()) {
+            $query = trim((string) $message->transcription);
+
+            // An unrecognized voice message (silence, download or AI
+            // provider failure upstream) never spends a fruitless-search
+            // attempt.
+            if ($query === '') {
+                $this->persist($session, $state);
+                $this->messenger->sendText(
+                    $session->contact,
+                    'Не удалось распознать голосовое сообщение. Напишите, пожалуйста, текстом: что нужно и в каком городе.',
+                );
+
+                return AiOutcome::InProgress;
+            }
+        }
 
         if ($query === '') {
             $this->persist($session, $state);

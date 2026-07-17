@@ -216,7 +216,7 @@ test('a voice message is stored, transcribed and used for extraction', function 
 
     fakeCollectorMessenger()->shouldReceive('sendButtons')->once();
 
-    $outcome = app(SupplierListingCollector::class)
+    $outcome = app(ScenarioAiAssistant::class)
         ->resume($session, supplierAiNode(), new InboundMessage(mediaType: ListingMediaType::Audio, mediaId: 'media-1'));
 
     $media = ListingMedia::sole();
@@ -227,6 +227,26 @@ test('a voice message is stored, transcribed and used for extraction', function 
         ->and($media->listing_id)->toBe(Listing::sole()->id);
 
     Storage::disk('public')->assertExists($media->path);
+});
+
+test('an undownloadable voice message asks to rephrase without spending an attempt', function () {
+    ListingExtractionAgent::fake()->preventStrayPrompts();
+    $session = collectorSession();
+
+    test()->mock(DereuMediaDownloader::class)
+        ->shouldReceive('download')->once()->with('media-403')
+        ->andThrow(new RuntimeException('403 Медиа принадлежит другой компании'));
+
+    fakeCollectorMessenger()->shouldReceive('sendText')->once()
+        ->withArgs(fn (Contact $to, string $text) => str_contains($text, 'Не удалось разобрать'));
+
+    $outcome = app(ScenarioAiAssistant::class)
+        ->resume($session, supplierAiNode(), new InboundMessage(mediaType: ListingMediaType::Audio, mediaId: 'media-403'));
+
+    expect($outcome)->toBe(AiOutcome::InProgress)
+        ->and($session->fresh()->state['attempts'])->toBe(0)
+        ->and(Listing::count())->toBe(0);
+    ListingExtractionAgent::assertNeverPrompted();
 });
 
 test('a photo without a caption still runs the extraction with the image attached', function () {

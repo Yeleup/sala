@@ -23,7 +23,6 @@ use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use Laravel\Ai\Files\Image;
-use Laravel\Ai\Transcription;
 
 /**
  * Collects a supplier's listing over a WhatsApp sub-dialog: extracts
@@ -333,25 +332,19 @@ class SupplierListingCollector
      */
     private function intakeMedia(BotSession $session, array &$state, InboundMessage $message): bool
     {
-        $download = $this->mediaDownloader->download((string) $message->mediaId);
-        $draft = $this->ensureDraft($session, $state);
-
+        // Voice arrives already downloaded and transcribed by the AI entry
+        // point (ScenarioAiAssistant); unresolved voice is unreadable — the
+        // bot asks to rephrase without spending a clarification attempt.
         if ($message->mediaType === ListingMediaType::Audio) {
-            $path = "listings/{$draft->id}/audio/".uniqid('', true).'.ogg';
-            Storage::disk('public')->put($path, $download['contents']);
+            if ($message->voiceContents === null) {
+                return false;
+            }
 
-            $transcription = $this->audit->run(
-                AiOperationType::Transcription,
-                fn (): string => trim((string) Transcription::fromBase64(
-                    base64_encode($download['contents']),
-                    $download['mime_type'],
-                )->generate()),
-                [
-                    'contact_id' => $session->contact_id,
-                    'bot_session_id' => $session->id,
-                    'listing_id' => $draft->id,
-                ],
-            );
+            $draft = $this->ensureDraft($session, $state);
+            $transcription = (string) $message->transcription;
+
+            $path = "listings/{$draft->id}/audio/".uniqid('', true).'.ogg';
+            Storage::disk('public')->put($path, $message->voiceContents);
 
             ListingMedia::create([
                 'listing_id' => $draft->id,
@@ -368,6 +361,9 @@ class SupplierListingCollector
 
             return false;
         }
+
+        $download = $this->mediaDownloader->download((string) $message->mediaId);
+        $draft = $this->ensureDraft($session, $state);
 
         $path = "listings/{$draft->id}/photos/".uniqid('', true).'.jpg';
         Storage::disk('public')->put($path, $download['contents']);

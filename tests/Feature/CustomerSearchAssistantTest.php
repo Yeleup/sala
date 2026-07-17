@@ -1,18 +1,24 @@
 <?php
 
+use App\Enums\AiOperationType;
 use App\Enums\AiOutcome;
 use App\Enums\CustomerRequestStatus;
+use App\Enums\ListingMediaType;
+use App\Models\AiOperation;
 use App\Models\BotSession;
 use App\Models\Contact;
 use App\Models\CustomerRequest;
 use App\Models\Listing;
 use App\Models\WhatsappTemplate;
 use App\Services\Ai\CustomerSearchAssistant;
+use App\Services\Ai\ScenarioAiAssistant;
 use App\Services\Bot\InboundMessage;
+use App\Services\DereuMediaDownloader;
 use App\Services\DereuMessenger;
 use App\Services\WhatsappTemplateLibrary;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Laravel\Ai\Embeddings;
+use Laravel\Ai\Transcription;
 use Mockery\MockInterface;
 
 uses(RefreshDatabase::class);
@@ -106,6 +112,68 @@ test('a brand in the query ranks the branded listing first', function () {
 
     $outcome = app(CustomerSearchAssistant::class)
         ->resume(searchSession(), customerAiNode(), new InboundMessage(text: 'нужен экскаватор Hitachi'));
+
+    expect($outcome)->toBe(AiOutcome::InProgress);
+});
+
+test('a voice message is transcribed and used as the search query', function () {
+    Transcription::fake(['нужен кран, Шымкент']);
+    $crane = Listing::factory()->published()->create([
+        'category_id' => categoryNamed('Автокран')->id,
+        'description' => 'Кран 25 тонн',
+        'location_id' => locationNamed('г.Шымкент')->id,
+    ]);
+
+    test()->mock(DereuMediaDownloader::class)
+        ->shouldReceive('download')->once()->with('voice-1')
+        ->andReturn(['contents' => 'OGG-BYTES', 'mime_type' => 'audio/ogg']);
+
+    $messenger = fakeSearchMessenger();
+    $messenger->shouldReceive('sendList')->once()->withArgs(
+        fn (Contact $contact, string $text, string $button, array $rows): bool => $rows[0]['id'] === "listing:{$crane->id}",
+    );
+
+    $session = searchSession();
+    $outcome = app(ScenarioAiAssistant::class)
+        ->resume($session, customerAiNode(), new InboundMessage(mediaType: ListingMediaType::Audio, mediaId: 'voice-1'));
+
+    expect($outcome)->toBe(AiOutcome::InProgress)
+        ->and($session->refresh()->state['query'])->toBe('нужен кран, Шымкент')
+        ->and(AiOperation::query()->where('operation', AiOperationType::Transcription)->count())->toBe(1);
+});
+
+test('an undownloadable voice message asks to type the query without spending an attempt', function () {
+    test()->mock(DereuMediaDownloader::class)
+        ->shouldReceive('download')->once()->with('voice-2')
+        ->andThrow(new RuntimeException('403 Медиа принадлежит другой компании'));
+
+    $messenger = fakeSearchMessenger();
+    $messenger->shouldReceive('sendText')->once()->withArgs(
+        fn (Contact $contact, string $text): bool => str_contains($text, 'Не удалось распознать голосовое'),
+    );
+
+    $session = searchSession();
+    $outcome = app(ScenarioAiAssistant::class)
+        ->resume($session, customerAiNode(), new InboundMessage(mediaType: ListingMediaType::Audio, mediaId: 'voice-2'));
+
+    expect($outcome)->toBe(AiOutcome::InProgress)
+        ->and($session->refresh()->state['attempts'])->toBe(0);
+});
+
+test('a silent voice message asks to type the query', function () {
+    Transcription::fake(['']);
+
+    test()->mock(DereuMediaDownloader::class)
+        ->shouldReceive('download')->once()->with('voice-3')
+        ->andReturn(['contents' => 'OGG-BYTES', 'mime_type' => 'audio/ogg']);
+
+    $messenger = fakeSearchMessenger();
+    $messenger->shouldReceive('sendText')->once()->withArgs(
+        fn (Contact $contact, string $text): bool => str_contains($text, 'Не удалось распознать голосовое'),
+    );
+
+    $outcome = app(ScenarioAiAssistant::class)
+        ->resume(searchSession(), customerAiNode(), new InboundMessage(mediaType: ListingMediaType::Audio, mediaId: 'voice-3'));
 
     expect($outcome)->toBe(AiOutcome::InProgress);
 });

@@ -19,10 +19,14 @@
 
 return [
 
+    // Ставки региона «Rest of Central & Eastern Europe» (включает Казахстан),
+    // прайс Meta от 2026-07-01. С 2026-10-01 Meta выносит Казахстан в отдельную
+    // строку прайса с повышенными ставками utility/authentication — проверить
+    // и обновить ставки при вступлении в силу.
     'categories' => [
-        'marketing' => null,
-        'utility' => null,
-        'authentication' => null,
+        'marketing' => 0.0989,
+        'utility' => 0.02438,
+        'authentication' => 0.02438,
     ],
 
 ];

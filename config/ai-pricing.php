@@ -17,11 +17,11 @@ return [
 
     'models' => [
 
-        // Дефолтная текстовая модель проекта — заполните актуальный тариф.
-        'gpt-5.4' => ['input' => null, 'output' => null, 'cache_read' => null, 'cache_write' => null],
+        // Дефолтная текстовая модель проекта (тариф OpenAI на 2026-07-17).
+        'gpt-5.4' => ['input' => 2.50, 'output' => 15.00, 'cache_read' => 0.25, 'cache_write' => null],
 
-        // Дефолтная модель транскрибации — заполните актуальный тариф.
-        'gpt-4o-transcribe-diarize' => ['input' => null, 'output' => null, 'cache_read' => null, 'cache_write' => null],
+        // Дефолтная модель транскрибации (тариф OpenAI на 2026-07-17).
+        'gpt-4o-transcribe-diarize' => ['input' => 2.50, 'output' => 10.00, 'cache_read' => null, 'cache_write' => null],
 
         // Модель эмбеддингов для векторного поиска: у неё нет output-токенов.
         'text-embedding-3-small' => ['input' => 0.02, 'output' => null, 'cache_read' => null, 'cache_write' => null],

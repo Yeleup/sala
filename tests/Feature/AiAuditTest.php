@@ -53,6 +53,35 @@ describe('оценка стоимости', function () {
         expect($estimate['cost_status'])->toBe(AiCostStatus::Unknown)
             ->and($estimate['estimated_cost_usd'])->toBeNull();
     });
+
+    test('датированный снапшот модели тарифицируется по базовой модели', function () {
+        $estimate = app(AiCostEstimator::class)->estimate('test-model-2026-03-05', 1_000_000, 100_000);
+
+        expect($estimate['cost_status'])->toBe(AiCostStatus::Estimated)
+            ->and($estimate['estimated_cost_usd'])->toBe('3.000000') // 2.0 + 1.0
+            ->and($estimate['pricing_snapshot']['input'])->toBe(2.0);
+    });
+
+    test('точка в имени модели не ломает поиск тарифа', function () {
+        config()->set('ai-pricing.models', [
+            'model-5.4' => ['input' => 2.0, 'output' => 10.0, 'cache_read' => null, 'cache_write' => null],
+        ]);
+
+        $estimate = app(AiCostEstimator::class)->estimate('model-5.4-2026-03-05', 1_000_000, 0);
+
+        expect($estimate['cost_status'])->toBe(AiCostStatus::Estimated)
+            ->and($estimate['estimated_cost_usd'])->toBe('2.000000');
+    });
+
+    test('собственный тариф датированного снапшота важнее тарифа базовой модели', function () {
+        config()->set('ai-pricing.models.test-model-2026-03-05', [
+            'input' => 4.0, 'output' => 10.0, 'cache_read' => null, 'cache_write' => null,
+        ]);
+
+        $estimate = app(AiCostEstimator::class)->estimate('test-model-2026-03-05', 1_000_000, 0);
+
+        expect($estimate['estimated_cost_usd'])->toBe('4.000000');
+    });
 });
 
 describe('обёртка AiAudit', function () {

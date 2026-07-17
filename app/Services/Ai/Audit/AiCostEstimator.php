@@ -10,6 +10,10 @@ use App\Enums\AiCostStatus;
  * attempt stores what the estimate was based on. Unknown model, missing
  * tariff or a used token kind without a rate → cost_status=unknown, never
  * a silent zero (tokens are not universal credits).
+ *
+ * Providers report dated snapshot names (gpt-5.4-2026-03-05) while the
+ * config keys base models; a snapshot without its own entry falls back to
+ * the base model's tariff, since snapshots share the base price.
  */
 class AiCostEstimator
 {
@@ -18,8 +22,7 @@ class AiCostEstimator
      */
     public function estimate(?string $model, int $inputTokens, int $outputTokens, int $cacheReadTokens = 0, int $cacheWriteTokens = 0): array
     {
-        /** @var array{input?: float|null, output?: float|null, cache_read?: float|null, cache_write?: float|null}|null $tariff */
-        $tariff = $model !== null ? config("ai-pricing.models.{$model}") : null;
+        $tariff = $this->tariffFor($model);
 
         $unknown = [
             'pricing_snapshot' => $tariff,
@@ -57,5 +60,30 @@ class AiCostEstimator
             'estimated_cost_usd' => number_format($cost, 6, '.', ''),
             'cost_status' => AiCostStatus::Estimated,
         ];
+    }
+
+    /**
+     * Model names are looked up as literal array keys, not via config dot
+     * notation: a dot inside the name (gpt-5.4) would otherwise be read as
+     * key nesting and the tariff would never match.
+     *
+     * @return array{input?: float|null, output?: float|null, cache_read?: float|null, cache_write?: float|null}|null
+     */
+    protected function tariffFor(?string $model): ?array
+    {
+        if ($model === null) {
+            return null;
+        }
+
+        /** @var array<string, array{input?: float|null, output?: float|null, cache_read?: float|null, cache_write?: float|null}> $models */
+        $models = (array) config('ai-pricing.models', []);
+
+        $tariff = $models[$model] ?? null;
+
+        if ($tariff === null && preg_match('/^(.+)-\d{4}-\d{2}-\d{2}$/', $model, $matches) === 1) {
+            $tariff = $models[$matches[1]] ?? null;
+        }
+
+        return $tariff;
     }
 }

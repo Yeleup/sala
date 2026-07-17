@@ -93,6 +93,17 @@ class WhatsAppSettings extends Page
                 ->visible(fn (): bool => $this->missingConfigKeys() === [] && ! $this->company?->isConnected())
                 ->action(fn () => $this->startConnect()),
 
+            Action::make('connectCoexistence')
+                ->label('Подключить в режиме Coexistence')
+                ->icon(Heroicon::OutlinedDevicePhoneMobile)
+                ->color('gray')
+                ->visible(fn (): bool => $this->missingConfigKeys() === [] && ! $this->company?->isConnected())
+                ->requiresConfirmation()
+                ->modalHeading('Подключить в режиме Coexistence?')
+                ->modalDescription('Номер продолжит работать в приложении WhatsApp Business на телефоне параллельно с Cloud API. Условия: номер должен быть заранее зарегистрирован в свежей версии WhatsApp Business App на телефоне; доступность режима зависит от страны номера.')
+                ->modalSubmitActionLabel('Подключить')
+                ->action(fn () => $this->startConnect(accountMode: 'coexistence')),
+
             Action::make('reissueApiKey')
                 ->label('Перевыпустить API-ключ')
                 ->icon(Heroicon::OutlinedKey)
@@ -192,7 +203,7 @@ class WhatsAppSettings extends Page
      * Start Hosted Embedded Signup: remember a one-time nonce and send the
      * browser to the signed connect.dereu.* URL.
      */
-    protected function startConnect(): void
+    protected function startConnect(?string $accountMode = null): void
     {
         $nonce = Str::random(32);
 
@@ -204,6 +215,7 @@ class WhatsAppSettings extends Page
             nonce: $nonce,
             ttlSeconds: self::CONNECT_TTL_SECONDS,
             companyName: (string) config('app.name'),
+            accountMode: $accountMode,
         ));
     }
 

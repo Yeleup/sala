@@ -102,6 +102,39 @@ test('the connect action redirects to a signed hosted signup url and stores a on
     expect(Cache::get('dereu:connect-nonce:test-nonce'))->toBeTrue();
 });
 
+test('the connect coexistence action redirects to a signed hosted signup url with account_mode', function () {
+    Str::createRandomStringsUsing(fn (): string => 'test-nonce');
+    $this->freezeTime();
+
+    $expectedUrl = app(DereuConnect::class)->connectUrl(
+        externalId: 'org_test',
+        returnUrl: WhatsAppSettings::getUrl(),
+        nonce: 'test-nonce',
+        companyName: (string) config('app.name'),
+        accountMode: 'coexistence',
+    );
+
+    Livewire::test(WhatsAppSettings::class)
+        ->callAction('connectCoexistence')
+        ->assertRedirect($expectedUrl);
+
+    expect(Cache::get('dereu:connect-nonce:test-nonce'))->toBeTrue();
+});
+
+test('both connect actions are visible when the number is not connected', function () {
+    Livewire::test(WhatsAppSettings::class)
+        ->assertActionVisible('connect')
+        ->assertActionVisible('connectCoexistence');
+});
+
+test('both connect actions are hidden once the number is connected', function () {
+    connectedDereuCompany();
+
+    Livewire::test(WhatsAppSettings::class)
+        ->assertActionHidden('connect')
+        ->assertActionHidden('connectCoexistence');
+});
+
 test('a valid OUT redirect stores the company and re-issues its api key', function () {
     Http::fake([
         'dereu.test/api/v1/platform/companies/org_test/api-key/reissue' => Http::response(['api_key' => 'dereu_new_key']),

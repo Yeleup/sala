@@ -38,6 +38,7 @@ class DereuConnect
         string $nonce,
         int $ttlSeconds = 600,
         ?string $companyName = null,
+        ?string $accountMode = null,
     ): string {
         $this->ensureConfigured();
 
@@ -50,6 +51,10 @@ class DereuConnect
 
         if (filled($companyName)) {
             $payload['company_name'] = $companyName;
+        }
+
+        if (filled($accountMode)) {
+            $payload['account_mode'] = $accountMode;
         }
 
         $data = static::base64UrlEncode(

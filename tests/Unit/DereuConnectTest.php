@@ -54,6 +54,30 @@ test('connectUrl omits the company name when it is not given', function () {
     expect($payload)->not->toHaveKey('company_name');
 });
 
+test('connectUrl adds account_mode to the payload when coexistence is requested', function () {
+    $url = dereuConnectService()->connectUrl(
+        externalId: 'org_123',
+        returnUrl: 'https://app.partner.test/done',
+        nonce: 'nonce-value',
+        accountMode: 'coexistence',
+    );
+
+    parse_str(explode('?', $url, 2)[1], $params);
+    $payload = json_decode((string) DereuConnect::base64UrlDecode($params['d']), true);
+
+    expect($payload)->toHaveKey('account_mode', 'coexistence')
+        ->and($params['sig'])->toBe(DereuConnect::sign($params['d'], 'consec_test_secret'));
+});
+
+test('connectUrl omits account_mode by default, defaulting Dereu to business_only', function () {
+    $url = dereuConnectService()->connectUrl('org_123', 'https://app.partner.test/done', 'nonce-value');
+
+    parse_str(explode('?', $url, 2)[1], $params);
+    $payload = json_decode((string) DereuConnect::base64UrlDecode($params['d']), true);
+
+    expect($payload)->not->toHaveKey('account_mode');
+});
+
 test('connectUrl signs the base64url string itself, not its JSON', function () {
     // Регресс-защита от главной ошибки схемы: подписываться должна строка d.
     $url = dereuConnectService()->connectUrl('org_123', 'https://app.partner.test/done', 'nonce-value');

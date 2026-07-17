@@ -2,6 +2,8 @@
 
 namespace App\Services\Ai;
 
+use App\Ai\Agents\SearchQueryExtractionAgent;
+use App\Enums\AiOperationType;
 use App\Enums\AiOutcome;
 use App\Enums\BotScenarioTrigger;
 use App\Models\BotScenario;
@@ -9,6 +11,7 @@ use App\Models\BotSession;
 use App\Models\CustomerRequest;
 use App\Models\Listing;
 use App\Models\Location;
+use App\Services\Ai\Audit\AiAudit;
 use App\Services\Bot\InboundMessage;
 use App\Services\Bot\ScenarioRunner;
 use App\Services\CustomerRequestNotifier;
@@ -16,15 +19,19 @@ use App\Services\DereuMessenger;
 use App\Services\Locations\LocationResolver;
 use App\Support\WhatsappText;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
+use Throwable;
 
 /**
  * The customer branch of the AI module (docs/modules/ai-assistant.md):
- * asks what the customer needs (typed or as a voice message, transcribed
- * upstream by ScenarioAiAssistant), matches the query against published
- * listings, offers the ranked results as a WhatsApp list, and turns the
- * chosen option into a customer request with a supplier notification.
- * Equipment is never locked by a request.
+ * collects what the customer needs and where over a short intake dialog
+ * (typed or voice messages, transcribed upstream by ScenarioAiAssistant),
+ * asking clarifying questions about the missing pieces, and only then
+ * matches the settled query against published listings, offers the ranked
+ * results as a WhatsApp list, and turns the chosen option into a customer
+ * request with a supplier notification. Equipment is never locked by a
+ * request.
  */
 class CustomerSearchAssistant
 {
@@ -33,6 +40,13 @@ class CustomerSearchAssistant
      * contact back to the scenario (mirrors the collector's limit).
      */
     private const int MAX_FRUITLESS_SEARCHES = 3;
+
+    /**
+     * Clarifying questions of the intake before the search runs with
+     * whatever was collected (business rule: 2–3 attempts, mirrors the
+     * collector's limit).
+     */
+    private const int MAX_CLARIFICATIONS = 3;
 
     private const string ROW_ID_PREFIX = 'listing:';
 
@@ -60,6 +74,7 @@ class CustomerSearchAssistant
         private readonly ScenarioRunner $runner,
         private readonly CustomerRequestNotifier $notifier,
         private readonly LocationResolver $locations,
+        private readonly AiAudit $audit,
     ) {}
 
     /**
@@ -67,7 +82,7 @@ class CustomerSearchAssistant
      */
     public function start(BotSession $session, array $node): AiOutcome
     {
-        $session->state = ['phase' => 'searching', 'attempts' => 0, 'query' => null, 'offered' => [], 'expand_location_id' => null];
+        $session->state = $this->defaultState();
         $session->save();
 
         $this->messenger->sendText(
@@ -84,7 +99,7 @@ class CustomerSearchAssistant
     public function resume(BotSession $session, array $node, InboundMessage $message): AiOutcome
     {
         $state = is_array($session->state) ? $session->state : [];
-        $state += ['phase' => 'searching', 'attempts' => 0, 'query' => null, 'offered' => [], 'expand_location_id' => null];
+        $state += $this->defaultState();
 
         // «В меню» from a dead-end search releases the contact to the main
         // dialog regardless of the phase — routed strictly by button id.
@@ -108,19 +123,24 @@ class CustomerSearchAssistant
     }
 
     /**
+     * The intake step: accumulate the customer's messages, understand
+     * what is needed and where, ask about the missing pieces (bounded by
+     * the clarification limit), and run the search only once the
+     * requirements are settled.
+     *
      * @param  array<string, mixed>  $state
      */
     protected function search(BotSession $session, array $state, InboundMessage $message): AiOutcome
     {
-        $query = trim((string) $message->text);
+        $input = trim((string) $message->text);
 
-        if ($query === '' && $message->isVoice()) {
-            $query = trim((string) $message->transcription);
+        if ($input === '' && $message->isVoice()) {
+            $input = trim((string) $message->transcription);
 
             // An unrecognized voice message (silence, download or AI
             // provider failure upstream) never spends a fruitless-search
-            // attempt.
-            if ($query === '') {
+            // attempt or a clarifying question.
+            if ($input === '') {
                 $this->persist($session, $state);
                 $this->messenger->sendText(
                     $session->contact,
@@ -131,7 +151,7 @@ class CustomerSearchAssistant
             }
         }
 
-        if ($query === '') {
+        if ($input === '') {
             $this->persist($session, $state);
             $this->messenger->sendText(
                 $session->contact,
@@ -141,6 +161,34 @@ class CustomerSearchAssistant
             return AiOutcome::InProgress;
         }
 
+        $state['transcript'][] = $input;
+
+        $requirements = $this->extractRequirements($session, $state);
+
+        // The AI provider is unavailable: degrade to searching the raw
+        // text right away — the customer is never left without an answer.
+        if ($requirements === null) {
+            return $this->runSearch($session, $state, implode(', ', $state['transcript']));
+        }
+
+        $missing = $this->missingRequirements($requirements);
+
+        if ($missing !== [] && $state['clarifications'] < self::MAX_CLARIFICATIONS) {
+            $state['clarifications']++;
+            $this->persist($session, $state);
+            $this->messenger->sendText($session->contact, $this->clarifyingQuestion($requirements, $missing));
+
+            return AiOutcome::InProgress;
+        }
+
+        return $this->runSearch($session, $state, $this->composeQuery($state, $requirements));
+    }
+
+    /**
+     * @param  array<string, mixed>  $state
+     */
+    protected function runSearch(BotSession $session, array $state, string $query): AiOutcome
+    {
         $location = $this->locations->detectInQuery($query);
         $matches = $this->matcher->match($query, $location);
 
@@ -229,8 +277,14 @@ class CustomerSearchAssistant
         $location = Location::find($state['expand_location_id']);
         $query = (string) $state['query'];
 
-        if ($location === null || $query === '') {
-            return $this->search($session, $state, new InboundMessage(text: $query));
+        if ($query === '') {
+            return $this->search($session, $state, new InboundMessage(text: null));
+        }
+
+        // The saved expansion point vanished: the query is already
+        // settled, so re-run it without re-entering the intake.
+        if ($location === null) {
+            return $this->runSearch($session, $state, $query);
         }
 
         $matches = $this->matcher->match($query, $location);
@@ -379,6 +433,109 @@ class CustomerSearchAssistant
     protected function rowTitle(Listing $listing): string
     {
         return WhatsappText::clamp($listing->category?->name ?: 'Объявление №'.$listing->id, self::ROW_TITLE_LIMIT);
+    }
+
+    /**
+     * Understand the accumulated customer messages: what is needed and
+     * where. Null when the AI provider is unavailable — the caller then
+     * searches the raw text instead of blocking the customer.
+     *
+     * @param  array<string, mixed>  $state
+     * @return array<string, mixed>|null
+     */
+    protected function extractRequirements(BotSession $session, array $state): ?array
+    {
+        try {
+            return $this->audit->run(
+                AiOperationType::SearchQueryExtraction,
+                fn (): array => (new SearchQueryExtractionAgent)
+                    ->prompt(implode("\n", $state['transcript']))
+                    ->toArray(),
+                [
+                    'contact_id' => $session->contact_id,
+                    'bot_session_id' => $session->id,
+                ],
+            );
+        } catch (Throwable $e) {
+            Log::warning('Search intake extraction failed; falling back to the raw query.', [
+                'bot_session_id' => $session->id,
+                'error' => $e->getMessage(),
+            ]);
+
+            return null;
+        }
+    }
+
+    /**
+     * The search waits for the need and the place; an explicit «место не
+     * важно» satisfies the place without naming one.
+     *
+     * @param  array<string, mixed>  $requirements
+     * @return list<string>
+     */
+    protected function missingRequirements(array $requirements): array
+    {
+        $missing = [];
+
+        if (blank($requirements['subject'] ?? null)) {
+            $missing[] = 'subject';
+        }
+
+        if (blank($requirements['location'] ?? null) && ! (bool) ($requirements['location_any'] ?? false)) {
+            $missing[] = 'location';
+        }
+
+        return $missing;
+    }
+
+    /**
+     * @param  array<string, mixed>  $requirements
+     * @param  list<string>  $missing
+     */
+    protected function clarifyingQuestion(array $requirements, array $missing): string
+    {
+        if (filled($requirements['clarifying_question'] ?? null)) {
+            return (string) $requirements['clarifying_question'];
+        }
+
+        return $missing[0] === 'subject'
+            ? 'Что именно вам нужно — какая техника или услуга?'
+            : 'В каком городе или районе нужна техника или услуга?';
+    }
+
+    /**
+     * The search string the matcher works with: the extracted need plus
+     * the named place, or the raw transcript when the intake could not
+     * settle the need within the clarification limit.
+     *
+     * @param  array<string, mixed>  $state
+     * @param  array<string, mixed>  $requirements
+     */
+    protected function composeQuery(array $state, array $requirements): string
+    {
+        $subject = filled($requirements['subject'] ?? null)
+            ? (string) $requirements['subject']
+            : implode(', ', $state['transcript']);
+
+        return collect([$subject, $requirements['location'] ?? null])
+            ->filter(fn (mixed $part): bool => filled($part))
+            ->implode(', ');
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    protected function defaultState(): array
+    {
+        return [
+            'phase' => 'searching',
+            'attempts' => 0,
+            'clarifications' => 0,
+            'transcript' => [],
+            'query' => null,
+            'offered' => [],
+            'expand_location_id' => null,
+        ];
     }
 
     /**

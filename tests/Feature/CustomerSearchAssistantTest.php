@@ -1,5 +1,7 @@
 <?php
 
+use App\Ai\Agents\SearchQueryExtractionAgent;
+use App\Enums\AiOperationStatus;
 use App\Enums\AiOperationType;
 use App\Enums\AiOutcome;
 use App\Enums\CustomerRequestStatus;
@@ -39,7 +41,7 @@ function searchSession(array $state = []): BotSession
 {
     return BotSession::factory()->waitingAt('search')->create([
         'state' => array_merge(
-            ['phase' => 'searching', 'attempts' => 0, 'query' => null, 'offered' => []],
+            ['phase' => 'searching', 'attempts' => 0, 'clarifications' => 0, 'transcript' => [], 'query' => null, 'offered' => []],
             $state,
         ),
     ]);
@@ -48,6 +50,23 @@ function searchSession(array $state = []): BotSession
 function fakeSearchMessenger(): MockInterface
 {
     return test()->mock(DereuMessenger::class);
+}
+
+/**
+ * Ответ разборщика поискового запроса: заказчик назвал и предмет
+ * поиска, и место — интейк завершён, поиск запускается сразу.
+ *
+ * @param  array<string, mixed>  $overrides
+ * @return array<string, mixed>
+ */
+function fullSearchIntake(array $overrides = []): array
+{
+    return array_merge([
+        'subject' => 'кран 25 тонн',
+        'location' => 'Шымкент',
+        'location_any' => false,
+        'clarifying_question' => '',
+    ], $overrides);
 }
 
 test('entering the block asks what the customer needs', function () {
@@ -63,7 +82,8 @@ test('entering the block asks what the customer needs', function () {
         ->and($session->refresh()->state['phase'])->toBe('searching');
 });
 
-test('a query returns a ranked list of matching published listings', function () {
+test('a complete query returns a ranked list of matching published listings', function () {
+    SearchQueryExtractionAgent::fake([fullSearchIntake()]);
     $shymkent = locationNamed('г.Шымкент');
     $crane25 = Listing::factory()->published()->create([
         'category_id' => categoryNamed('Автокран')->id, 'description' => 'Кран 25 тонн со стрелой', 'location_id' => $shymkent->id, 'price' => '20000 тг/ч',
@@ -93,6 +113,7 @@ test('a query returns a ranked list of matching published listings', function ()
 });
 
 test('a brand in the query ranks the branded listing first', function () {
+    SearchQueryExtractionAgent::fake([fullSearchIntake(['subject' => 'экскаватор Hitachi'])]);
     $shymkent = locationNamed('г.Шымкент');
     $hitachi = Listing::factory()->published()->create([
         'category_id' => categoryNamed('Экскаватор')->id, 'brand_id' => brandNamed('Hitachi')->id,
@@ -111,13 +132,14 @@ test('a brand in the query ranks the branded listing first', function () {
     );
 
     $outcome = app(CustomerSearchAssistant::class)
-        ->resume(searchSession(), customerAiNode(), new InboundMessage(text: 'нужен экскаватор Hitachi'));
+        ->resume(searchSession(), customerAiNode(), new InboundMessage(text: 'нужен экскаватор Hitachi, Шымкент'));
 
     expect($outcome)->toBe(AiOutcome::InProgress);
 });
 
 test('a voice message is transcribed and used as the search query', function () {
     Transcription::fake(['нужен кран, Шымкент']);
+    SearchQueryExtractionAgent::fake([fullSearchIntake(['subject' => 'кран'])]);
     $crane = Listing::factory()->published()->create([
         'category_id' => categoryNamed('Автокран')->id,
         'description' => 'Кран 25 тонн',
@@ -138,11 +160,13 @@ test('a voice message is transcribed and used as the search query', function () 
         ->resume($session, customerAiNode(), new InboundMessage(mediaType: ListingMediaType::Audio, mediaId: 'voice-1'));
 
     expect($outcome)->toBe(AiOutcome::InProgress)
-        ->and($session->refresh()->state['query'])->toBe('нужен кран, Шымкент')
+        ->and($session->refresh()->state['query'])->toBe('кран, Шымкент')
+        ->and($session->state['transcript'])->toBe(['нужен кран, Шымкент'])
         ->and(AiOperation::query()->where('operation', AiOperationType::Transcription)->count())->toBe(1);
 });
 
 test('an undownloadable voice message asks to type the query without spending an attempt', function () {
+    SearchQueryExtractionAgent::fake()->preventStrayPrompts();
     test()->mock(DereuMediaDownloader::class)
         ->shouldReceive('download')->once()->with('voice-2')
         ->andThrow(new RuntimeException('403 Медиа принадлежит другой компании'));
@@ -162,6 +186,7 @@ test('an undownloadable voice message asks to type the query without spending an
 
 test('a silent voice message asks to type the query', function () {
     Transcription::fake(['']);
+    SearchQueryExtractionAgent::fake()->preventStrayPrompts();
 
     test()->mock(DereuMediaDownloader::class)
         ->shouldReceive('download')->once()->with('voice-3')
@@ -179,6 +204,7 @@ test('a silent voice message asks to type the query', function () {
 });
 
 test('a fruitless search asks to rephrase with a way back to the menu', function () {
+    SearchQueryExtractionAgent::fake([fullSearchIntake(['subject' => 'вертолёт', 'location' => null, 'location_any' => true])]);
     $messenger = fakeSearchMessenger();
     $messenger->shouldReceive('sendButtons')->once()->withArgs(
         fn (Contact $contact, string $text, array $buttons): bool => str_contains($text, 'ничего не нашлось')
@@ -195,6 +221,7 @@ test('a fruitless search asks to rephrase with a way back to the menu', function
 });
 
 test('pressing «В меню» at a dead-end releases the contact from the search block', function () {
+    SearchQueryExtractionAgent::fake()->preventStrayPrompts();
     fakeSearchMessenger()->shouldNotReceive('sendText', 'sendButtons', 'sendList');
 
     $session = searchSession(['attempts' => 1]);
@@ -205,6 +232,7 @@ test('pressing «В меню» at a dead-end releases the contact from the searc
 });
 
 test('the third fruitless search releases the contact back to the scenario', function () {
+    SearchQueryExtractionAgent::fake([fullSearchIntake(['subject' => 'вертолёт', 'location' => null, 'location_any' => true])]);
     $messenger = fakeSearchMessenger();
     $messenger->shouldReceive('sendText')->once()->withArgs(
         fn (Contact $contact, string $text): bool => str_contains($text, 'Загляните позже'),
@@ -305,6 +333,7 @@ test('typing the exact row title equals picking it', function () {
 });
 
 test('a long category name is truncated with an ellipsis within the row title limit', function () {
+    SearchQueryExtractionAgent::fake([fullSearchIntake(['subject' => 'экскаватор погрузчик', 'location' => null, 'location_any' => true])]);
     $longName = 'Гидравлические экскаваторы-погрузчики'; // 38 chars, over the 24-char WhatsApp limit
     $listing = Listing::factory()->published()->create([
         'category_id' => categoryNamed($longName), 'description' => 'Модель', 'location_id' => locationNamed('г.Шымкент')->id,
@@ -324,6 +353,7 @@ test('a long category name is truncated with an ellipsis within the row title li
 });
 
 test('a long location and price are truncated with an ellipsis within the row description limit', function () {
+    SearchQueryExtractionAgent::fake([fullSearchIntake(['subject' => 'автокран', 'location' => null, 'location_any' => true])]);
     $longLocation = locationNamed('Каратауский район Шымкент, промышленная зона №5, въезд с южной стороны');
     $listing = Listing::factory()->published()->create([
         'category_id' => categoryNamed('Автокран'), 'location_id' => $longLocation->id, 'price' => '20000 тг/ч',
@@ -360,6 +390,7 @@ test('typing the truncated title of a listing with a long category name still eq
 });
 
 test('any other text while choosing is treated as a refined search', function () {
+    SearchQueryExtractionAgent::fake([fullSearchIntake(['subject' => 'экскаватор', 'location' => null, 'location_any' => true])]);
     $crane = Listing::factory()->published()->create(['category_id' => categoryNamed('Автокран')->id, 'description' => 'Кран 25 тонн']);
     $digger = Listing::factory()->published()->create(['category_id' => categoryNamed('Экскаватор')->id, 'description' => 'Гусеничный экскаватор']);
 
@@ -378,6 +409,7 @@ test('any other text while choosing is treated as a refined search', function ()
 });
 
 test('a city query covers listings in the city districts', function () {
+    SearchQueryExtractionAgent::fake([fullSearchIntake(['subject' => 'кран'])]);
     $city = locationNamed('г.Шымкент');
     $district = locationNamed('Каратауский район', $city);
     $listing = Listing::factory()->published()->create([
@@ -400,6 +432,7 @@ test('a city query covers listings in the city districts', function () {
 });
 
 test('a listing outside the requested location subtree is not offered', function () {
+    SearchQueryExtractionAgent::fake([fullSearchIntake(['subject' => 'кран'])]);
     locationNamed('г.Шымкент');
     Listing::factory()->published()->create([
         'category_id' => categoryNamed('Автокран')->id,
@@ -422,6 +455,7 @@ test('a listing outside the requested location subtree is not offered', function
 });
 
 test('an empty subtree offers to widen the search one level up and the click is free', function () {
+    SearchQueryExtractionAgent::fake([fullSearchIntake(['subject' => 'кран', 'location' => 'Карааул'])]);
     $region = locationNamed('область Абай');
     $district = locationNamed('Абайский район', $region);
     $village = locationNamed('с.Карааул', $district);
@@ -492,4 +526,130 @@ test('a selection of a listing that expired after the search is not accepted', f
 
     expect(CustomerRequest::count())->toBe(0)
         ->and($outcome)->toBe(AiOutcome::InProgress);
+});
+
+test('a query without a place asks a clarifying question before showing listings', function () {
+    SearchQueryExtractionAgent::fake([
+        fullSearchIntake(['location' => null, 'clarifying_question' => 'В каком городе нужен кран?']),
+    ]);
+    Listing::factory()->published()->create([
+        'category_id' => categoryNamed('Автокран')->id, 'description' => 'Кран 25 тонн', 'location_id' => locationNamed('г.Шымкент')->id,
+    ]);
+
+    $messenger = fakeSearchMessenger();
+    $messenger->shouldReceive('sendText')->once()->withArgs(
+        fn (Contact $contact, string $text): bool => $text === 'В каком городе нужен кран?',
+    );
+
+    $session = searchSession();
+    $outcome = app(CustomerSearchAssistant::class)
+        ->resume($session, customerAiNode(), new InboundMessage(text: 'нужен кран 25 тонн'));
+
+    expect($outcome)->toBe(AiOutcome::InProgress)
+        ->and($session->refresh()->state['clarifications'])->toBe(1)
+        // Уточняющий вопрос не расходует безрезультатную попытку поиска.
+        ->and($session->state['attempts'])->toBe(0)
+        ->and($session->state['transcript'])->toBe(['нужен кран 25 тонн']);
+});
+
+test('the answer to the clarifying question completes the intake and lists the listings', function () {
+    SearchQueryExtractionAgent::fake([fullSearchIntake()]);
+    $listing = Listing::factory()->published()->create([
+        'category_id' => categoryNamed('Автокран')->id, 'description' => 'Кран 25 тонн', 'location_id' => locationNamed('г.Шымкент')->id,
+    ]);
+
+    $messenger = fakeSearchMessenger();
+    $messenger->shouldReceive('sendList')->once()->withArgs(
+        fn (Contact $contact, string $text, string $button, array $rows): bool => $rows[0]['id'] === "listing:{$listing->id}",
+    );
+
+    $session = searchSession(['transcript' => ['нужен кран 25 тонн'], 'clarifications' => 1]);
+    $outcome = app(CustomerSearchAssistant::class)
+        ->resume($session, customerAiNode(), new InboundMessage(text: 'Шымкент'));
+
+    expect($outcome)->toBe(AiOutcome::InProgress)
+        ->and($session->refresh()->state['query'])->toBe('кран 25 тонн, Шымкент');
+
+    // Разбор идёт по всей переписке: более поздние сообщения уточняют более ранние.
+    SearchQueryExtractionAgent::assertPrompted(
+        fn ($prompt): bool => $prompt->contains('нужен кран 25 тонн') && $prompt->contains('Шымкент'),
+    );
+});
+
+test('an explicit «any place» satisfies the intake and searches the whole base', function () {
+    SearchQueryExtractionAgent::fake([fullSearchIntake(['subject' => 'кран', 'location' => null, 'location_any' => true])]);
+    $listing = Listing::factory()->published()->create([
+        'category_id' => categoryNamed('Автокран')->id, 'description' => 'Кран 25 тонн', 'location_id' => locationNamed('г.Астана')->id,
+    ]);
+
+    $messenger = fakeSearchMessenger();
+    $messenger->shouldReceive('sendList')->once()->withArgs(
+        fn (Contact $contact, string $text, string $button, array $rows): bool => $rows[0]['id'] === "listing:{$listing->id}",
+    );
+
+    $session = searchSession(['transcript' => ['нужен кран'], 'clarifications' => 1]);
+    $outcome = app(CustomerSearchAssistant::class)
+        ->resume($session, customerAiNode(), new InboundMessage(text: 'город не важен'));
+
+    expect($outcome)->toBe(AiOutcome::InProgress)
+        ->and($session->refresh()->state['query'])->toBe('кран');
+});
+
+test('the exhausted clarification limit searches with whatever was collected', function () {
+    SearchQueryExtractionAgent::fake([
+        fullSearchIntake(['subject' => null, 'location' => null, 'clarifying_question' => 'Что именно вам нужно?']),
+    ]);
+    $listing = Listing::factory()->published()->create([
+        'category_id' => categoryNamed('Автокран')->id, 'description' => 'Кран 25 тонн', 'location_id' => locationNamed('г.Шымкент')->id,
+    ]);
+
+    $messenger = fakeSearchMessenger();
+    $messenger->shouldReceive('sendList')->once()->withArgs(
+        fn (Contact $contact, string $text, string $button, array $rows): bool => $rows[0]['id'] === "listing:{$listing->id}",
+    );
+
+    $session = searchSession(['transcript' => ['нужен кран'], 'clarifications' => 3]);
+    $outcome = app(CustomerSearchAssistant::class)
+        ->resume($session, customerAiNode(), new InboundMessage(text: 'в Шымкенте'));
+
+    expect($outcome)->toBe(AiOutcome::InProgress)
+        // Сырой текст переписки — запасной запрос, когда предмет так и не понят.
+        ->and($session->refresh()->state['query'])->toBe('нужен кран, в Шымкенте')
+        ->and($session->state['clarifications'])->toBe(3);
+});
+
+test('an unavailable AI provider searches the raw text right away', function () {
+    SearchQueryExtractionAgent::fake([fn () => throw new RuntimeException('AI недоступен')]);
+    $listing = Listing::factory()->published()->create([
+        'category_id' => categoryNamed('Автокран')->id, 'description' => 'Кран 25 тонн', 'location_id' => locationNamed('г.Шымкент')->id,
+    ]);
+
+    $messenger = fakeSearchMessenger();
+    $messenger->shouldReceive('sendList')->once()->withArgs(
+        fn (Contact $contact, string $text, string $button, array $rows): bool => $rows[0]['id'] === "listing:{$listing->id}",
+    );
+
+    $session = searchSession();
+    $outcome = app(CustomerSearchAssistant::class)
+        ->resume($session, customerAiNode(), new InboundMessage(text: 'нужен кран, Шымкент'));
+
+    expect($outcome)->toBe(AiOutcome::InProgress)
+        ->and($session->refresh()->state['query'])->toBe('нужен кран, Шымкент')
+        ->and(AiOperation::query()->where('operation', AiOperationType::SearchQueryExtraction)->sole()->status)
+        ->toBe(AiOperationStatus::Failed);
+});
+
+test('the intake extraction is recorded in the AI audit with dialog links', function () {
+    SearchQueryExtractionAgent::fake([fullSearchIntake(['location' => null, 'clarifying_question' => 'Где нужен кран?'])]);
+
+    fakeSearchMessenger()->shouldReceive('sendText')->once();
+
+    $session = searchSession();
+    app(CustomerSearchAssistant::class)
+        ->resume($session, customerAiNode(), new InboundMessage(text: 'нужен кран'));
+
+    $operation = AiOperation::query()->where('operation', AiOperationType::SearchQueryExtraction)->sole();
+    expect($operation)
+        ->contact_id->toBe($session->contact_id)
+        ->bot_session_id->toBe($session->id);
 });

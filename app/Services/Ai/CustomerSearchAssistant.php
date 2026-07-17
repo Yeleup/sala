@@ -14,6 +14,7 @@ use App\Services\Bot\ScenarioRunner;
 use App\Services\CustomerRequestNotifier;
 use App\Services\DereuMessenger;
 use App\Services\Locations\LocationResolver;
+use App\Support\WhatsappText;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Str;
 
@@ -351,7 +352,7 @@ class CustomerSearchAssistant
         $description = implode(' · ', array_filter([$listing->locationLine(), $listing->price]));
 
         if ($description !== '') {
-            $row['description'] = Str::limit($description, self::ROW_DESCRIPTION_LIMIT - 1);
+            $row['description'] = WhatsappText::clamp($description, self::ROW_DESCRIPTION_LIMIT);
         }
 
         return $row;
@@ -359,7 +360,7 @@ class CustomerSearchAssistant
 
     protected function rowTitle(Listing $listing): string
     {
-        return Str::limit($listing->category?->name ?: 'Объявление №'.$listing->id, self::ROW_TITLE_LIMIT - 1);
+        return WhatsappText::clamp($listing->category?->name ?: 'Объявление №'.$listing->id, self::ROW_TITLE_LIMIT);
     }
 
     /**

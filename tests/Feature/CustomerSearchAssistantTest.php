@@ -231,6 +231,61 @@ test('typing the exact row title equals picking it', function () {
         ->and(CustomerRequest::count())->toBe(1);
 });
 
+test('a long category name is truncated with an ellipsis within the row title limit', function () {
+    $longName = 'Гидравлические экскаваторы-погрузчики'; // 38 chars, over the 24-char WhatsApp limit
+    $listing = Listing::factory()->published()->create([
+        'category_id' => categoryNamed($longName), 'description' => 'Модель', 'location_id' => locationNamed('г.Шымкент')->id,
+    ]);
+
+    $messenger = fakeSearchMessenger();
+    $messenger->shouldReceive('sendList')->once()->withArgs(function (Contact $contact, string $text, string $button, array $rows) {
+        expect(mb_strlen($rows[0]['title']))->toBeLessThanOrEqual(24)
+            ->and($rows[0]['title'])->toEndWith('…');
+
+        return true;
+    });
+
+    $session = searchSession();
+    app(CustomerSearchAssistant::class)
+        ->resume($session, customerAiNode(), new InboundMessage(text: 'нужен экскаватор погрузчик'));
+});
+
+test('a long location and price are truncated with an ellipsis within the row description limit', function () {
+    $longLocation = locationNamed('Каратауский район Шымкент, промышленная зона №5, въезд с южной стороны');
+    $listing = Listing::factory()->published()->create([
+        'category_id' => categoryNamed('Автокран'), 'location_id' => $longLocation->id, 'price' => '20000 тг/ч',
+    ]);
+
+    $messenger = fakeSearchMessenger();
+    $messenger->shouldReceive('sendList')->once()->withArgs(function (Contact $contact, string $text, string $button, array $rows) {
+        expect(mb_strlen($rows[0]['description']))->toBeLessThanOrEqual(72)
+            ->and($rows[0]['description'])->toEndWith('…');
+
+        return true;
+    });
+
+    $session = searchSession();
+    app(CustomerSearchAssistant::class)
+        ->resume($session, customerAiNode(), new InboundMessage(text: 'нужен автокран'));
+});
+
+test('typing the truncated title of a listing with a long category name still equals picking it', function () {
+    $longName = 'Гидравлические экскаваторы-погрузчики';
+    $supplier = Contact::factory()->withOpenSessionWindow()->create();
+    $listing = Listing::factory()->published()->for($supplier, 'supplier')->create(['category_id' => categoryNamed($longName)]);
+
+    $messenger = fakeSearchMessenger();
+    $messenger->shouldReceive('sendButtons')->once();
+    $messenger->shouldReceive('sendText')->once();
+
+    $session = searchSession(['phase' => 'choosing', 'query' => 'экскаватор', 'offered' => [$listing->id]]);
+    $outcome = app(CustomerSearchAssistant::class)
+        ->resume($session, customerAiNode(), new InboundMessage(text: App\Support\WhatsappText::clamp($longName, 24)));
+
+    expect($outcome)->toBe(AiOutcome::Completed)
+        ->and(CustomerRequest::count())->toBe(1);
+});
+
 test('any other text while choosing is treated as a refined search', function () {
     $crane = Listing::factory()->published()->create(['category_id' => categoryNamed('Автокран')->id, 'description' => 'Кран 25 тонн']);
     $digger = Listing::factory()->published()->create(['category_id' => categoryNamed('Экскаватор')->id, 'description' => 'Гусеничный экскаватор']);

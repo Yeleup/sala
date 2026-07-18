@@ -4,11 +4,19 @@ namespace App\Services\Locations;
 
 use App\Models\Location;
 use Illuminate\Database\Eloquent\Collection;
+use Illuminate\Support\Facades\DB;
 
 /**
  * Maps free-form location wording («в Шымкенте», «село Аксуат») to KATO
  * dictionary nodes. The dictionary is the only source of truth: text that
  * resolves to nothing stays unresolved and the caller asks the user.
+ *
+ * A wording that matches nothing exactly but is a close distortion of a
+ * dictionary name (a transcribed voice message: «Сарагаш» → «Сарыагаш»)
+ * is corrected by trigram similarity — but only when the caller knows the
+ * text names a place. Free-text queries stay strictly exact: fuzzy-matching
+ * arbitrary words would bind places to lookalike nouns («трактор» is one
+ * letter away from с.Трактовое).
  */
 class LocationResolver
 {
@@ -19,7 +27,27 @@ class LocationResolver
     public const int MAX_CANDIDATES = 10;
 
     /**
-     * All dictionary nodes matching the given wording.
+     * The trigram similarity a dictionary name must reach to count as a
+     * close distortion of the given wording.
+     */
+    private const float FUZZY_SIMILARITY_THRESHOLD = 0.45;
+
+    /**
+     * Names within this distance of the best-scoring candidate compete
+     * with it (resolved like same-named places); anything further is
+     * noise next to a clearly better correction.
+     */
+    private const float FUZZY_SIMILARITY_WINDOW = 0.10;
+
+    /**
+     * Trigram similarity on very short keys is noise, not correction.
+     */
+    private const int FUZZY_MIN_KEY_LENGTH = 5;
+
+    /**
+     * All dictionary nodes matching the given wording — exactly, or (when
+     * nothing matches exactly) by close-distortion correction: the fuzzy
+     * candidates become the pick list, same as same-named places.
      *
      * @return Collection<int, Location>
      */
@@ -31,9 +59,39 @@ class LocationResolver
             return new Collection;
         }
 
-        return $this->collapseAncestors(
+        $matches = $this->collapseAncestors(
             Location::query()->where('search_name', $key)->orderBy('depth')->orderBy('id')->get(),
         );
+
+        return $matches->isNotEmpty() ? $matches : $this->fuzzyMatches($key);
+    }
+
+    /**
+     * The single location the given place name refers to, tolerating close
+     * distortions of the wording (a misheard voice message, a typo): exact
+     * resolution first — the same rules as in a search query — then trigram
+     * correction with the usual «biggest unique unit wins» arbitration.
+     * Only for text known to name a place; free text goes to detectInQuery.
+     */
+    public function detectPlace(string $name): ?Location
+    {
+        $detected = $this->detectInQuery($name);
+
+        if ($detected !== null) {
+            return $detected;
+        }
+
+        $matches = $this->fuzzyMatches(LocationName::searchKey($name));
+
+        if ($matches->count() === 1) {
+            return $matches->first();
+        }
+
+        if ($matches->count() > 1) {
+            return $this->uniqueShallowest($matches);
+        }
+
+        return null;
     }
 
     /**
@@ -141,6 +199,54 @@ class LocationResolver
                 }
             })
             ->get();
+    }
+
+    /**
+     * Dictionary nodes whose names are close distortions of the given key.
+     * Postgres-only: on other drivers matching stays strictly exact.
+     *
+     * @return Collection<int, Location>
+     */
+    protected function fuzzyMatches(string $key): Collection
+    {
+        $keys = $this->closeKeys($key);
+
+        if ($keys === []) {
+            return new Collection;
+        }
+
+        return $this->collapseAncestors(
+            Location::query()->whereIn('search_name', $keys)->orderBy('depth')->orderBy('id')->get(),
+        );
+    }
+
+    /**
+     * Distinct dictionary search keys within the similarity window of the
+     * best match for the given key — the plausible corrections of a
+     * misheard or mistyped place name.
+     *
+     * @return list<string>
+     */
+    protected function closeKeys(string $key): array
+    {
+        if (mb_strlen($key) < self::FUZZY_MIN_KEY_LENGTH || DB::getDriverName() !== 'pgsql') {
+            return [];
+        }
+
+        $candidates = Location::query()
+            ->selectRaw('search_name, similarity(search_name, ?) as sim', [$key])
+            ->whereRaw('similarity(search_name, ?) >= ?', [$key, self::FUZZY_SIMILARITY_THRESHOLD])
+            ->groupBy('search_name')
+            ->orderByDesc('sim')
+            ->limit(self::MAX_CANDIDATES)
+            ->get();
+
+        $best = (float) ($candidates->first()->sim ?? 0);
+
+        return $candidates
+            ->filter(fn (Location $candidate): bool => (float) $candidate->sim >= $best - self::FUZZY_SIMILARITY_WINDOW)
+            ->pluck('search_name')
+            ->all();
     }
 
     /**

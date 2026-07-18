@@ -162,6 +162,7 @@ class CustomerSearchAssistant
         }
 
         $state['transcript'][] = $input;
+        $state['unresolved_location'] = null;
 
         $requirements = $this->extractRequirements($session, $state);
 
@@ -171,7 +172,16 @@ class CustomerSearchAssistant
             return $this->runSearch($session, $state, implode(', ', $state['transcript']));
         }
 
-        $missing = $this->missingRequirements($requirements);
+        // The KATO dictionary is the only source of truth for the place:
+        // a named location either resolves to a node (the subtree filter,
+        // tolerating close distortions of transcribed voice input) or
+        // counts as unsettled and gets asked about, instead of being
+        // silently dropped into a country-wide search.
+        $location = filled($requirements['location'] ?? null)
+            ? $this->locations->detectPlace((string) $requirements['location'])
+            : null;
+
+        $missing = $this->missingRequirements($requirements, $location);
 
         if ($missing !== [] && $state['clarifications'] < self::MAX_CLARIFICATIONS) {
             $state['clarifications']++;
@@ -181,15 +191,22 @@ class CustomerSearchAssistant
             return AiOutcome::InProgress;
         }
 
-        return $this->runSearch($session, $state, $this->composeQuery($state, $requirements));
+        // The clarification limit ran out with the place still unknown:
+        // the search proceeds without a location filter, and the results
+        // are labeled so the customer knows the place was not matched.
+        if (in_array('location_unresolved', $missing, true)) {
+            $state['unresolved_location'] = (string) $requirements['location'];
+        }
+
+        return $this->runSearch($session, $state, $this->composeQuery($state, $requirements), $location);
     }
 
     /**
      * @param  array<string, mixed>  $state
      */
-    protected function runSearch(BotSession $session, array $state, string $query): AiOutcome
+    protected function runSearch(BotSession $session, array $state, string $query, ?Location $location = null): AiOutcome
     {
-        $location = $this->locations->detectInQuery($query);
+        $location ??= $this->locations->detectInQuery($query);
         $matches = $this->matcher->match($query, $location);
 
         if ($matches->isEmpty()) {
@@ -235,9 +252,13 @@ class CustomerSearchAssistant
         $state['expand_location_id'] = null;
         $this->persist($session, $state);
 
+        $unresolvedLocation = $state['unresolved_location'] ?? null;
+
         $this->messenger->sendList(
             $session->contact,
-            'Вот что нашлось по вашему запросу. Выберите вариант — и мы отправим заявку поставщику:',
+            filled($unresolvedLocation)
+                ? sprintf('Не нашли «%s» в справочнике мест, поэтому показываем варианты без учёта места. Выберите вариант — и мы отправим заявку поставщику:', $unresolvedLocation)
+                : 'Вот что нашлось по вашему запросу. Выберите вариант — и мы отправим заявку поставщику:',
             self::LIST_BUTTON,
             $matches->map(fn (Listing $listing): array => $this->listRow($listing))->all(),
         );
@@ -468,12 +489,13 @@ class CustomerSearchAssistant
 
     /**
      * The search waits for the need and the place; an explicit «место не
-     * важно» satisfies the place without naming one.
+     * важно» satisfies the place without naming one, while a place named
+     * but not found in the dictionary stays unsettled («location_unresolved»).
      *
      * @param  array<string, mixed>  $requirements
      * @return list<string>
      */
-    protected function missingRequirements(array $requirements): array
+    protected function missingRequirements(array $requirements, ?Location $location): array
     {
         $missing = [];
 
@@ -481,8 +503,14 @@ class CustomerSearchAssistant
             $missing[] = 'subject';
         }
 
-        if (blank($requirements['location'] ?? null) && ! (bool) ($requirements['location_any'] ?? false)) {
+        if ((bool) ($requirements['location_any'] ?? false)) {
+            return $missing;
+        }
+
+        if (blank($requirements['location'] ?? null)) {
             $missing[] = 'location';
+        } elseif ($location === null) {
+            $missing[] = 'location_unresolved';
         }
 
         return $missing;
@@ -494,6 +522,16 @@ class CustomerSearchAssistant
      */
     protected function clarifyingQuestion(array $requirements, array $missing): string
     {
+        // The extractor believes the place is settled, so its question
+        // would miss the dictionary lookup failure — same wording as the
+        // supplier collector for an unknown place.
+        if ($missing[0] === 'location_unresolved') {
+            return sprintf(
+                'Не нашли «%s» в справочнике мест. Напишите город, район или село точнее.',
+                $requirements['location'],
+            );
+        }
+
         if (filled($requirements['clarifying_question'] ?? null)) {
             return (string) $requirements['clarifying_question'];
         }
@@ -535,6 +573,7 @@ class CustomerSearchAssistant
             'query' => null,
             'offered' => [],
             'expand_location_id' => null,
+            'unresolved_location' => null,
         ];
     }
 

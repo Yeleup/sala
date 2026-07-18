@@ -560,7 +560,8 @@ test('the answer to the clarifying question completes the intake and lists the l
 
     $messenger = fakeSearchMessenger();
     $messenger->shouldReceive('sendList')->once()->withArgs(
-        fn (Contact $contact, string $text, string $button, array $rows): bool => $rows[0]['id'] === "listing:{$listing->id}",
+        fn (Contact $contact, string $text, string $button, array $rows): bool => str_starts_with($text, 'Вот что нашлось')
+            && $rows[0]['id'] === "listing:{$listing->id}",
     );
 
     $session = searchSession(['transcript' => ['нужен кран 25 тонн'], 'clarifications' => 1]);
@@ -574,6 +575,76 @@ test('the answer to the clarifying question completes the intake and lists the l
     SearchQueryExtractionAgent::assertPrompted(
         fn ($prompt): bool => $prompt->contains('нужен кран 25 тонн') && $prompt->contains('Шымкент'),
     );
+});
+
+test('a place missing from the dictionary asks to name it precisely instead of searching', function () {
+    SearchQueryExtractionAgent::fake([fullSearchIntake(['subject' => 'погрузчик мусора', 'location' => 'Сарыагаш'])]);
+    Listing::factory()->published()->create([
+        'category_id' => categoryNamed('Погрузчик')->id, 'description' => 'Фронтальный погрузчик', 'location_id' => locationNamed('г.Алматы')->id,
+    ]);
+
+    $messenger = fakeSearchMessenger();
+    $messenger->shouldReceive('sendText')->once()->withArgs(
+        fn (Contact $contact, string $text): bool => str_contains($text, 'Не нашли «Сарыагаш» в справочнике мест'),
+    );
+
+    $session = searchSession();
+    $outcome = app(CustomerSearchAssistant::class)
+        ->resume($session, customerAiNode(), new InboundMessage(text: 'нужен погрузчик мусора в Сарыагаше'));
+
+    expect($outcome)->toBe(AiOutcome::InProgress)
+        ->and($session->refresh()->state['clarifications'])->toBe(1)
+        // Ненайденное место — уточняющий вопрос, а не молчаливый поиск по
+        // всей базе: безрезультатная попытка не тратится, выдачи нет.
+        ->and($session->state['attempts'])->toBe(0)
+        ->and($session->state['phase'])->toBe('searching');
+});
+
+test('a voice-distorted place name is corrected to the dictionary and filters the results', function () {
+    SearchQueryExtractionAgent::fake([fullSearchIntake(['subject' => 'погрузчик', 'location' => 'Сарагаш'])]);
+    $district = locationNamed('Сарыагашский район', locationNamed('Туркестанская область'));
+    $inPlace = Listing::factory()->published()->create([
+        'category_id' => categoryNamed('Погрузчик')->id, 'description' => 'Фронтальный погрузчик', 'location_id' => locationNamed('г.Сарыагаш', $district)->id,
+    ]);
+    Listing::factory()->published()->create([
+        'category_id' => categoryNamed('Погрузчик')->id, 'description' => 'Фронтальный погрузчик', 'location_id' => locationNamed('г.Алматы')->id,
+    ]);
+
+    $messenger = fakeSearchMessenger();
+    $messenger->shouldReceive('sendList')->once()->withArgs(
+        fn (Contact $contact, string $text, string $button, array $rows): bool => str_starts_with($text, 'Вот что нашлось')
+            && count($rows) === 1
+            && $rows[0]['id'] === "listing:{$inPlace->id}",
+    );
+
+    $session = searchSession();
+    $outcome = app(CustomerSearchAssistant::class)
+        ->resume($session, customerAiNode(), new InboundMessage(text: 'нужен погрузчик, Сарагаш'));
+
+    expect($outcome)->toBe(AiOutcome::InProgress);
+});
+
+test('the exhausted clarification limit searches without the place and labels the list honestly', function () {
+    SearchQueryExtractionAgent::fake([fullSearchIntake(['subject' => 'погрузчик', 'location' => 'Сарыагаш'])]);
+    $listing = Listing::factory()->published()->create([
+        'category_id' => categoryNamed('Погрузчик')->id, 'description' => 'Фронтальный погрузчик', 'location_id' => locationNamed('г.Алматы')->id,
+    ]);
+
+    $messenger = fakeSearchMessenger();
+    $messenger->shouldReceive('sendList')->once()->withArgs(
+        fn (Contact $contact, string $text, string $button, array $rows): bool => str_contains($text, 'Не нашли «Сарыагаш» в справочнике мест')
+            && str_contains($text, 'без учёта места')
+            && $rows[0]['id'] === "listing:{$listing->id}",
+    );
+
+    $session = searchSession(['transcript' => ['нужен погрузчик', 'Сарыагаш'], 'clarifications' => 3]);
+    $outcome = app(CustomerSearchAssistant::class)
+        ->resume($session, customerAiNode(), new InboundMessage(text: 'город Сарыагаш'));
+
+    expect($outcome)->toBe(AiOutcome::InProgress)
+        ->and($session->refresh()->state['phase'])->toBe('choosing')
+        ->and($session->state['unresolved_location'])->toBe('Сарыагаш')
+        ->and($session->state['query'])->toBe('погрузчик, Сарыагаш');
 });
 
 test('an explicit «any place» satisfies the intake and searches the whole base', function () {

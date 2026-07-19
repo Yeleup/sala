@@ -4,6 +4,7 @@ namespace App\Filament\Pages;
 
 use App\Enums\AiTask;
 use App\Enums\BotNodeType;
+use App\Enums\BotReplyKey;
 use App\Enums\BotScenarioTrigger;
 use App\Enums\ListingType;
 use App\Enums\ScenarioAction;
@@ -12,6 +13,7 @@ use App\Enums\ScenarioMessageChannel;
 use App\Enums\ScenarioVariable;
 use App\Models\BotScenario;
 use App\Models\WhatsappTemplate;
+use App\Services\Bot\BotReplyTexts;
 use App\Services\Bot\ScenarioValidator;
 use BackedEnum;
 use Filament\Notifications\Notification;
@@ -134,6 +136,15 @@ class BotScenarioEditor extends Page
                 ])
                 ->values()
                 ->all(),
+            // Справка «Встроенные ответы бота»: актуальные тексты, включая
+            // переопределения со страницы «Ответы бота».
+            'fallbacks' => array_map(fn (BotReplyKey $key): array => [
+                'value' => $key->value,
+                'label' => $key->label(),
+                'description' => $key->description(),
+                'text' => app(BotReplyTexts::class)->get($key),
+            ], BotReplyKey::cases()),
+            'fallbacksUrl' => BotReplyTextsPage::getUrl(),
         ];
     }
 

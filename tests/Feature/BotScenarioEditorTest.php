@@ -348,6 +348,22 @@ describe('понятность редактора', function () {
             ->assertSee('Маршрут сценария')
             ->assertSee('Проверить сценарий')
             ->assertSee('Выровнять схему')
+            ->assertSee('Встроенные ответы бота')
             ->assertSee('Любая другая фраза');
+    });
+
+    test('справка редактора отдаёт встроенные ответы с учётом переопределений', function () {
+        BotScenario::factory()->create();
+        \App\Models\BotReplyText::query()->create(['key' => 'stale_button', 'text' => 'Свой текст про кнопку']);
+        app(\App\Services\Bot\BotReplyTexts::class)->flush();
+
+        $fallbacks = collect(Livewire::test(BotScenarioEditor::class)->instance()->editorConfig()['fallbacks']);
+
+        expect($fallbacks)->toHaveCount(count(\App\Enums\BotReplyKey::cases()))
+            ->and($fallbacks->firstWhere('value', 'stale_button')['text'])->toBe('Свой текст про кнопку')
+            ->and($fallbacks->firstWhere('value', 'run_decision_final')['text'])
+            ->toBe(\App\Enums\BotReplyKey::RunDecisionFinal->default());
+
+        app(\App\Services\Bot\BotReplyTexts::class)->flush();
     });
 });

@@ -394,6 +394,22 @@
                         <p class="bse-note">Связи: кликните кружок справа от выхода, затем кликните по
                             следующему блоку (или просто потяните от кружка к блоку).
                             Чтобы разорвать связь, потяните её с выхода в пустое место.</p>
+
+                        <div class="bse-fallbacks">
+                            <p class="bse-outline-title">Встроенные ответы бота</p>
+                            <p class="bse-note">Эти тексты бот отправляет сам, вне блоков сценария.
+                                <a class="bse-fallbacks-link" x-bind:href="config.fallbacksUrl">Изменить тексты</a></p>
+                            <template x-for="f in config.fallbacks" :key="f.value">
+                                <div class="bse-fallback">
+                                    <p class="bse-fallback-label" x-text="f.label"></p>
+                                    <p class="bse-note" x-text="f.description"></p>
+                                    <p class="bse-fallback-text" x-text="'«' + f.text + '»'"></p>
+                                </div>
+                            </template>
+                            <p class="bse-note">Если у шага не подключён выход «Любая другая фраза», отдельного
+                                текста нет — бот просто повторяет сообщение текущего шага.</p>
+                        </div>
+
                         <template x-if="config.runBased">
                             <p class="bse-note">Это сценарий на событие: каждый запуск идёт отдельно и не трогает
                                 основной диалог контакта. Кнопки его сообщений несут уникальный токен запуска, поэтому
@@ -426,7 +442,7 @@
                 Alpine.data('botScenarioEditor', (initial, config) => ({
                     nodes: (initial.nodes ?? []).map((n) => ({ text: '', options: [], ...n })),
                     edges: initial.edges ?? [],
-                    config: config ?? { runBased: false, templates: [], variables: [], conditions: [], actions: [] },
+                    config: config ?? { runBased: false, templates: [], variables: [], conditions: [], actions: [], fallbacks: [], fallbacksUrl: '' },
                     pan: { x: 40, y: 20 },
                     scale: 1,
                     selectedId: null,
@@ -1288,6 +1304,12 @@
             .bse-check-warning { font-size: 0.75rem; color: rgb(180 83 9); }
             .bse-check-link { cursor: pointer; text-decoration: underline dotted; }
 
+            .bse-fallbacks { display: flex; flex-direction: column; gap: 0.375rem; border-top: 1px solid rgb(229 231 235); padding-top: 0.75rem; }
+            .bse-fallback { display: flex; flex-direction: column; gap: 0.125rem; }
+            .bse-fallback-label { font-size: 0.75rem; font-weight: 600; color: rgb(55 65 81); }
+            .bse-fallback-text { font-size: 0.75rem; font-style: italic; color: rgb(107 114 128); }
+            .bse-fallbacks-link { color: rgb(217 119 6); text-decoration: underline dotted; }
+
             .bse-outline { display: flex; flex-direction: column; gap: 0.125rem; }
             .bse-outline-title { font-size: 0.8125rem; font-weight: 600; color: rgb(55 65 81); margin-bottom: 0.25rem; }
             .bse-outline-row {
@@ -1336,6 +1358,8 @@
             :where(.dark) .bse-edge-label { stroke: rgb(17 24 39); }
             :where(.dark) .bse-step { background: rgb(55 65 81); color: rgb(209 213 219); }
             :where(.dark) .bse-outline-title { color: rgb(209 213 219); }
+            :where(.dark) .bse-fallbacks { border-color: rgb(55 65 81); }
+            :where(.dark) .bse-fallback-label { color: rgb(209 213 219); }
             :where(.dark) .bse-outline-row { color: rgb(209 213 219); }
             :where(.dark) .bse-outline-row:hover { background: rgb(55 65 81); }
             :where(.dark) .bse-legend { background: rgb(31 41 55 / 0.85); border-color: rgb(55 65 81); color: rgb(156 163 175); }

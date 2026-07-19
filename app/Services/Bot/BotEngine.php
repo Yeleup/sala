@@ -4,6 +4,7 @@ namespace App\Services\Bot;
 
 use App\Enums\AiOutcome;
 use App\Enums\BotNodeType;
+use App\Enums\BotReplyKey;
 use App\Models\BotScenario;
 use App\Models\BotSession;
 use App\Models\Contact;
@@ -28,25 +29,13 @@ class BotEngine
 
     private const string DEFAULT_LIST_BUTTON = 'Выбрать';
 
-    private const string STALE_BUTTON_NOTICE = 'Эта кнопка из прежней версии бота и больше не действует.';
-
-    /**
-     * Meta fails to deliver which button was pressed for some WhatsApp Web
-     * devices migrated to LID identifiers (escalated to Meta, no ETA) — the
-     * choice is unrecoverable, so the contact is asked to answer again.
-     */
-    private const string UNRECOGNIZED_PRESS_MENU_NOTICE = 'Не получилось распознать нажатие кнопки (такое бывает в WhatsApp Web). Ответьте цифрой:';
-
-    private const string UNRECOGNIZED_PRESS_AI_NOTICE = 'Не получилось распознать нажатие кнопки — напишите, пожалуйста, текстом.';
-
-    private const string UNRECOGNIZED_PRESS_IDLE_NOTICE = 'Не получилось распознать нажатие кнопки. Если это была кнопка из уведомления о заявке или объявлении — ответьте, пожалуйста, с телефона.';
-
     public function __construct(
         private readonly DereuMessenger $messenger,
         private readonly AiAssistant $aiAssistant,
         private readonly ScenarioRunReplyHandler $runReplies,
         private readonly NotificationReplyHandler $notificationReplies,
         private readonly CtaLinkBuilder $links,
+        private readonly BotReplyTexts $replyTexts,
     ) {}
 
     public function handle(Contact $contact, InboundMessage $message): void
@@ -74,7 +63,7 @@ class BotEngine
 
         if ($this->startsNewDialog($session, $scenario, $definition)) {
             if ($message->unrecognizedPress) {
-                $this->messenger->sendText($contact, self::UNRECOGNIZED_PRESS_IDLE_NOTICE);
+                $this->messenger->sendText($contact, $this->replyTexts->get(BotReplyKey::UnrecognizedPressIdle));
             }
 
             $this->restart($session, $contact, $scenario, $definition);
@@ -180,7 +169,7 @@ class BotEngine
      */
     private function handleStaleButton(BotSession $session, Contact $contact, BotScenario $scenario, ScenarioDefinition $definition, ?array $node, ?BotNodeType $type): void
     {
-        $this->messenger->sendText($contact, self::STALE_BUTTON_NOTICE);
+        $this->messenger->sendText($contact, $this->replyTexts->get(BotReplyKey::StaleButton));
 
         // Waiting on a menu — repeat the step the contact is actually on.
         if ($node !== null && $type?->waitsForInput() === true) {
@@ -204,21 +193,21 @@ class BotEngine
     private function handleUnrecognizedPress(BotSession $session, Contact $contact, BotScenario $scenario, ScenarioDefinition $definition, ?array $node, ?BotNodeType $type): void
     {
         if ($type === BotNodeType::AiInput) {
-            $this->messenger->sendText($contact, self::UNRECOGNIZED_PRESS_AI_NOTICE);
+            $this->messenger->sendText($contact, $this->replyTexts->get(BotReplyKey::UnrecognizedPressAi));
             $session->save();
 
             return;
         }
 
         if ($node !== null && $type?->waitsForInput() === true) {
-            $this->messenger->sendText($contact, self::UNRECOGNIZED_PRESS_MENU_NOTICE);
+            $this->messenger->sendText($contact, $this->replyTexts->get(BotReplyKey::UnrecognizedPressMenu));
             $this->sendNumberedMenu($contact, $definition, $node);
             $session->save();
 
             return;
         }
 
-        $this->messenger->sendText($contact, self::UNRECOGNIZED_PRESS_IDLE_NOTICE);
+        $this->messenger->sendText($contact, $this->replyTexts->get(BotReplyKey::UnrecognizedPressIdle));
         $this->restart($session, $contact, $scenario, $definition);
     }
 

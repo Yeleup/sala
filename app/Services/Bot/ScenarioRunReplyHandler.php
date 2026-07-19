@@ -2,6 +2,7 @@
 
 namespace App\Services\Bot;
 
+use App\Enums\BotReplyKey;
 use App\Exceptions\SessionWindowClosed;
 use App\Models\Contact;
 use App\Models\ScenarioRun;
@@ -22,6 +23,7 @@ class ScenarioRunReplyHandler
     public function __construct(
         private readonly ScenarioRunner $runner,
         private readonly DereuMessenger $messenger,
+        private readonly BotReplyTexts $replyTexts,
     ) {}
 
     public static function payload(ScenarioRun $run, string $optionId): string
@@ -74,7 +76,7 @@ class ScenarioRunReplyHandler
     protected function tellDecisionIsFinal(Contact $contact): void
     {
         try {
-            $this->messenger->sendText($contact, 'Этот вопрос уже закрыт — ответ был зафиксирован ранее.');
+            $this->messenger->sendText($contact, $this->replyTexts->get(BotReplyKey::RunDecisionFinal));
         } catch (SessionWindowClosed) {
             // The reply itself normally opens the window; losing this
             // courtesy note is fine.

@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use App\Enums\WhatsappTemplateCategory;
+use App\Models\Listing;
 use App\Models\WhatsappTemplate;
 use Illuminate\Support\Collection;
 use InvalidArgumentException;
@@ -10,9 +11,9 @@ use InvalidArgumentException;
 /**
  * Built-in catalog of the project's standard Template Messages — the ones
  * the business rules rely on (the 30-day relevance poll, the customer
- * request notification). The operator adds them to the registry in one
- * click instead of typing the texts by hand; flows reference them by the
- * name constants.
+ * request notification, the moderation verdicts). The operator adds them
+ * to the registry in one click instead of typing the texts by hand; flows
+ * reference them by the name constants.
  *
  * @phpstan-type LibraryEntry array{name: string, language: string, category: WhatsappTemplateCategory, title: string, purpose: string, body: string, quick_replies: list<string>, examples: list<string>}
  */
@@ -23,6 +24,12 @@ class WhatsappTemplateLibrary
 
     /** Notifies a supplier about a new customer request outside the 24-hour window. */
     public const string NEW_CUSTOMER_REQUEST = 'new_customer_request';
+
+    /** Tells a supplier their listing passed moderation, outside the 24-hour window. */
+    public const string LISTING_APPROVED = 'listing_approved';
+
+    /** Tells a supplier their listing was rejected by moderation, outside the 24-hour window. */
+    public const string LISTING_REJECTED = 'listing_rejected';
 
     public function __construct(private readonly WhatsappTemplateRegistry $registry) {}
 
@@ -51,6 +58,26 @@ class WhatsappTemplateLibrary
                 'body' => 'По вашему объявлению «{{1}}» новая заявка от заказчика: «{{2}}». Готовы взять заказ?',
                 'quick_replies' => ['Согласиться', 'Отказаться'],
                 'examples' => ['Автокран 25 т', 'Нужен кран на завтра, Шымкент'],
+            ],
+            [
+                'name' => self::LISTING_APPROVED,
+                'language' => 'ru',
+                'category' => WhatsappTemplateCategory::Utility,
+                'title' => 'Объявление опубликовано',
+                'purpose' => 'Сообщает поставщику об одобрении объявления, когда 24-часовое окно закрыто; кнопка присылает персональную ссылку на объявление.',
+                'body' => 'Ваше объявление «{{1}}» прошло модерацию и опубликовано — оно будет показываться в поиске '.Listing::LIFETIME_DAYS.' дней.',
+                'quick_replies' => ['Открыть объявление'],
+                'examples' => ['Автокран 25 т'],
+            ],
+            [
+                'name' => self::LISTING_REJECTED,
+                'language' => 'ru',
+                'category' => WhatsappTemplateCategory::Utility,
+                'title' => 'Объявление отклонено',
+                'purpose' => 'Сообщает поставщику об отклонении объявления, когда 24-часовое окно закрыто; кнопка присылает ссылку — по ней видна причина, объявление можно исправить и отправить повторно.',
+                'body' => 'Ваше объявление «{{1}}» не прошло модерацию. Откройте его, чтобы узнать причину, исправить и отправить повторно.',
+                'quick_replies' => ['Открыть объявление'],
+                'examples' => ['Автокран 25 т'],
             ],
         ]);
     }

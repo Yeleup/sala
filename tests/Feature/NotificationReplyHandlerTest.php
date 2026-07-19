@@ -201,6 +201,64 @@ describe('ответы на 30-дневный опрос', function () {
     });
 });
 
+describe('кнопка «Открыть объявление» уведомления о вердикте модерации', function () {
+    test('нажатие присылает персональную ссылку на объявление', function () {
+        $supplier = Contact::factory()->withOpenSessionWindow()->create();
+        $listing = Listing::factory()->rejected()->for($supplier, 'supplier')
+            ->create(['category_id' => categoryNamed('Автокран')->id]);
+
+        $messenger = fakeReplyMessenger();
+        $messenger->shouldReceive('sendCtaUrl')->once()->withArgs(
+            fn (Contact $contact, string $text, string $button, string $url): bool => $contact->is($supplier)
+                && str_contains($text, 'Автокран')
+                && str_contains($url, "/supplier/listings/{$listing->id}/edit")
+                && str_contains($url, 'signature='),
+        );
+
+        $handled = app(NotificationReplyHandler::class)->handle(
+            $supplier,
+            new InboundMessage(text: 'Открыть объявление', replyId: NotificationReplyHandler::listingOpenId($listing)),
+        );
+
+        expect($handled)->toBeTrue();
+    });
+
+    test('чужой контакт не получает ссылку на чужое объявление', function () {
+        $listing = Listing::factory()->rejected()->create();
+        $stranger = Contact::factory()->withOpenSessionWindow()->create();
+
+        fakeReplyMessenger()->shouldNotReceive('sendCtaUrl');
+
+        $handled = app(NotificationReplyHandler::class)->handle(
+            $stranger,
+            new InboundMessage(replyId: NotificationReplyHandler::listingOpenId($listing)),
+        );
+
+        expect($handled)->toBeTrue();
+    });
+
+    test('нажатие по удалённому объявлению отвечает текстом, а не молчит', function () {
+        $supplier = Contact::factory()->withOpenSessionWindow()->create();
+        $listing = Listing::factory()->rejected()->for($supplier, 'supplier')->create();
+        $replyId = NotificationReplyHandler::listingOpenId($listing);
+        $listing->delete();
+
+        $messenger = fakeReplyMessenger();
+        $messenger->shouldNotReceive('sendCtaUrl');
+        $messenger->shouldReceive('sendText')->once()->withArgs(
+            fn (Contact $contact, string $text): bool => $contact->is($supplier)
+                && str_contains($text, 'уже нет'),
+        );
+
+        $handled = app(NotificationReplyHandler::class)->handle(
+            $supplier,
+            new InboundMessage(replyId: $replyId),
+        );
+
+        expect($handled)->toBeTrue();
+    });
+});
+
 test('кнопка «Обновить объявления» присылает персональную ссылку на кабинет', function () {
     $supplier = Contact::factory()->withOpenSessionWindow()->create();
 

@@ -18,7 +18,7 @@ class WhatsappTemplateFactory extends Factory
     public function definition(): array
     {
         return [
-            'name' => fake()->unique()->randomElement(['listing_renewal', 'request_notification', 'listing_update']).'_'.fake()->unique()->numberBetween(1, 9999),
+            'name' => fake()->randomElement(['listing_renewal', 'request_notification', 'listing_update']).'_'.fake()->unique()->numberBetween(1, 9999),
             'language' => 'ru',
             'category' => WhatsappTemplateCategory::Utility,
             'status' => WhatsappTemplateStatus::Pending,

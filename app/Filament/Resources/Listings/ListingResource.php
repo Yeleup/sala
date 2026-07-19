@@ -13,6 +13,7 @@ use App\Filament\Resources\Listings\Schemas\ListingInfolist;
 use App\Filament\Clusters\Marketplace\MarketplaceCluster;
 use App\Filament\Resources\Listings\Tables\ListingsTable;
 use App\Models\Listing;
+use App\Services\ListingModerationNotifier;
 use BackedEnum;
 use Filament\Actions\Action;
 use Illuminate\Contracts\Support\Htmlable;
@@ -93,8 +94,13 @@ class ListingResource extends Resource
             ->action(function (Listing $record): void {
                 $record->approve();
 
+                $notified = app(ListingModerationNotifier::class)->notifyApproved($record);
+
                 Notification::make()
                     ->title('Объявление опубликовано')
+                    ->body($notified
+                        ? 'Поставщику отправлено уведомление в WhatsApp.'
+                        : 'Уведомить поставщика в WhatsApp не удалось — статус он увидит в веб-кабинете.')
                     ->success()
                     ->send();
             });
@@ -108,7 +114,7 @@ class ListingResource extends Resource
             ->color('danger')
             ->visible(fn (Listing $record): bool => $record->status === ListingStatus::PendingModeration)
             ->modalHeading('Отклонить объявление')
-            ->modalDescription('Причину увидит поставщик в веб-интерфейсе.')
+            ->modalDescription('Поставщик получит уведомление в WhatsApp; причину он увидит по ссылке в веб-кабинете.')
             ->schema([
                 Textarea::make('rejection_reason')
                     ->label('Причина отклонения')
@@ -117,8 +123,13 @@ class ListingResource extends Resource
             ->action(function (Listing $record, array $data): void {
                 $record->reject($data['rejection_reason']);
 
+                $notified = app(ListingModerationNotifier::class)->notifyRejected($record);
+
                 Notification::make()
                     ->title('Объявление отклонено')
+                    ->body($notified
+                        ? 'Поставщику отправлено уведомление в WhatsApp.'
+                        : 'Уведомить поставщика в WhatsApp не удалось — причину он увидит в веб-кабинете.')
                     ->success()
                     ->send();
             });

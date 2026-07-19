@@ -46,8 +46,9 @@ class BotEngine
             return;
         }
 
-        // Replies to legacy proactive notifications (buttons sent before
-        // the flows moved into scenarios) can also arrive at any step.
+        // Replies to built-in proactive notifications (the moderation
+        // verdict button, plus legacy buttons sent before the flows moved
+        // into scenarios) can also arrive at any step.
         if ($this->notificationReplies->handle($contact, $message)) {
             return;
         }

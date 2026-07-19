@@ -16,9 +16,9 @@ use Illuminate\Support\Str;
 /**
  * Handles button replies to proactive notifications — messages the bot
  * sent outside the scenario flow (the customer request notification, the
- * 30-day renewal poll). Such a reply can arrive days later, whatever step
- * of the scenario the contact is on, so the engine offers each inbound
- * message here before scenario processing.
+ * 30-day renewal poll, the moderation verdict). Such a reply can arrive
+ * days later, whatever step of the scenario the contact is on, so the
+ * engine offers each inbound message here before scenario processing.
  */
 class NotificationReplyHandler
 {
@@ -29,6 +29,8 @@ class NotificationReplyHandler
     private const string RENEWAL_YES_PREFIX = 'renewal_yes:';
 
     private const string RENEWAL_NO_PREFIX = 'renewal_no:';
+
+    private const string LISTING_OPEN_PREFIX = 'listing_open:';
 
     /** The «Обновить объявления» button of the fleet update broadcast. */
     public const string MY_LISTINGS_REPLY = 'my_listings';
@@ -58,6 +60,11 @@ class NotificationReplyHandler
         return self::RENEWAL_NO_PREFIX.$listing->id;
     }
 
+    public static function listingOpenId(Listing $listing): string
+    {
+        return self::LISTING_OPEN_PREFIX.$listing->id;
+    }
+
     /**
      * True when the message was a notification reply and is fully handled —
      * the engine must not run the scenario for it.
@@ -82,6 +89,10 @@ class NotificationReplyHandler
             return $this->handleRenewalReply($contact, $replyId, stillRelevant: false);
         }
 
+        if (str_starts_with($replyId, self::LISTING_OPEN_PREFIX)) {
+            return $this->handleListingOpenReply($contact, $replyId);
+        }
+
         if ($replyId === self::MY_LISTINGS_REPLY) {
             $this->messenger->sendCtaUrl(
                 $contact,
@@ -94,6 +105,41 @@ class NotificationReplyHandler
         }
 
         return false;
+    }
+
+    /**
+     * The «Открыть объявление» button of the moderation verdict template.
+     * The tap reopens the 24-hour window, so the signed CTA link (which a
+     * paid template cannot carry — it may be read after the link expires)
+     * goes out fresh right here, whatever the listing's status is by now.
+     */
+    protected function handleListingOpenReply(Contact $contact, string $replyId): bool
+    {
+        $listing = Listing::query()->find((int) Str::of($replyId)->afterLast(':')->value());
+
+        // Deleting a listing is a routine admin flow (spam cleanup), so the
+        // button may legitimately outlive it — answer instead of ignoring.
+        if ($listing === null) {
+            $this->messenger->sendText(
+                $contact,
+                'Этого объявления уже нет. Чтобы разместить его снова, создайте новое объявление.',
+            );
+
+            return true;
+        }
+
+        if ($listing->contact_id !== $contact->id) {
+            return true;
+        }
+
+        $this->messenger->sendCtaUrl(
+            $contact,
+            sprintf('Откройте объявление «%s» — внутри его статус и подробности.', $listing->displayName() ?: 'без названия'),
+            'Открыть объявление',
+            $this->links->editUrl($listing),
+        );
+
+        return true;
     }
 
     /**

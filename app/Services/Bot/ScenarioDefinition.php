@@ -30,7 +30,8 @@ use App\Enums\BotNodeType;
  * ]
  *
  * Outputs: one per option ("option:{id}"), "continue" (default transition
- * of Start/Text/AI blocks) and "fallback" («Любая другая фраза»).
+ * of Start/Text/AI blocks; «Выполнено» of an action), "fallback"
+ * («Любая другая фраза»), "yes"/"no", "timeout" and "skipped".
  */
 class ScenarioDefinition
 {
@@ -52,6 +53,14 @@ class ScenarioDefinition
 
     /** Fires when a «WhatsApp-сообщение» block got no reply in time. */
     public const string OUTPUT_TIMEOUT = 'timeout';
+
+    /**
+     * Fires when a «Действие» block's domain precondition no longer holds
+     * (the request is already decided, the listing is not published).
+     * Success stays on "continue", so older published snapshots keep
+     * working unchanged.
+     */
+    public const string OUTPUT_SKIPPED = 'skipped';
 
     /**
      * @param  array{nodes?: list<array<string, mixed>>, edges?: list<array<string, mixed>>}  $definition

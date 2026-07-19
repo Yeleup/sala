@@ -62,30 +62,50 @@ class ScenarioValidator
      */
     public function validate(array $definition, BotScenarioTrigger $trigger = BotScenarioTrigger::InboundMessage): array
     {
+        $detailed = $this->validateDetailed($definition, $trigger);
+
+        return [
+            'errors' => array_values(array_unique(array_column($detailed['errors'], 'message'))),
+            'warnings' => array_values(array_unique(array_column($detailed['warnings'], 'message'))),
+        ];
+    }
+
+    /**
+     * То же, но каждая запись знает свой блок — для перехода к нему
+     * по клику в проверке до публикации.
+     *
+     * @param  array{nodes?: list<array<string, mixed>>, edges?: list<array<string, mixed>>}  $definition
+     * @return array{errors: list<array{message: string, node_id: string|null}>, warnings: list<array{message: string, node_id: string|null}>}
+     */
+    public function validateDetailed(array $definition, BotScenarioTrigger $trigger = BotScenarioTrigger::InboundMessage): array
+    {
         $errors = [];
         $warnings = [];
         $nodes = collect($definition['nodes'] ?? []);
         $edges = collect($definition['edges'] ?? []);
 
+        $issue = fn (string $message, ?string $nodeId = null): array => ['message' => $message, 'node_id' => $nodeId];
+
         $startNodes = $nodes->filter(fn (array $node): bool => ($node['type'] ?? null) === BotNodeType::Start->value);
 
         if ($startNodes->isEmpty()) {
-            $errors[] = 'В сценарии нет блока «Старт».';
+            $errors[] = $issue('В сценарии нет блока «Старт».');
         } elseif ($startNodes->count() > 1) {
-            $errors[] = 'Блок «Старт» должен быть единственным.';
+            $errors[] = $issue('Блок «Старт» должен быть единственным.');
         }
 
         foreach ($nodes as $node) {
+            $nodeId = isset($node['id']) ? (string) $node['id'] : null;
             ['errors' => $nodeErrors, 'warnings' => $nodeWarnings] = $this->validateNode($node, $edges, $trigger);
-            $errors = [...$errors, ...$nodeErrors];
-            $warnings = [...$warnings, ...$nodeWarnings];
+            $errors = [...$errors, ...array_map(fn (string $message): array => $issue($message, $nodeId), $nodeErrors)];
+            $warnings = [...$warnings, ...array_map(fn (string $message): array => $issue($message, $nodeId), $nodeWarnings)];
         }
 
         $nodeIds = $nodes->pluck('id')->filter()->all();
 
         foreach ($edges as $edge) {
             if (! in_array($edge['from'] ?? null, $nodeIds, true) || ! in_array($edge['to'] ?? null, $nodeIds, true)) {
-                $errors[] = 'Связь ссылается на несуществующий блок.';
+                $errors[] = $issue('Связь ссылается на несуществующий блок.', in_array($edge['from'] ?? null, $nodeIds, true) ? (string) $edge['from'] : null);
             }
         }
 
@@ -94,18 +114,23 @@ class ScenarioValidator
         $edges
             ->groupBy(fn (array $edge): string => ($edge['from'] ?? '').'|'.($edge['output'] ?? ''))
             ->filter(fn ($group): bool => $group->count() > 1)
-            ->each(function ($group) use ($nodes, &$errors): void {
+            ->each(function ($group) use ($nodes, $issue, &$errors): void {
                 $from = $group->first()['from'] ?? '?';
                 $node = $nodes->firstWhere('id', $from) ?? ['id' => $from];
-                $errors[] = "С одного выхода блока {$this->nodeLabel($node)} идёт больше одной связи.";
+                $errors[] = $issue("С одного выхода блока {$this->nodeLabel($node)} идёт больше одной связи.", (string) $from);
             });
 
+        $unique = fn (array $issues): array => collect($issues)
+            ->unique(fn (array $entry): string => $entry['message'].'|'.($entry['node_id'] ?? ''))
+            ->values()
+            ->all();
+
         return [
-            'errors' => array_values(array_unique($errors)),
-            'warnings' => array_values(array_unique([
+            'errors' => $unique($errors),
+            'warnings' => $unique([
                 ...$this->unreachableNodeWarnings($nodes->all(), $edges->all()),
                 ...$warnings,
-            ])),
+            ]),
         ];
     }
 
@@ -162,7 +187,7 @@ class ScenarioValidator
         }
 
         if ($type === BotNodeType::Action) {
-            $errors = [...$errors, ...$this->validateAction($node, $label, $trigger)];
+            $errors = [...$errors, ...$this->validateAction($node, $label, $trigger, $hasOutput)];
         }
 
         return ['errors' => $errors, 'warnings' => $warnings];
@@ -301,9 +326,10 @@ class ScenarioValidator
 
     /**
      * @param  array<string, mixed>  $node
+     * @param  callable(string): bool  $hasOutput
      * @return list<string>
      */
-    protected function validateAction(array $node, string $label, BotScenarioTrigger $trigger): array
+    protected function validateAction(array $node, string $label, BotScenarioTrigger $trigger, callable $hasOutput): array
     {
         $action = ScenarioAction::tryFrom((string) ($node['action'] ?? ''));
 
@@ -313,6 +339,12 @@ class ScenarioValidator
 
         if (! $action->allowedIn($trigger)) {
             return ["Действие «{$action->label()}» блока {$label} недоступно в сценарии с триггером «{$trigger->label()}»."];
+        }
+
+        // Устаревшая связь: выход «не выполнено» остался от прежнего
+        // действия, а у текущего исхода «не выполнено» не бывает.
+        if ($hasOutput(ScenarioDefinition::OUTPUT_SKIPPED) && ! $action->hasPrecondition()) {
+            return ["У блока {$label} подключен выход «Не выполнено», но действие «{$action->label()}» не может остаться невыполненным."];
         }
 
         return [];
@@ -405,7 +437,7 @@ class ScenarioValidator
     /**
      * @param  list<array<string, mixed>>  $nodes
      * @param  list<array<string, mixed>>  $edges
-     * @return list<string>
+     * @return list<array{message: string, node_id: string|null}>
      */
     protected function unreachableNodeWarnings(array $nodes, array $edges): array
     {
@@ -442,7 +474,10 @@ class ScenarioValidator
 
         foreach ($nodes as $node) {
             if (! isset($reachable[$node['id'] ?? ''])) {
-                $warnings[] = "Блок {$this->nodeLabel($node)} недостижим от «Старта».";
+                $warnings[] = [
+                    'message' => "Блок {$this->nodeLabel($node)} недостижим от «Старта».",
+                    'node_id' => isset($node['id']) ? (string) $node['id'] : null,
+                ];
             }
         }
 

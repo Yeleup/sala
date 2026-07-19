@@ -35,6 +35,7 @@ class ListingEmbeddings
     {
         return implode("\n", array_filter([
             'Тип: '.$listing->type->getLabel(),
+            blank($listing->title) ? null : 'Название: '.$listing->title,
             $listing->category === null ? null : 'Категория: '.$listing->category->name,
             $listing->brand === null ? null : 'Марка: '.$listing->brand->name,
             blank($listing->description) ? null : 'Описание: '.$listing->description,

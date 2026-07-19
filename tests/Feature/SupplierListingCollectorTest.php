@@ -65,6 +65,7 @@ function fullExtraction(array $overrides = []): array
 
     return array_merge([
         'type' => 'equipment',
+        'title' => 'Аренда трактора с водителем',
         'category' => 'Трактор',
         'brand' => null,
         'description' => 'Трактор в аренду с водителем',
@@ -93,7 +94,8 @@ test('a complete description creates a draft and asks for confirmation', functio
     $session = collectorSession();
 
     fakeCollectorMessenger()->shouldReceive('sendButtons')->once()
-        ->withArgs(fn (Contact $to, string $text, array $buttons) => str_contains($text, 'Трактор, Шымкент, 10000 тг/ч')
+        ->withArgs(fn (Contact $to, string $text, array $buttons) => str_contains($text, 'Название: Аренда трактора с водителем')
+            && str_contains($text, 'Трактор, Шымкент, 10000 тг/ч')
             && str_contains($text, 'Всё верно?')
             && array_column($buttons, 'title') === ['Да, отправить', 'Исправить']
             // Лимит WhatsApp: заголовок кнопки длиннее 20 символов Meta отклоняет асинхронно.
@@ -108,6 +110,7 @@ test('a complete description creates a draft and asks for confirmation', functio
         ->contact_id->toBe($session->contact_id)
         ->status->toBe(ListingStatus::Draft)
         ->type->toBe(ListingType::Equipment)
+        ->title->toBe('Аренда трактора с водителем')
         ->category->name->toBe('Трактор')
         ->location->name->toBe('г.Шымкент')
         ->price->toBe('10000 тг/час');
@@ -429,6 +432,59 @@ test('an empty brand dictionary degrades the schema and tells the model to keep 
 
     expect($brandSchema)->not->toHaveKey('enum')
         ->and((string) $agent->instructions())->toContain('справочник марок пуст');
+});
+
+test('a missing title never blocks confirmation and never spends an attempt', function () {
+    ListingExtractionAgent::fake([fullExtraction(['title' => null])]);
+    $session = collectorSession();
+
+    // Название составляет сама модель: коллектор не считает его обязательным
+    // и вопросов про него не задаёт — черновик уходит на подтверждение без него.
+    fakeCollectorMessenger()->shouldReceive('sendButtons')->once()
+        ->withArgs(fn (Contact $to, string $text) => str_contains($text, 'Всё верно?'));
+
+    $outcome = app(SupplierListingCollector::class)
+        ->resume($session, supplierAiNode(), new InboundMessage(text: 'Сдаю трактор в Шымкенте, 10000 тг/час'));
+
+    expect($outcome)->toBe(AiOutcome::InProgress)
+        ->and($session->fresh()->state['attempts'])->toBe(0)
+        ->and(Listing::sole()->title)->toBeNull();
+});
+
+test('newlines and space runs in the extracted title are normalized before saving', function () {
+    // Название уходит в параметры шаблонов WhatsApp, где Meta отклоняет
+    // переводы строк и серии пробелов — храним уже нормализованным.
+    ListingExtractionAgent::fake([fullExtraction(['title' => "Аренда\nкрана   25 т"])]);
+    $session = collectorSession();
+
+    fakeCollectorMessenger()->shouldReceive('sendButtons')->once();
+
+    app(SupplierListingCollector::class)
+        ->resume($session, supplierAiNode(), new InboundMessage(text: 'Сдаю кран в Шымкенте, 10000 тг/час'));
+
+    expect(Listing::sole()->title)->toBe('Аренда крана 25 т');
+});
+
+test('an overlong extracted title is clipped to the column limit before saving', function () {
+    ListingExtractionAgent::fake([fullExtraction(['title' => str_repeat('А', 300)])]);
+    $session = collectorSession();
+
+    fakeCollectorMessenger()->shouldReceive('sendButtons')->once();
+
+    app(SupplierListingCollector::class)
+        ->resume($session, supplierAiNode(), new InboundMessage(text: 'Сдаю трактор в Шымкенте, 10000 тг/час'));
+
+    expect(mb_strlen(Listing::sole()->title))->toBe(255);
+});
+
+test('the extraction schema carries a nullable title the model composes itself', function () {
+    $agent = new ListingExtractionAgent(null, ['Автокран']);
+
+    $titleSchema = $agent->schema(new Illuminate\JsonSchema\JsonSchemaTypeFactory)['title']->toArray();
+
+    expect($titleSchema)->not->toHaveKey('enum')
+        ->and((string) $agent->instructions())->toContain('короткое название объявления')
+        ->and((string) $agent->instructions())->toContain('не спрашивай у поставщика');
 });
 
 test('an undetermined type in the auto branch asks about it instead of defaulting to equipment', function () {

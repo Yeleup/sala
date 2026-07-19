@@ -10,6 +10,7 @@ namespace App\Enums;
  */
 enum ScenarioVariable: string
 {
+    case ListingTitle = 'listing.title';
     case ListingCategory = 'listing.category';
     case ListingDescription = 'listing.description';
     case ListingLocation = 'listing.location';
@@ -21,6 +22,7 @@ enum ScenarioVariable: string
     public function allowedIn(BotScenarioTrigger $trigger): bool
     {
         return match ($this) {
+            self::ListingTitle,
             self::ListingCategory,
             self::ListingDescription,
             self::ListingLocation,
@@ -34,6 +36,7 @@ enum ScenarioVariable: string
     public function label(): string
     {
         return match ($this) {
+            self::ListingTitle => 'Объявление: название',
             self::ListingCategory => 'Объявление: категория',
             self::ListingDescription => 'Объявление: описание',
             self::ListingLocation => 'Объявление: локация',

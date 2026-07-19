@@ -35,10 +35,14 @@ class CustomerRequestInfolist
                     ->columns(2),
                 Section::make('Выбранное объявление')
                     ->schema([
-                        TextEntry::make('listing.category.name')
-                            ->label('Категория')
+                        TextEntry::make('listing.title')
+                            ->label('Название')
+                            ->state(fn (CustomerRequest $record): ?string => $record->listing?->displayName())
                             ->placeholder('—')
                             ->url(fn (CustomerRequest $record): string => ListingResource::getUrl('view', ['record' => $record->listing_id])),
+                        TextEntry::make('listing.category.name')
+                            ->label('Категория')
+                            ->placeholder('—'),
                         TextEntry::make('listing.supplier.phone')
                             ->label('Телефон поставщика'),
                         TextEntry::make('listing.description')

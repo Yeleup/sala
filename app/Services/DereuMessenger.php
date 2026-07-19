@@ -143,7 +143,7 @@ class DereuMessenger
             $components[] = [
                 'type' => 'body',
                 'parameters' => array_map(
-                    fn (string $value): array => ['type' => 'text', 'text' => $value],
+                    fn (string $value): array => ['type' => 'text', 'text' => WhatsappText::templateParameter($value)],
                     $bodyParameters,
                 ),
             ];

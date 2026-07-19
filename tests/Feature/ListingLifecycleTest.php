@@ -96,3 +96,17 @@ test('only published and unexpired listings are searchable', function () {
 
     expect(Listing::searchable()->pluck('id')->all())->toBe([$published->id]);
 });
+
+test('the display name prefers the title and falls back to the category name', function () {
+    $titled = Listing::factory()->create(['title' => 'Аренда автокрана 25 т']);
+    $legacy = Listing::factory()->create(['title' => null, 'category_id' => categoryNamed('Автокран')->id]);
+    $bare = Listing::factory()->create(['title' => null, 'category_id' => null]);
+    // «0» — валидное, хоть и странное название: PHP-ложность строки не
+    // должна подменять сохранённое значение категорией.
+    $zero = Listing::factory()->create(['title' => '0']);
+
+    expect($titled->displayName())->toBe('Аренда автокрана 25 т')
+        ->and($legacy->displayName())->toBe('Автокран')
+        ->and($bare->displayName())->toBeNull()
+        ->and($zero->displayName())->toBe('0');
+});

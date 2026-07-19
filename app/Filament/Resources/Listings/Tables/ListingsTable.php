@@ -28,6 +28,11 @@ class ListingsTable
                 TextColumn::make('type')
                     ->label('Тип')
                     ->badge(),
+                TextColumn::make('title')
+                    ->label('Название')
+                    ->searchable()
+                    ->limit(40)
+                    ->placeholder('—'),
                 TextColumn::make('category.name')
                     ->label('Категория')
                     ->searchable()

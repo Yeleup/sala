@@ -295,3 +295,59 @@ describe('несколько сценариев', function () {
         expect(BotScenario::query()->whereKey($draft->id)->exists())->toBeFalse();
     });
 });
+
+describe('понятность редактора', function () {
+    test('конфиг действий сообщает фронту исход «не выполнено» и его подпись', function () {
+        BotScenario::factory()->create();
+        $flow = BotScenario::factory()->trigger(BotScenarioTrigger::NewCustomerRequest)->create(['name' => 'Заявки']);
+
+        $actions = collect(Livewire::test(BotScenarioEditor::class, ['scenarioId' => $flow->id])
+            ->instance()->editorConfig()['actions']);
+
+        expect($actions->firstWhere('value', 'accept_request'))
+            ->toMatchArray(['skippable' => true, 'skipped_label' => 'Заявка уже решена'])
+            ->and($actions->firstWhere('value', 'notify_customer'))
+            ->toMatchArray(['skippable' => false, 'skipped_label' => null]);
+    });
+
+    test('«Проверить сценарий» возвращает ошибки с привязкой к блоку, не публикуя', function () {
+        BotScenario::factory()->create();
+        $flow = BotScenario::factory()->trigger(BotScenarioTrigger::NewCustomerRequest)->create(['name' => 'Заявки']);
+
+        $definition = publishableRunDefinition();
+        $definition['nodes'][2] = ['id' => 'cta', 'type' => 'action', 'action' => 'notify_customer', 'x' => 600, 'y' => 0];
+        $definition['edges'][] = ['from' => 'cta', 'output' => 'skipped', 'to' => 'end'];
+
+        $result = Livewire::test(BotScenarioEditor::class, ['scenarioId' => $flow->id])
+            ->instance()->check($definition);
+
+        $flow->refresh();
+        expect($flow->published_version)->toBe(0)
+            ->and($flow->draft_definition['nodes'])->toHaveCount(4)
+            ->and(collect($result['errors'])->firstWhere('node_id', 'cta')['message'])
+            ->toContain('не может остаться невыполненным');
+    });
+
+    test('чистый сценарий проходит проверку без ошибок и предупреждений', function () {
+        BotScenario::factory()->create();
+        $flow = BotScenario::factory()->trigger(BotScenarioTrigger::ListingExpiring)->create(['name' => 'Продление']);
+
+        $result = Livewire::test(BotScenarioEditor::class, ['scenarioId' => $flow->id])
+            ->instance()->check(publishableRunDefinition());
+
+        expect($result)->toBe(['errors' => [], 'warnings' => []]);
+    });
+
+    test('страница редактора содержит легенду веток, маршрут и кнопки раскладки', function () {
+        BotScenario::factory()->create();
+
+        $this->get(BotScenarioEditor::getUrl())
+            ->assertSuccessful()
+            ->assertSee('bse-legend', false)
+            ->assertSee('bse-edge-label', false)
+            ->assertSee('Маршрут сценария')
+            ->assertSee('Проверить сценарий')
+            ->assertSee('Выровнять схему')
+            ->assertSee('Любая другая фраза');
+    });
+});

@@ -21,7 +21,9 @@ use Stringable;
  * collector can ask for it. The category and the brand are constrained to
  * the operator's dictionaries both in the prompt and in the response
  * schema, so the model physically cannot return a value outside the lists.
- * Unlike the category, the brand is optional and never asked about.
+ * Unlike the category, the brand is optional and never asked about. The
+ * title is the one field the model composes itself from the supplier's
+ * words instead of extracting — it is never asked about either.
  */
 #[Temperature(0.1)]
 class ListingExtractionAgent implements Agent, HasStructuredOutput
@@ -74,6 +76,10 @@ class ListingExtractionAgent implements Agent, HasStructuredOutput
 
         Поля:
         - type: {$typeHint}
+        - title: короткое название объявления на русском в именительном падеже, до 60 символов —
+          составь его сам из сути предложения («Аренда автокрана 25 т», «Услуги сварщика»). Название
+          не спрашивай у поставщика: пока предложение непонятно, оставь null, а как только суть ясна —
+          заполни. Не вставляй в название цену и лишние детали.
         - category: {$categoryHint}
         - brand: {$brandHint}
         - description: суть предложения своими словами, кратко.
@@ -101,6 +107,7 @@ class ListingExtractionAgent implements Agent, HasStructuredOutput
     {
         return [
             'type' => $schema->string()->enum(['equipment', 'service'])->nullable(),
+            'title' => $schema->string()->nullable(),
             'category' => $this->categories === []
                 ? $schema->string()->nullable()
                 : $schema->string()->enum($this->categories)->nullable(),

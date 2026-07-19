@@ -36,7 +36,7 @@ class CustomerRequestNotifier
                     $supplier,
                     sprintf(
                         "По вашему объявлению «%s» новая заявка от заказчика: «%s». Готовы взять заказ?",
-                        $request->listing->category?->name ?: 'без категории',
+                        $request->listing->displayName() ?: 'без названия',
                         Str::limit($request->query_text, 300),
                     ),
                     [
@@ -65,7 +65,7 @@ class CustomerRequestNotifier
                 $supplier,
                 $template,
                 [
-                    $request->listing->category?->name ?: 'без категории',
+                    $request->listing->displayName() ?: 'без названия',
                     Str::limit($request->query_text, 200),
                 ],
                 [$acceptId, $declineId],

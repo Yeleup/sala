@@ -1,5 +1,6 @@
 <?php
 
+use App\Enums\BotScenarioTrigger;
 use App\Services\Bot\ScenarioValidator;
 
 /**
@@ -25,9 +26,33 @@ function validScenarioDefinition(): array
     ];
 }
 
-function validateScenario(array $definition): array
+function validateScenario(array $definition, BotScenarioTrigger $trigger = BotScenarioTrigger::InboundMessage): array
 {
-    return (new ScenarioValidator)->validate($definition);
+    return (new ScenarioValidator)->validate($definition, $trigger);
+}
+
+/**
+ * Run-based граф «Новая заявка»: сообщение с кнопкой → действие.
+ */
+function validRunDefinition(): array
+{
+    return [
+        'nodes' => [
+            ['id' => 'start', 'type' => 'start'],
+            ['id' => 'poll', 'type' => 'message', 'text' => 'Возьмёте заказ?', 'channel' => 'session', 'options' => [
+                ['id' => 'accept', 'title' => 'Согласиться'],
+            ]],
+            ['id' => 'do_accept', 'type' => 'action', 'action' => 'accept_request'],
+            ['id' => 'done', 'type' => 'text', 'text' => 'Передадим заказчику.'],
+            ['id' => 'skipped_text', 'type' => 'text', 'text' => 'Заявка уже решена.'],
+        ],
+        'edges' => [
+            ['from' => 'start', 'output' => 'continue', 'to' => 'poll'],
+            ['from' => 'poll', 'output' => 'option:accept', 'to' => 'do_accept'],
+            ['from' => 'do_accept', 'output' => 'continue', 'to' => 'done'],
+            ['from' => 'do_accept', 'output' => 'skipped', 'to' => 'skipped_text'],
+        ],
+    ];
 }
 
 test('a valid graph produces no errors and no warnings', function () {
@@ -156,4 +181,85 @@ test('a block unreachable from start is a warning, not an error', function () {
 test('an unconnected fallback output is allowed', function () {
     // «Любая другая фраза» может быть не подключена — бот повторит шаг.
     expect(validateScenario(validScenarioDefinition())['errors'])->toBe([]);
+});
+
+test('a skipped output on an action with a precondition is valid', function () {
+    expect(validateScenario(validRunDefinition(), BotScenarioTrigger::NewCustomerRequest))
+        ->toBe(['errors' => [], 'warnings' => []]);
+});
+
+test('an unconnected skipped output is allowed — the run just ends quietly', function () {
+    $definition = validRunDefinition();
+    $definition['edges'] = array_filter($definition['edges'], fn (array $edge): bool => $edge['output'] !== 'skipped');
+
+    expect(validateScenario($definition, BotScenarioTrigger::NewCustomerRequest)['errors'])->toBe([]);
+});
+
+test('a skipped output on a best-effort action is an error', function () {
+    $definition = validRunDefinition();
+    $definition['nodes'][2]['action'] = 'notify_customer';
+
+    expect(validateScenario($definition, BotScenarioTrigger::NewCustomerRequest)['errors'])
+        ->toContain('У блока «do_accept» подключен выход «Не выполнено», но действие «Уведомить заказчика об исходе» не может остаться невыполненным.');
+});
+
+test('an action without a selected action is an error', function () {
+    $definition = validRunDefinition();
+    unset($definition['nodes'][2]['action']);
+
+    expect(validateScenario($definition, BotScenarioTrigger::NewCustomerRequest)['errors'])
+        ->toContain('У блока «do_accept» не выбрано действие.');
+});
+
+test('an action of another trigger is an error', function () {
+    $definition = validRunDefinition();
+    $definition['nodes'][2]['action'] = 'renew_listing';
+
+    expect(validateScenario($definition, BotScenarioTrigger::NewCustomerRequest)['errors'])
+        ->toContain('Действие «Продлить объявление на 30 дней» блока «do_accept» недоступно в сценарии с триггером «Новая заявка».');
+});
+
+test('a condition without connected yes/no outputs is an error', function () {
+    $definition = validRunDefinition();
+    $definition['nodes'][] = ['id' => 'check', 'type' => 'condition', 'condition' => 'request_pending'];
+    $definition['edges'][] = ['from' => 'done', 'output' => 'continue', 'to' => 'check'];
+    $definition['edges'][] = ['from' => 'check', 'output' => 'yes', 'to' => 'skipped_text'];
+
+    expect(validateScenario($definition, BotScenarioTrigger::NewCustomerRequest)['errors'])
+        ->toContain('В блоке «check» не подключен выход «Нет».');
+});
+
+test('a condition without a selected condition is an error', function () {
+    $definition = validRunDefinition();
+    $definition['nodes'][] = ['id' => 'check', 'type' => 'condition'];
+    $definition['edges'][] = ['from' => 'done', 'output' => 'continue', 'to' => 'check'];
+    $definition['edges'][] = ['from' => 'check', 'output' => 'yes', 'to' => 'skipped_text'];
+    $definition['edges'][] = ['from' => 'check', 'output' => 'no', 'to' => 'skipped_text'];
+
+    expect(validateScenario($definition, BotScenarioTrigger::NewCustomerRequest)['errors'])
+        ->toContain('У блока «check» не выбрано условие.');
+});
+
+test('a condition of another trigger is an error', function () {
+    $definition = validRunDefinition();
+    $definition['nodes'][] = ['id' => 'check', 'type' => 'condition', 'condition' => 'listing_published'];
+    $definition['edges'][] = ['from' => 'done', 'output' => 'continue', 'to' => 'check'];
+    $definition['edges'][] = ['from' => 'check', 'output' => 'yes', 'to' => 'skipped_text'];
+    $definition['edges'][] = ['from' => 'check', 'output' => 'no', 'to' => 'skipped_text'];
+
+    expect(validateScenario($definition, BotScenarioTrigger::NewCustomerRequest)['errors'])
+        ->toContain('Условие «Объявление опубликовано» блока «check» недоступно в сценарии с триггером «Новая заявка».');
+});
+
+test('validateDetailed attaches the block id to each issue', function () {
+    $definition = validRunDefinition();
+    $definition['nodes'][2]['action'] = 'notify_customer';
+    $definition['nodes'][] = ['id' => 'orphan', 'type' => 'text', 'text' => 'Сирота'];
+
+    $result = (new ScenarioValidator)->validateDetailed($definition, BotScenarioTrigger::NewCustomerRequest);
+
+    expect(collect($result['errors'])->firstWhere('node_id', 'do_accept')['message'])
+        ->toContain('не может остаться невыполненным')
+        ->and(collect($result['warnings'])->firstWhere('node_id', 'orphan')['message'])
+        ->toContain('недостижим от «Старта»');
 });

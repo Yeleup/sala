@@ -50,8 +50,9 @@ test('правка искомого текста опубликованного 
 
     $listing->update(['description' => 'Обновлённое описание крана']);
     $listing->update(['location_detail' => 'мкр Нурсат']);
+    $listing->update(['title' => 'Аренда автокрана 25 т']);
 
-    Queue::assertPushed(GenerateListingEmbedding::class, 2);
+    Queue::assertPushed(GenerateListingEmbedding::class, 3);
 });
 
 test('черновик, продление и архивация не запускают генерацию', function () {
@@ -113,8 +114,9 @@ test('джоба пропускает объявление, ушедшее из 
         ->and(AiOperation::query()->count())->toBe(0);
 });
 
-test('текст для эмбеддинга включает тип, категорию, марку, описание и локацию, но не цену', function () {
+test('текст для эмбеддинга включает тип, название, категорию, марку, описание и локацию, но не цену', function () {
     $listing = Listing::factory()->published()->create([
+        'title' => 'Аренда автокрана 25 т',
         'category_id' => categoryNamed('Автокран')->id,
         'brand_id' => brandNamed('Kato')->id,
         'description' => 'Стрела 28 метров',
@@ -127,11 +129,18 @@ test('текст для эмбеддинга включает тип, катег
 
     expect($text)
         ->toContain('Техника')
+        ->toContain('Название: Аренда автокрана 25 т')
         ->toContain('Автокран')
         ->toContain('Kato')
         ->toContain('Стрела 28 метров')
         ->toContain('г.Шымкент, центр')
         ->not->toContain('20000');
+});
+
+test('объявление без названия не получает строку названия в тексте эмбеддинга', function () {
+    $listing = Listing::factory()->published()->create(['title' => null]);
+
+    expect(app(ListingEmbeddings::class)->sourceText($listing))->not->toContain('Название:');
 });
 
 test('сквозной сценарий: одобрение создаёт эмбеддинг через очередь', function () {

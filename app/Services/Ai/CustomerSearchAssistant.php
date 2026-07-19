@@ -376,7 +376,7 @@ class CustomerSearchAssistant
             $session->contact,
             sprintf(
                 'Заявка по варианту «%s» отправлена поставщику. Как только он ответит, мы сразу сообщим вам.',
-                $listing->category?->name ?: 'объявление',
+                $listing->displayName() ?: 'объявление',
             ),
         );
 
@@ -425,9 +425,15 @@ class CustomerSearchAssistant
             return null;
         }
 
+        // Both the clamped row title (what the customer sees) and the full
+        // unclamped one count: a title over the 24-char row limit is shown
+        // truncated with an ellipsis, which cannot be typed back.
         /** @var Collection<int, Listing> $byTitle */
         $byTitle = Listing::query()->searchable()->whereIn('id', $offered)->get()
-            ->filter(fn (Listing $listing): bool => Str::lower($this->rowTitle($listing)) === $text);
+            ->filter(fn (Listing $listing): bool => in_array($text, [
+                Str::lower($this->rowTitle($listing)),
+                Str::lower($this->fullRowTitle($listing)),
+            ], true));
 
         return $byTitle->count() === 1 ? $byTitle->first() : null;
     }
@@ -453,7 +459,12 @@ class CustomerSearchAssistant
 
     protected function rowTitle(Listing $listing): string
     {
-        return WhatsappText::clamp($listing->category?->name ?: 'Объявление №'.$listing->id, self::ROW_TITLE_LIMIT);
+        return WhatsappText::clamp($this->fullRowTitle($listing), self::ROW_TITLE_LIMIT);
+    }
+
+    protected function fullRowTitle(Listing $listing): string
+    {
+        return $listing->displayName() ?: 'Объявление №'.$listing->id;
     }
 
     /**

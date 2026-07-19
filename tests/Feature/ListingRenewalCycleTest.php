@@ -47,6 +47,18 @@ describe('ежедневный опрос актуальности', function ()
         expect($listing->refresh()->renewal_requested_at)->not->toBeNull();
     });
 
+    test('объявление с названием опрашивается по названию, а не по категории', function () {
+        $listing = expiringListing();
+        $listing->update(['title' => 'Аренда крана 25 т']);
+
+        fakeCycleMessenger()->shouldReceive('sendButtons')->once()->withArgs(
+            fn (Contact $contact, string $text, array $buttons): bool => str_contains($text, '«Аренда крана 25 т»')
+                && ! str_contains($text, 'Автокран'),
+        );
+
+        $this->artisan('listings:run-renewal-cycle')->assertSuccessful();
+    });
+
     test('повторный запуск не шлёт опрос второй раз', function () {
         $listing = expiringListing();
         $listing->update(['renewal_requested_at' => now()->subHours(2)]);

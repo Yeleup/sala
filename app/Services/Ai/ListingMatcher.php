@@ -157,6 +157,7 @@ class ListingMatcher
     protected function score(array $tokens, Listing $listing): int
     {
         $haystack = Str::lower(implode(' ', array_filter([
+            $listing->title,
             $listing->category?->name,
             $listing->brand?->name,
             $listing->description,

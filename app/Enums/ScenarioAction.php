@@ -43,4 +43,35 @@ enum ScenarioAction: string
             self::NotifyCustomer => 'Уведомить заказчика об исходе',
         };
     }
+
+    /**
+     * Действия, которые домен может отвергнуть по предусловию статуса
+     * (заявка уже решена, объявление не опубликовано). Только у них
+     * есть выход «Не выполнено»; best-effort действия всегда идут
+     * по «Продолжить».
+     */
+    public function hasPrecondition(): bool
+    {
+        return match ($this) {
+            self::AcceptRequest,
+            self::DeclineRequest,
+            self::RenewListing,
+            self::ArchiveListing => true,
+            self::SendCabinetCta,
+            self::NotifyCustomer => false,
+        };
+    }
+
+    /** Подпись выхода «не выполнено» — конкретный факт вместо термина «предусловие». */
+    public function skippedLabel(): ?string
+    {
+        return match ($this) {
+            self::AcceptRequest,
+            self::DeclineRequest => 'Заявка уже решена',
+            self::RenewListing,
+            self::ArchiveListing => 'Объявление уже в архиве',
+            self::SendCabinetCta,
+            self::NotifyCustomer => null,
+        };
+    }
 }

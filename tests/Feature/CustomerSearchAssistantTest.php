@@ -112,6 +112,48 @@ test('a complete query returns a ranked list of matching published listings', fu
         ->and($session->state['offered'])->toBe([$crane25->id, $crane10->id]);
 });
 
+test('a listing title leads the search result row instead of the category name', function () {
+    SearchQueryExtractionAgent::fake([fullSearchIntake()]);
+    $listing = Listing::factory()->published()->create([
+        'title' => 'Аренда крана 25 т',
+        'category_id' => categoryNamed('Автокран')->id,
+        'description' => 'Кран 25 тонн со стрелой',
+        'location_id' => locationNamed('г.Шымкент')->id,
+    ]);
+
+    $messenger = fakeSearchMessenger();
+    $messenger->shouldReceive('sendList')->once()->withArgs(
+        fn (Contact $contact, string $text, string $button, array $rows): bool => $rows[0]['id'] === "listing:{$listing->id}"
+            && $rows[0]['title'] === 'Аренда крана 25 т',
+    );
+
+    $outcome = app(CustomerSearchAssistant::class)
+        ->resume(searchSession(), customerAiNode(), new InboundMessage(text: 'нужен кран 25 тонн, Шымкент'));
+
+    expect($outcome)->toBe(AiOutcome::InProgress);
+});
+
+test('the query words match the listing title alone', function () {
+    SearchQueryExtractionAgent::fake([fullSearchIntake(['subject' => 'манипулятор', 'location' => null, 'location_any' => true])]);
+    $listing = Listing::factory()->published()->create([
+        'title' => 'Кран-манипулятор 5 т',
+        'category_id' => categoryNamed('Автокран')->id,
+        'description' => 'Борт 6 м',
+        'location_id' => locationNamed('г.Шымкент')->id,
+    ]);
+
+    $messenger = fakeSearchMessenger();
+    $messenger->shouldReceive('sendList')->once()->withArgs(
+        fn (Contact $contact, string $text, string $button, array $rows): bool => count($rows) === 1
+            && $rows[0]['id'] === "listing:{$listing->id}",
+    );
+
+    $outcome = app(CustomerSearchAssistant::class)
+        ->resume(searchSession(), customerAiNode(), new InboundMessage(text: 'нужен манипулятор'));
+
+    expect($outcome)->toBe(AiOutcome::InProgress);
+});
+
 test('a brand in the query ranks the branded listing first', function () {
     SearchQueryExtractionAgent::fake([fullSearchIntake(['subject' => 'экскаватор Hitachi'])]);
     $shymkent = locationNamed('г.Шымкент');
@@ -327,6 +369,48 @@ test('typing the exact row title equals picking it', function () {
     $session = searchSession(['phase' => 'choosing', 'query' => 'экскаватор', 'offered' => [$listing->id]]);
     $outcome = app(CustomerSearchAssistant::class)
         ->resume($session, customerAiNode(), new InboundMessage(text: 'Экскаватор'));
+
+    expect($outcome)->toBe(AiOutcome::Completed)
+        ->and(CustomerRequest::count())->toBe(1);
+});
+
+test('typing the listing title equals picking it and the texts name the listing by title', function () {
+    $supplier = Contact::factory()->withOpenSessionWindow()->create();
+    $listing = Listing::factory()->published()->for($supplier, 'supplier')->create([
+        'title' => 'Аренда экскаватора', 'category_id' => categoryNamed('Экскаватор')->id,
+    ]);
+
+    $messenger = fakeSearchMessenger();
+    $messenger->shouldReceive('sendButtons')->once()->withArgs(
+        fn (Contact $contact, string $text, array $buttons): bool => str_contains($text, '«Аренда экскаватора»'),
+    );
+    $messenger->shouldReceive('sendText')->once()->withArgs(
+        fn (Contact $contact, string $text): bool => str_contains($text, '«Аренда экскаватора»'),
+    );
+
+    $session = searchSession(['phase' => 'choosing', 'query' => 'экскаватор', 'offered' => [$listing->id]]);
+    $outcome = app(CustomerSearchAssistant::class)
+        ->resume($session, customerAiNode(), new InboundMessage(text: 'Аренда экскаватора'));
+
+    expect($outcome)->toBe(AiOutcome::Completed)
+        ->and(CustomerRequest::count())->toBe(1);
+});
+
+test('typing the full title of a listing whose row title is clamped still equals picking it', function () {
+    $supplier = Contact::factory()->withOpenSessionWindow()->create();
+    // 27 символов — в строке списка заголовок обрезан до 24 с «…», но
+    // набранное полное название всё равно засчитывается как выбор.
+    $listing = Listing::factory()->published()->for($supplier, 'supplier')->create([
+        'title' => 'Аренда трактора с водителем', 'category_id' => categoryNamed('Трактор')->id,
+    ]);
+
+    $messenger = fakeSearchMessenger();
+    $messenger->shouldReceive('sendButtons')->once();
+    $messenger->shouldReceive('sendText')->once();
+
+    $session = searchSession(['phase' => 'choosing', 'query' => 'трактор', 'offered' => [$listing->id]]);
+    $outcome = app(CustomerSearchAssistant::class)
+        ->resume($session, customerAiNode(), new InboundMessage(text: 'аренда трактора с водителем'));
 
     expect($outcome)->toBe(AiOutcome::Completed)
         ->and(CustomerRequest::count())->toBe(1);

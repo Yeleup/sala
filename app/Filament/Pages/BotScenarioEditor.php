@@ -126,7 +126,12 @@ class BotScenarioEditor extends Page
                 ->all(),
             'actions' => collect(ScenarioAction::cases())
                 ->filter(fn (ScenarioAction $action): bool => $action->allowedIn($trigger))
-                ->map(fn (ScenarioAction $action): array => ['value' => $action->value, 'label' => $action->label()])
+                ->map(fn (ScenarioAction $action): array => [
+                    'value' => $action->value,
+                    'label' => $action->label(),
+                    'skippable' => $action->hasPrecondition(),
+                    'skipped_label' => $action->skippedLabel(),
+                ])
                 ->values()
                 ->all(),
         ];
@@ -200,6 +205,25 @@ class BotScenarioEditor extends Page
             ->body('Пользователи увидят изменения после публикации сценария.')
             ->success()
             ->send();
+    }
+
+    /**
+     * Проверка без публикации: сохраняет черновик и возвращает ошибки
+     * и предупреждения с привязкой к блокам — редактор показывает их
+     * списком и умеет переходить к блоку по клику.
+     *
+     * @param  array<string, mixed>  $definition
+     * @return array{errors: list<array{message: string, node_id: string|null}>, warnings: list<array{message: string, node_id: string|null}>}
+     */
+    public function check(array $definition): array
+    {
+        $scenario = $this->scenario;
+        $clean = $this->cleanDefinition($definition);
+
+        $scenario->update(['draft_definition' => $clean]);
+        unset($this->scenario);
+
+        return app(ScenarioValidator::class)->validateDetailed($clean, $scenario->trigger);
     }
 
     /**

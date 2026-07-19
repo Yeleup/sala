@@ -32,6 +32,7 @@ class ScenarioVariableResolver
         };
 
         $value = match ($variable) {
+            ScenarioVariable::ListingTitle => $listing?->displayName() ?: 'без названия',
             ScenarioVariable::ListingCategory => $listing?->category?->name ?: 'без категории',
             ScenarioVariable::ListingDescription => $listing?->description,
             ScenarioVariable::ListingLocation => $listing?->locationLine(),

@@ -26,6 +26,7 @@ function supplierListingPayload(Listing $listing, array $overrides = []): array
 {
     return array_merge([
         'type' => $listing->type->value,
+        'title' => $listing->title ?? 'Аренда автокрана 25 т',
         'category_id' => $listing->category_id,
         'description' => $listing->description,
         'location_id' => $listing->location_id,
@@ -177,6 +178,7 @@ describe('редактирование', function () {
 
         $response = $this->post(portalLinks()->updateUrl($listing), [
             'type' => ListingType::Service->value,
+            'title' => 'Услуги сварщиков',
             'category_id' => categoryNamed('Сварщик', ListingType::Service)->id,
             'description' => 'Бригада сварщиков с допусками.',
             'location_id' => locationNamed('г.Алматы')->id,
@@ -188,6 +190,7 @@ describe('редактирование', function () {
         expect($listing->refresh())
             ->status->toBe(ListingStatus::PendingModeration)
             ->type->toBe(ListingType::Service)
+            ->title->toBe('Услуги сварщиков')
             ->category->name->toBe('Сварщик')
             ->location->name->toBe('г.Алматы')
             ->location_detail->toBe('Ауэзовский район')
@@ -199,6 +202,7 @@ describe('редактирование', function () {
 
         $this->post(portalLinks()->updateUrl($listing), [
             'type' => $listing->type->value,
+            'title' => 'Аренда автокрана',
             'category_id' => $listing->category_id,
             'description' => $listing->description,
             'location_id' => $listing->location_id,
@@ -208,18 +212,31 @@ describe('редактирование', function () {
         expect($listing->refresh())->status->toBe(ListingStatus::PendingModeration);
     });
 
+    test('переводы строк и серии пробелов в названии нормализуются при сохранении', function () {
+        // Название уходит в параметры шаблонов WhatsApp, где Meta отклоняет
+        // переводы строк и серии пробелов.
+        $listing = Listing::factory()->create();
+
+        $this->post(portalLinks()->updateUrl($listing), supplierListingPayload($listing, [
+            'title' => "Аренда\nкрана     25 т",
+        ]));
+
+        expect($listing->refresh()->title)->toBe('Аренда крана 25 т');
+    });
+
     test('для отправки на проверку обязательны все бизнес-поля', function () {
-        $listing = Listing::factory()->create(['category_id' => null, 'price' => null]);
+        $listing = Listing::factory()->create(['title' => null, 'category_id' => null, 'price' => null]);
 
         $response = $this->post(portalLinks()->updateUrl($listing), [
             'type' => $listing->type->value,
+            'title' => '',
             'category_id' => '',
             'description' => $listing->description,
             'location_id' => $listing->location_id,
             'price' => '',
         ]);
 
-        $response->assertSessionHasErrors(['category_id', 'price']);
+        $response->assertSessionHasErrors(['title', 'category_id', 'price']);
         expect($listing->refresh())->status->toBe(ListingStatus::Draft);
     });
 
@@ -330,13 +347,9 @@ describe('редактирование', function () {
     test('опубликованное объявление сохранить нельзя', function () {
         $listing = Listing::factory()->published()->create();
 
-        $this->post(portalLinks()->updateUrl($listing), [
-            'type' => $listing->type->value,
+        $this->post(portalLinks()->updateUrl($listing), supplierListingPayload($listing, [
             'category_id' => categoryNamed('Другая категория')->id,
-            'description' => $listing->description,
-            'location_id' => $listing->location_id,
-            'price' => $listing->price,
-        ])->assertForbidden();
+        ]))->assertForbidden();
 
         expect($listing->refresh())->status->toBe(ListingStatus::Published);
     });

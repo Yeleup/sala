@@ -273,7 +273,7 @@ describe('сценарий «Продление объявления»', functio
             ->and(ScenarioRun::sole()->subject->is($listing))->toBeTrue();
     });
 
-    test('«Да, актуально» продлевает публикацию через ветку условия', function () {
+    test('«Да, актуально» продлевает публикацию по выходу «Выполнено» действия', function () {
         installFlowScenarios();
         $supplier = Contact::factory()->withOpenSessionWindow()->create();
         $listing = Listing::factory()->published()->for($supplier, 'supplier')
@@ -312,7 +312,8 @@ describe('сценарий «Продление объявления»', functio
         $scenario = BotScenario::publishedForTrigger(BotScenarioTrigger::ListingExpiring);
         $run = app(ScenarioRunner::class)->launch($scenario, $supplier, $listing);
 
-        // Срок вышел без ответа — автоархив доменного цикла.
+        // Срок вышел без ответа — автоархив доменного цикла. Продление
+        // скипается доменом, запуск идёт по выходу «Не выполнено».
         $listing->archive();
 
         $messenger->shouldReceive('sendText')->once()->withArgs(
@@ -340,11 +341,11 @@ describe('сценарий «Продление объявления»', functio
         $scenario = BotScenario::publishedForTrigger(BotScenarioTrigger::ListingExpiring);
         $run = app(ScenarioRunner::class)->launch($scenario, $supplier, $listing);
 
-        // Республикация: ветка «yes» теперь ведёт сразу в конец, без продления.
+        // Республикация: кнопка «Да» теперь ведёт сразу в конец, без продления.
         $draft = $scenario->draft_definition;
         $draft['edges'] = collect($draft['edges'])
-            ->map(fn (array $edge): array => $edge['from'] === 'check_yes' && $edge['output'] === 'yes'
-                ? ['from' => 'check_yes', 'output' => 'yes', 'to' => 'end']
+            ->map(fn (array $edge): array => $edge['from'] === 'poll' && $edge['output'] === 'option:yes'
+                ? ['from' => 'poll', 'output' => 'option:yes', 'to' => 'end']
                 : $edge)
             ->all();
         $scenario->update(['draft_definition' => $draft]);
@@ -362,6 +363,114 @@ describe('сценарий «Продление объявления»', functio
         // Запуск шёл по версии 1: объявление продлено, хотя версия 2 продление убрала.
         expect($listing->refresh()->expires_at->isAfter(now()->addDays(29)))->toBeTrue()
             ->and($run->refresh()->scenario_version)->toBe(1);
+    });
+});
+
+describe('исход блока «Действие»', function () {
+    test('заявка решена извне — ответ идёт по «Не выполнено» и решение не меняется', function () {
+        [$run, $request, $supplier, $messenger] = launchedRequestRun();
+
+        // Решение уже принято (например, администратором в панели), а запуск
+        // всё ещё ждёт ответа: кнопка активна, домен отказывает действию.
+        $request->accept();
+
+        $messenger->shouldReceive('sendText')->once()->withArgs(
+            fn (Contact $contact, string $text): bool => $contact->is($supplier) && str_contains($text, 'уже зафиксирован'),
+        );
+
+        app(ScenarioRunReplyHandler::class)->handle(
+            $supplier,
+            new InboundMessage(replyId: "flow:{$run->token}:decline"),
+        );
+
+        expect($request->refresh()->status)->toBe(CustomerRequestStatus::Accepted)
+            ->and($run->refresh()->status)->toBe(ScenarioRunStatus::Completed);
+    });
+
+    test('неподключённый выход «Не выполнено» тихо завершает запуск без «успешного» текста', function () {
+        $supplier = Contact::factory()->withOpenSessionWindow()->create();
+        $listing = Listing::factory()->published()->for($supplier, 'supplier')->create(['expires_at' => now()->addHours(12)]);
+
+        $scenario = BotScenario::factory()
+            ->trigger(BotScenarioTrigger::ListingExpiring)
+            ->published([
+                'nodes' => [
+                    ['id' => 'start', 'type' => 'start'],
+                    ['id' => 'ask', 'type' => 'message', 'text' => 'Продлить объявление?', 'channel' => 'session',
+                        'options' => [['id' => 'renew', 'title' => 'Продлить']]],
+                    ['id' => 'do_renew', 'type' => 'action', 'action' => 'renew_listing'],
+                    ['id' => 'done', 'type' => 'text', 'text' => 'Продлили объявление.'],
+                    ['id' => 'end', 'type' => 'end'],
+                ],
+                'edges' => [
+                    ['from' => 'start', 'output' => 'continue', 'to' => 'ask'],
+                    ['from' => 'ask', 'output' => 'option:renew', 'to' => 'do_renew'],
+                    ['from' => 'do_renew', 'output' => 'continue', 'to' => 'done'],
+                    ['from' => 'done', 'output' => 'continue', 'to' => 'end'],
+                ],
+            ])
+            ->create(['name' => 'Без ветки «Не выполнено»']);
+
+        $messenger = runnerMessenger();
+        $messenger->shouldReceive('sendButtons')->once();
+
+        $run = app(ScenarioRunner::class)->launch($scenario, $supplier, $listing);
+
+        $listing->archive();
+
+        // «Продлили объявление.» не уходит: действие скипнуто, ветка успеха не идёт.
+        $messenger->shouldNotReceive('sendText');
+
+        app(ScenarioRunReplyHandler::class)->handle(
+            $supplier,
+            new InboundMessage(replyId: "flow:{$run->token}:renew"),
+        );
+
+        expect($listing->refresh()->status)->toBe(ListingStatus::Archived)
+            ->and($run->refresh()->status)->toBe(ScenarioRunStatus::Completed);
+    });
+
+    test('best-effort действие не рвёт ветку: «Уведомить заказчика» при ожидающей заявке идёт дальше', function () {
+        installFlowScenarios();
+        $request = runnerPendingRequest();
+        $supplier = $request->listing->supplier;
+
+        $scenario = BotScenario::factory()
+            ->trigger(BotScenarioTrigger::NewCustomerRequest)
+            ->published([
+                'nodes' => [
+                    ['id' => 'start', 'type' => 'start'],
+                    ['id' => 'ask', 'type' => 'message', 'text' => 'Сообщить заказчику?', 'channel' => 'session',
+                        'options' => [['id' => 'notify', 'title' => 'Сообщить']]],
+                    ['id' => 'do_notify', 'type' => 'action', 'action' => 'notify_customer'],
+                    ['id' => 'after', 'type' => 'text', 'text' => 'Продолжаем дальше.'],
+                    ['id' => 'end', 'type' => 'end'],
+                ],
+                'edges' => [
+                    ['from' => 'start', 'output' => 'continue', 'to' => 'ask'],
+                    ['from' => 'ask', 'output' => 'option:notify', 'to' => 'do_notify'],
+                    ['from' => 'do_notify', 'output' => 'continue', 'to' => 'after'],
+                    ['from' => 'after', 'output' => 'continue', 'to' => 'end'],
+                ],
+            ])
+            ->create(['name' => 'С уведомлением']);
+
+        $messenger = runnerMessenger();
+        $messenger->shouldReceive('sendButtons')->once();
+
+        $run = app(ScenarioRunner::class)->launch($scenario, $supplier, $request);
+
+        // Заявка ещё Pending — уведомлять нечего, но ветка продолжается.
+        $messenger->shouldReceive('sendText')->once()->withArgs(
+            fn (Contact $contact, string $text): bool => $contact->is($supplier) && str_contains($text, 'Продолжаем дальше'),
+        );
+
+        app(ScenarioRunReplyHandler::class)->handle(
+            $supplier,
+            new InboundMessage(replyId: "flow:{$run->token}:notify"),
+        );
+
+        expect($run->refresh()->status)->toBe(ScenarioRunStatus::Completed);
     });
 });
 

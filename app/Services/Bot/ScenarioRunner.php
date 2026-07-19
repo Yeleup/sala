@@ -4,6 +4,7 @@ namespace App\Services\Bot;
 
 use App\Enums\BotNodeType;
 use App\Enums\ScenarioAction;
+use App\Enums\ScenarioActionOutcome;
 use App\Enums\ScenarioCondition;
 use App\Enums\ScenarioMessageChannel;
 use App\Enums\ScenarioRunStatus;
@@ -209,11 +210,16 @@ class ScenarioRunner
                 case BotNodeType::Action:
                     $action = ScenarioAction::tryFrom((string) ($node['action'] ?? ''));
 
-                    if ($action !== null) {
-                        $this->actions->execute($run, $action, $node);
-                    }
+                    $outcome = $action === null
+                        ? ScenarioActionOutcome::Done
+                        : $this->actions->execute($run, $action, $node);
 
-                    $nodeId = $definition->target($node['id'], ScenarioDefinition::OUTPUT_CONTINUE);
+                    // Неподключённый выход «skipped» тихо завершает запуск
+                    // (target() → null), как и любой другой выход.
+                    $nodeId = $definition->target(
+                        $node['id'],
+                        $outcome === ScenarioActionOutcome::Skipped ? ScenarioDefinition::OUTPUT_SKIPPED : ScenarioDefinition::OUTPUT_CONTINUE,
+                    );
                     break;
 
                 case BotNodeType::End:

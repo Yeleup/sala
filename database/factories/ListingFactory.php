@@ -25,6 +25,10 @@ class ListingFactory extends Factory
         return [
             'contact_id' => Contact::factory(),
             'type' => ListingType::Equipment,
+            // Null by default: listings drafted before the title field
+            // existed have none, and every display falls back to the
+            // category name — tests opt into a title explicitly.
+            'title' => null,
             'category_id' => Category::factory(),
             'description' => fake()->randomElement([
                 'Автокран 25 тонн, стрела 28 м, работаем по городу и области.',

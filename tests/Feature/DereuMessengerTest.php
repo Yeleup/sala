@@ -251,6 +251,20 @@ test('an approved template is sent with body parameters regardless of the window
         ]]);
 });
 
+test('template body parameters are stripped of newlines and space runs before the send', function () {
+    fakeDereuSendAccepted();
+    connectedDereuCompany();
+    $contact = Contact::factory()->withClosedSessionWindow()->create();
+    $template = WhatsappTemplate::factory()->approved()->create(['name' => 'listing_renewal', 'language' => 'ru']);
+
+    // Meta отклоняет параметры с переводами строк, табами и сериями
+    // пробелов — свободный текст (название, запрос) обязан быть очищен.
+    app(DereuMessenger::class)->sendTemplate($contact, $template, ["Аренда\nкрана\t25     т "]);
+
+    Http::assertSent(fn (Request $request) => $request['type'] === 'template'
+        && $request['payload']['components'][0]['parameters'] === [['type' => 'text', 'text' => 'Аренда крана 25 т']]);
+});
+
 test('an unapproved template cannot be sent', function () {
     Http::fake();
     connectedDereuCompany();

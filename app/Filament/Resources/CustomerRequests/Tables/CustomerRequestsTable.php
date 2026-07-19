@@ -24,8 +24,10 @@ class CustomerRequestsTable
                     ->label('Запрос')
                     ->limit(40)
                     ->searchable(),
-                TextColumn::make('listing.category.name')
+                TextColumn::make('listing.title')
                     ->label('Объявление')
+                    ->state(fn ($record): ?string => $record->listing?->displayName())
+                    ->limit(40)
                     ->placeholder('—'),
                 TextColumn::make('listing.supplier.phone')
                     ->label('Поставщик'),

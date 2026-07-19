@@ -28,7 +28,7 @@ class ListingRenewalNotifier
     public function sendPoll(Listing $listing): bool
     {
         $supplier = $listing->supplier;
-        $category = $listing->category?->name ?: 'без категории';
+        $name = $listing->displayName() ?: 'без названия';
         $yesId = NotificationReplyHandler::renewalYesId($listing);
         $noId = NotificationReplyHandler::renewalNoId($listing);
 
@@ -36,7 +36,7 @@ class ListingRenewalNotifier
             if ($supplier->hasOpenSessionWindow()) {
                 $this->messenger->sendButtons(
                     $supplier,
-                    sprintf('Ваше объявление «%s» скоро перестанет показываться в поиске. Оно ещё актуально?', $category),
+                    sprintf('Ваше объявление «%s» скоро перестанет показываться в поиске. Оно ещё актуально?', $name),
                     [
                         ['id' => $yesId, 'title' => self::BUTTON_YES_TITLE],
                         ['id' => $noId, 'title' => self::BUTTON_NO_TITLE],
@@ -59,7 +59,7 @@ class ListingRenewalNotifier
                 return false;
             }
 
-            $this->messenger->sendTemplate($supplier, $template, [$category], [$yesId, $noId]);
+            $this->messenger->sendTemplate($supplier, $template, [$name], [$yesId, $noId]);
 
             return true;
         } catch (Throwable $e) {

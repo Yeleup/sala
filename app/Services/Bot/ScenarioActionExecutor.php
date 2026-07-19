@@ -4,12 +4,14 @@ namespace App\Services\Bot;
 
 use App\Enums\CustomerRequestStatus;
 use App\Enums\ScenarioAction;
+use App\Enums\ScenarioActionOutcome;
 use App\Exceptions\SessionWindowClosed;
 use App\Models\CustomerRequest;
 use App\Models\Listing;
 use App\Models\ScenarioRun;
 use App\Services\Ai\CtaLinkBuilder;
 use App\Services\DereuMessenger;
+use Closure;
 use Illuminate\Support\Facades\Log;
 use LogicException;
 
@@ -18,9 +20,10 @@ use LogicException;
  * final decisions and window limits stay in the models and services —
  * the scenario only decides when to call them. An action whose domain
  * precondition no longer holds (the request is already decided, the
- * listing is not published) is skipped: the graph's condition blocks are
- * the place to branch on that, and a race between two replies must not
- * crash the run.
+ * listing is not published) reports Skipped, and the runner follows the
+ * block's «skipped» output — a race between two replies must not crash
+ * the run. Best-effort actions (CTA link, customer notification) never
+ * report Skipped: «did less than intended» keeps the continue branch.
  */
 class ScenarioActionExecutor
 {
@@ -36,18 +39,18 @@ class ScenarioActionExecutor
     /**
      * @param  array<string, mixed>  $node
      */
-    public function execute(ScenarioRun $run, ScenarioAction $action, array $node): void
+    public function execute(ScenarioRun $run, ScenarioAction $action, array $node): ScenarioActionOutcome
     {
         $subject = $run->subject;
 
         try {
-            match ($action) {
-                ScenarioAction::AcceptRequest => $subject instanceof CustomerRequest ? $subject->accept() : null,
-                ScenarioAction::DeclineRequest => $subject instanceof CustomerRequest ? $subject->decline() : null,
-                ScenarioAction::RenewListing => $subject instanceof Listing ? $subject->renew() : null,
-                ScenarioAction::ArchiveListing => $subject instanceof Listing ? $subject->archive() : null,
-                ScenarioAction::SendCabinetCta => $this->sendCabinetCta($run, $node),
-                ScenarioAction::NotifyCustomer => $subject instanceof CustomerRequest ? $this->notifyCustomer($subject) : null,
+            $done = match ($action) {
+                ScenarioAction::AcceptRequest => $this->attempt($subject instanceof CustomerRequest, fn () => $subject->accept()),
+                ScenarioAction::DeclineRequest => $this->attempt($subject instanceof CustomerRequest, fn () => $subject->decline()),
+                ScenarioAction::RenewListing => $this->attempt($subject instanceof Listing, fn () => $subject->renew()),
+                ScenarioAction::ArchiveListing => $this->attempt($subject instanceof Listing, fn () => $subject->archive()),
+                ScenarioAction::SendCabinetCta => $this->attempt(true, fn () => $this->sendCabinetCta($run, $node)),
+                ScenarioAction::NotifyCustomer => $this->attempt(true, fn () => $subject instanceof CustomerRequest ? $this->notifyCustomer($subject) : null),
             };
         } catch (LogicException $e) {
             Log::warning('Scenario action skipped — the domain precondition no longer holds.', [
@@ -55,7 +58,23 @@ class ScenarioActionExecutor
                 'action' => $action->value,
                 'error' => $e->getMessage(),
             ]);
+
+            return $action->hasPrecondition() ? ScenarioActionOutcome::Skipped : ScenarioActionOutcome::Done;
         }
+
+        return $done ? ScenarioActionOutcome::Done : ScenarioActionOutcome::Skipped;
+    }
+
+    /** Прочие исключения (транспорт, БД) летят выше — запуск падает в fail(). */
+    protected function attempt(bool $preconditionMet, Closure $do): bool
+    {
+        if (! $preconditionMet) {
+            return false;
+        }
+
+        $do();
+
+        return true;
     }
 
     /**
@@ -78,12 +97,12 @@ class ScenarioActionExecutor
      */
     protected function notifyCustomer(CustomerRequest $request): void
     {
-        $category = $request->listing->category?->name;
+        $name = $request->listing->displayName();
         $phone = ltrim($request->listing->supplier->phone, '+');
 
         $text = match ($request->status) {
-            CustomerRequestStatus::Accepted => $category
-                ? sprintf('Поставщик согласился по вашей заявке («%s»). Свяжитесь с ним: +%s', $category, $phone)
+            CustomerRequestStatus::Accepted => $name
+                ? sprintf('Поставщик согласился по вашей заявке («%s»). Свяжитесь с ним: +%s', $name, $phone)
                 : sprintf('Поставщик согласился по вашей заявке. Свяжитесь с ним: +%s', $phone),
             CustomerRequestStatus::Declined => 'К сожалению, поставщик отказался по вашей заявке. Напишите нам — подберём другие варианты.',
             CustomerRequestStatus::Pending => null,

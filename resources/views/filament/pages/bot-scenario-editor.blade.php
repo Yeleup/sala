@@ -48,23 +48,23 @@
          class="bse" x-bind:class="{ 'bse-dragging': drag }">
         <div class="bse-toolbar">
             <span class="bse-toolbar-label">Добавить блок:</span>
-            <button type="button" class="bse-btn" x-on:click="addNode('text')">+ Текст</button>
+            <button type="button" class="bse-btn" x-on:click="addNode('text')">@svg('heroicon-o-chat-bubble-bottom-center-text', 'bse-btn-icon bse-icon--text') Текст</button>
             <template x-if="!config.runBased">
                 <span style="display: contents">
-                    <button type="button" class="bse-btn" x-on:click="addNode('buttons')">+ Меню (кнопки)</button>
-                    <button type="button" class="bse-btn" x-on:click="addNode('list')">+ Список</button>
-                    <button type="button" class="bse-btn" x-on:click="addNode('ai')">+ Запрос ввода (AI)</button>
+                    <button type="button" class="bse-btn" x-on:click="addNode('buttons')">@svg('heroicon-o-cursor-arrow-rays', 'bse-btn-icon bse-icon--buttons') Меню (кнопки)</button>
+                    <button type="button" class="bse-btn" x-on:click="addNode('list')">@svg('heroicon-o-queue-list', 'bse-btn-icon bse-icon--list') Список</button>
+                    <button type="button" class="bse-btn" x-on:click="addNode('ai')">@svg('heroicon-o-sparkles', 'bse-btn-icon bse-icon--ai') Запрос ввода (AI)</button>
                 </span>
             </template>
             <template x-if="config.runBased">
                 <span style="display: contents">
-                    <button type="button" class="bse-btn" x-on:click="addNode('message')">+ WhatsApp-сообщение</button>
-                    <button type="button" class="bse-btn" x-on:click="addNode('condition')">+ Условие</button>
-                    <button type="button" class="bse-btn" x-on:click="addNode('action')">+ Действие</button>
+                    <button type="button" class="bse-btn" x-on:click="addNode('message')">@svg('heroicon-o-paper-airplane', 'bse-btn-icon bse-icon--message') WhatsApp-сообщение</button>
+                    <button type="button" class="bse-btn" x-on:click="addNode('condition')">@svg('heroicon-o-scale', 'bse-btn-icon bse-icon--condition') Условие</button>
+                    <button type="button" class="bse-btn" x-on:click="addNode('action')">@svg('heroicon-o-bolt', 'bse-btn-icon bse-icon--action') Действие</button>
                 </span>
             </template>
-            <button type="button" class="bse-btn" x-on:click="addNode('my_listings')">+ Мои объявления (CTA)</button>
-            <button type="button" class="bse-btn" x-on:click="addNode('end')">+ Завершение</button>
+            <button type="button" class="bse-btn" x-on:click="addNode('my_listings')">@svg('heroicon-o-arrow-top-right-on-square', 'bse-btn-icon bse-icon--my_listings') Мои объявления (CTA)</button>
+            <button type="button" class="bse-btn" x-on:click="addNode('end')">@svg('heroicon-o-flag', 'bse-btn-icon bse-icon--end') Завершение</button>
 
             <span class="bse-toolbar-spring"></span>
 
@@ -78,6 +78,10 @@
             <span class="bse-zoom" x-text="Math.round(scale * 100) + '%'"></span>
             <button type="button" class="bse-btn" x-on:click="zoomIn()" title="Увеличить">+</button>
             <button type="button" class="bse-btn" x-on:click="fitView()" title="Показать всю схему">⌖ Центрировать</button>
+            <button type="button" class="bse-btn" x-show="! layoutBackup" x-on:click="autoLayout()"
+                    title="Разложить блоки по шагам слева направо">Выровнять схему</button>
+            <button type="button" class="bse-btn" x-show="layoutBackup" x-on:click="restoreLayout()"
+                    title="Вернуть блоки на прежние места">Вернуть расстановку</button>
         </div>
 
         <div class="bse-hintbar">
@@ -85,7 +89,7 @@
                 <span class="bse-hint-active">Теперь кликните по блоку, к которому ведёт этот выход. Esc — отмена.</span>
             </template>
             <template x-if="!linking">
-                <span>Как соединить блоки: кликните (или потяните) оранжевый кружок справа от выхода, затем кликните по следующему блоку. Протяните связь в пустое место, чтобы разорвать её.</span>
+                <span>Как соединить блоки: кликните (или потяните) кружок справа от выхода, затем кликните по следующему блоку. Протяните связь в пустое место, чтобы разорвать её.</span>
             </template>
         </div>
 
@@ -95,21 +99,37 @@
                  x-on:wheel.prevent="onWheel($event)"
                  x-bind:style="`background-position: ${pan.x}px ${pan.y}px; background-size: ${24 * scale}px ${24 * scale}px`">
                 <div class="bse-world" x-bind:style="`transform: translate(${pan.x}px, ${pan.y}px) scale(${scale})`">
-                    {{-- Все связи — одним path: <template x-for> внутри <svg> браузеры не поддерживают. --}}
+                    {{-- <template x-for> внутри <svg> браузеры не поддерживают,
+                         поэтому каждая связь — свой абсолютный svg-оверлей:
+                         это даёт цвет, подпись и подсветку каждой ветке. --}}
+                    <template x-for="edge in edges" :key="edge.from + ':' + edge.output">
+                        <svg class="bse-edges bse-edge-svg" x-bind:class="edgeClasses(edge)">
+                            <path class="bse-edge" x-bind:d="edgePath(edge)"/>
+                            <path class="bse-arrow" x-bind:d="arrowPath(edge)"/>
+                            <text class="bse-edge-label" text-anchor="middle"
+                                  x-show="scale >= 0.6 && edgeLabel(edge)"
+                                  x-bind:x="edgeMid(edge)?.x ?? 0"
+                                  x-bind:y="(edgeMid(edge)?.y ?? 0) - 7"
+                                  x-text="edgeLabel(edge)"></text>
+                        </svg>
+                    </template>
                     <svg class="bse-edges">
-                        <path class="bse-edge" x-bind:d="edgesPath()"/>
-                        <path class="bse-arrows" x-bind:d="arrowsPath()"/>
                         <path class="bse-edge bse-edge-temp" x-show="linkLine"
                               x-bind:d="linkLine ? `M ${linkLine.x1} ${linkLine.y1} C ${linkLine.x1 + 60} ${linkLine.y1}, ${linkLine.x2 - 60} ${linkLine.y2}, ${linkLine.x2} ${linkLine.y2}` : ''"/>
                     </svg>
 
                     <template x-for="node in nodes" :key="node.id">
                         <div class="bse-node" x-bind:data-node-id="node.id"
-                             x-bind:class="{ 'bse-selected': selectedId === node.id, 'bse-hit': matches(node), 'bse-node-start': node.type === 'start', 'bse-link-target': !!linking }"
+                             x-bind:class="{ 'bse-selected': selectedId === node.id, 'bse-hit': matches(node), 'bse-node-start': node.type === 'start', 'bse-link-target': !!linking, ['bse-type-' + node.type]: true }"
                              x-bind:style="`left: ${node.x}px; top: ${node.y}px`"
                              x-on:pointerdown.stop="startNodeDrag(node, $event)">
                             <div class="bse-node-header">
                                 <span class="bse-node-in"></span>
+                                <span class="bse-step" x-text="stepNumber(node.id)"
+                                      x-bind:title="stepNumber(node.id) === '•' ? 'Блок не связан со «Стартом»' : 'Шаг ' + stepNumber(node.id)"></span>
+                                @foreach (['start' => 'play', 'text' => 'chat-bubble-bottom-center-text', 'buttons' => 'cursor-arrow-rays', 'list' => 'queue-list', 'ai' => 'sparkles', 'my_listings' => 'arrow-top-right-on-square', 'message' => 'paper-airplane', 'condition' => 'scale', 'action' => 'bolt', 'end' => 'flag'] as $nodeType => $icon)
+                                    @svg('heroicon-o-'.$icon, 'bse-node-icon', ['x-show' => "node.type === '{$nodeType}'"])
+                                @endforeach
                                 <span class="bse-node-type" x-text="typeLabels[node.type] ?? node.type"></span>
                             </div>
                             <div class="bse-node-text" x-show="node.type !== 'start'"
@@ -118,12 +138,28 @@
                                 <div class="bse-out">
                                     <span class="bse-out-label" x-text="out.label"></span>
                                     <span class="bse-port"
-                                          x-bind:class="{ 'bse-port-connected': isConnected(node.id, out.key) }"
+                                          x-bind:class="{ 'bse-port-connected': isConnected(node.id, out.key), ['bse-port--' + edgeGroup(out.key)]: true }"
                                           x-on:pointerdown.stop.prevent="startLink(node, out.key, $event)"
                                           title="Кликните или потяните, чтобы соединить со следующим блоком"></span>
                                 </div>
                             </template>
                         </div>
+                    </template>
+                </div>
+
+                <div class="bse-legend">
+                    <template x-if="config.runBased">
+                        <span class="bse-legend-item"><i class="bse-legend-line bse-legend-line--yes"></i>Выполнено / Да</span>
+                    </template>
+                    <template x-if="config.runBased">
+                        <span class="bse-legend-item"><i class="bse-legend-line bse-legend-line--no"></i>Не выполнено / Нет</span>
+                    </template>
+                    <span class="bse-legend-item"><i class="bse-legend-line bse-legend-line--option"></i>Кнопка</span>
+                    <template x-if="config.runBased">
+                        <span class="bse-legend-item"><i class="bse-legend-line bse-legend-line--timeout"></i>Таймаут</span>
+                    </template>
+                    <template x-if="!config.runBased">
+                        <span class="bse-legend-item"><i class="bse-legend-line bse-legend-line--fallback"></i>Любая другая фраза</span>
                     </template>
                 </div>
             </div>
@@ -140,7 +176,7 @@
                                 <textarea class="bse-input" rows="4" x-model="selected.text"
                                           placeholder="Что увидит пользователь"></textarea>
                                 <template x-if="config.runBased && selected.type !== 'action'">
-                                    <p class="bse-note">Можно вставлять данные: @{{listing.category}}, @{{request.query}} и другие переменные.</p>
+                                    <p class="bse-note">Можно вставлять данные: @{{listing.title}}, @{{request.query}} и другие переменные.</p>
                                 </template>
                                 <template x-if="selected.type === 'action'">
                                     <p class="bse-note">Используется действием «Отправить CTA-ссылку на кабинет» как текст сообщения; для остальных действий не нужен.</p>
@@ -246,12 +282,15 @@
                         <template x-if="selected.type === 'action'">
                             <label class="bse-field">
                                 <span>Действие</span>
-                                <select class="bse-input" x-model="selected.action">
+                                <select class="bse-input" x-model="selected.action"
+                                        x-on:change="onActionChanged(selected)">
                                     <template x-for="a in config.actions" :key="a.value">
                                         <option x-bind:value="a.value" x-text="a.label"></option>
                                     </template>
                                 </select>
-                                <p class="bse-note">Действие выполняется доменными правилами: например, решение по уже закрытой заявке не изменится.</p>
+                                <p class="bse-note" x-show="actionConfig(selected)?.skippable"
+                                   x-text="`Если действие уже нельзя выполнить, запуск идёт по выходу «${actionConfig(selected)?.skipped_label}»; без связи — тихо завершается.`"></p>
+                                <p class="bse-note" x-show="! actionConfig(selected)?.skippable">Действие выполняется по возможности и всегда идёт дальше по «Продолжить».</p>
                             </label>
                         </template>
 
@@ -323,8 +362,36 @@
 
                 <template x-if="!selected">
                     <div class="bse-panel-body">
-                        <p class="bse-note">Выберите блок на холсте, чтобы изменить его текст и варианты ответа.</p>
-                        <p class="bse-note">Связи: кликните оранжевый кружок справа от выхода, затем кликните по
+                        <div class="bse-check">
+                            <button type="button" class="bse-btn" x-on:click="runCheck()" x-bind:disabled="busy">Проверить сценарий</button>
+                            <template x-if="checkResult && ! checkResult.errors.length && ! checkResult.warnings.length">
+                                <p class="bse-check-ok">✓ Готов к публикации</p>
+                            </template>
+                            <template x-for="(issue, i) in (checkResult?.errors ?? [])" :key="'e' + i">
+                                <p class="bse-check-error" x-on:click="issue.node_id && focusNode(issue.node_id)"
+                                   x-bind:class="{ 'bse-check-link': issue.node_id }" x-text="issue.message"></p>
+                            </template>
+                            <template x-for="(issue, i) in (checkResult?.warnings ?? [])" :key="'w' + i">
+                                <p class="bse-check-warning" x-on:click="issue.node_id && focusNode(issue.node_id)"
+                                   x-bind:class="{ 'bse-check-link': issue.node_id }" x-text="issue.message"></p>
+                            </template>
+                        </div>
+
+                        <div class="bse-outline">
+                            <p class="bse-outline-title">Маршрут сценария</p>
+                            <template x-for="row in outline()" :key="row.id">
+                                <button type="button" class="bse-outline-row"
+                                        x-bind:class="{ 'bse-outline-unreachable': row.unreachable }"
+                                        x-bind:style="`padding-left: ${row.depth * 0.75}rem`"
+                                        x-on:click="focusNode(row.id)">
+                                    <span class="bse-outline-via" x-show="row.via" x-text="'↳ ' + row.via + ' → '"></span>
+                                    <span x-text="row.unreachable ? row.label + ' — не связан со «Стартом»' : row.label"></span>
+                                </button>
+                            </template>
+                        </div>
+
+                        <p class="bse-note">Выберите блок на холсте (или в маршруте выше), чтобы изменить его текст и варианты ответа.</p>
+                        <p class="bse-note">Связи: кликните кружок справа от выхода, затем кликните по
                             следующему блоку (или просто потяните от кружка к блоку).
                             Чтобы разорвать связь, потяните её с выхода в пустое место.</p>
                         <template x-if="config.runBased">
@@ -368,6 +435,7 @@
                     drag: null,
                     linking: null,
                     linkLine: null,
+                    layoutBackup: null,
 
                     NODE_W: 260,
                     HEADER_H: 32,
@@ -422,6 +490,17 @@
                             return [{ key: 'yes', label: 'Да' }, { key: 'no', label: 'Нет' }]
                         }
 
+                        if (node.type === 'action') {
+                            const action = this.actionConfig(node)
+
+                            return action?.skippable
+                                ? [
+                                    { key: 'continue', label: 'Выполнено' },
+                                    { key: 'skipped', label: action.skipped_label },
+                                ]
+                                : [{ key: 'continue', label: 'Продолжить' }]
+                        }
+
                         if (node.type === 'end') {
                             return []
                         }
@@ -440,6 +519,18 @@
 
                     listLabel(list, value) {
                         return (list ?? []).find((i) => i.value === value)?.label ?? ''
+                    },
+
+                    actionConfig(node) {
+                        return this.config.actions.find((a) => a.value === node?.action)
+                    },
+
+                    // Смена действия убирает устаревшую связь «не выполнено»:
+                    // у нового действия такого исхода может не быть.
+                    onActionChanged(node) {
+                        if (! this.actionConfig(node)?.skippable) {
+                            this.setTarget(node.id, 'skipped', '')
+                        }
                     },
 
                     // Зеркалит ScenarioValidator::templatePlaceholderCount.
@@ -522,25 +613,63 @@
                         return n ? { x: n.x, y: n.y + this.HEADER_H / 2 } : null
                     },
 
+                    // Веер входа: стрелки в один блок расходятся по вертикали,
+                    // чтобы не сливаться в одну точку.
+                    edgeInPoint(edge) {
+                        const b = this.inputPos(edge.to)
+                        if (! b) return null
+                        const incoming = this.edges.filter((e) => e.to === edge.to)
+                        if (incoming.length < 2) return b
+                        const idx = incoming.findIndex((e) => e.from === edge.from && e.output === edge.output)
+
+                        return { x: b.x, y: b.y + (idx - (incoming.length - 1) / 2) * 10 }
+                    },
+
                     edgePath(edge) {
                         const a = this.portPos(edge.from, edge.output)
-                        const b = this.inputPos(edge.to)
+                        const b = this.edgeInPoint(edge)
                         if (! a || ! b) return ''
                         const dx = Math.max(50, Math.abs(b.x - a.x) / 2)
 
                         return `M ${a.x} ${a.y} C ${a.x + dx} ${a.y}, ${b.x - dx} ${b.y}, ${b.x} ${b.y}`
                     },
 
-                    edgesPath() {
-                        return this.edges.map((e) => this.edgePath(e)).join(' ')
+                    arrowPath(edge) {
+                        const b = this.edgeInPoint(edge)
+
+                        return b ? `M ${b.x - 10} ${b.y - 5.5} L ${b.x - 1} ${b.y} L ${b.x - 10} ${b.y + 5.5} Z` : ''
                     },
 
-                    arrowsPath() {
-                        return this.edges.map((e) => {
-                            const b = this.inputPos(e.to)
+                    // Середина кубической Безье из edgePath: контрольные точки
+                    // симметричны, поэтому B(0.5) — середина отрезка концов.
+                    edgeMid(edge) {
+                        const a = this.portPos(edge.from, edge.output)
+                        const b = this.edgeInPoint(edge)
+                        if (! a || ! b) return null
 
-                            return b ? `M ${b.x - 10} ${b.y - 5.5} L ${b.x - 1} ${b.y} L ${b.x - 10} ${b.y + 5.5} Z` : ''
-                        }).join(' ')
+                        return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }
+                    },
+
+                    edgeLabel(edge) {
+                        const n = this.findNode(edge.from)
+                        const label = n ? (this.outputsOf(n).find((o) => o.key === edge.output)?.label ?? '') : ''
+                        if (label === 'Продолжить') return '' // единственный «шумовой» лейбл
+
+                        return label.length > 24 ? label.slice(0, 23) + '…' : label
+                    },
+
+                    edgeGroup(output) {
+                        if (output.startsWith('option:')) return 'option'
+
+                        return ['yes', 'no', 'timeout', 'fallback', 'returning', 'skipped'].includes(output) ? output : 'continue'
+                    },
+
+                    edgeClasses(edge) {
+                        return {
+                            ['bse-edge--' + this.edgeGroup(edge.output)]: true,
+                            'bse-edge-active': this.selectedId !== null && (edge.from === this.selectedId || edge.to === this.selectedId),
+                            'bse-edge-dim': this.selectedId !== null && edge.from !== this.selectedId && edge.to !== this.selectedId,
+                        }
                     },
 
                     isConnected(nodeId, key) {
@@ -559,8 +688,45 @@
                         }
                     },
 
+                    /**
+                     * Номера шагов: BFS от «Старта» в порядке выходов —
+                     * порядок чтения схемы. «•» — блок не связан со «Стартом».
+                     */
+                    stepNumbers() {
+                        const numbers = new Map()
+                        const start = this.nodes.find((n) => n.type === 'start')
+                        if (! start) return numbers
+                        const queue = [start.id]
+                        numbers.set(start.id, 1)
+
+                        while (queue.length) {
+                            const id = queue.shift()
+                            const n = this.findNode(id)
+                            if (! n) continue
+                            this.outputsOf(n).forEach((out) => {
+                                const to = this.targetOf(id, out.key)
+                                if (to && ! numbers.has(to) && this.findNode(to)) {
+                                    numbers.set(to, numbers.size + 1)
+                                    queue.push(to)
+                                }
+                            })
+                        }
+
+                        return numbers
+                    },
+
+                    stepNumber(id) {
+                        return this.stepNumbers().get(id) ?? '•'
+                    },
+
                     nodeLabel(node) {
                         const base = this.nodeBaseLabel(node)
+                        const step = this.stepNumbers().get(node.id)
+
+                        if (step) {
+                            return `Шаг ${step} · ${base}`
+                        }
+
                         const twins = this.nodes.filter(n => this.nodeBaseLabel(n) === base)
 
                         if (twins.length < 2) {
@@ -641,8 +807,74 @@
                             return
                         }
 
+                        this.layoutBackup = null // ручной drag фиксирует новую расстановку
                         this.selectedId = node.id
                         this.drag = { kind: 'node', id: node.id, sx: e.clientX, sy: e.clientY, nx: node.x, ny: node.y }
+                    },
+
+                    /**
+                     * «Выровнять схему»: слой блока — длиннейший путь от
+                     * «Старта» (back-рёбра циклов отсекаются DFS-ом),
+                     * недостижимые блоки уходят в последний слой; внутри
+                     * слоя порядок — по среднему Y предшественников.
+                     */
+                    autoLayout() {
+                        if (! this.nodes.length) return
+                        this.layoutBackup = this.nodes.map((n) => ({ id: n.id, x: n.x, y: n.y }))
+
+                        const start = this.nodes.find((n) => n.type === 'start')
+                        const layers = new Map()
+                        const onPath = new Set()
+                        const forward = []
+
+                        const visit = (id, layer) => {
+                            if (onPath.has(id)) return // back-ребро цикла
+                            if ((layers.get(id) ?? -1) >= layer) return
+                            layers.set(id, layer)
+                            onPath.add(id)
+                            this.edges.filter((e) => e.from === id && this.findNode(e.to)).forEach((e) => visit(e.to, layer + 1))
+                            onPath.delete(id)
+                        }
+
+                        if (start) visit(start.id, 0)
+
+                        const maxLayer = Math.max(0, ...layers.values())
+                        this.nodes.forEach((n) => {
+                            if (! layers.has(n.id)) layers.set(n.id, maxLayer + 1)
+                        })
+
+                        const byLayer = new Map()
+                        this.nodes.forEach((n) => {
+                            const l = layers.get(n.id)
+                            byLayer.set(l, [...(byLayer.get(l) ?? []), n])
+                        })
+
+                        const prevY = (n) => {
+                            const sources = this.edges.filter((e) => e.to === n.id).map((e) => this.findNode(e.from)).filter(Boolean)
+
+                            return sources.length ? sources.reduce((s, p) => s + p.y, 0) / sources.length : n.y
+                        }
+
+                        ;[...byLayer.keys()].sort((a, b) => a - b).forEach((layer) => {
+                            const row = byLayer.get(layer).sort((a, b) => prevY(a) - prevY(b))
+                            let y = 40
+                            row.forEach((n) => {
+                                n.x = 40 + layer * (this.NODE_W + 140)
+                                n.y = y
+                                y += this.nodeHeight(n) + 40
+                            })
+                        })
+
+                        this.fitView()
+                    },
+
+                    restoreLayout() {
+                        (this.layoutBackup ?? []).forEach(({ id, x, y }) => {
+                            const n = this.findNode(id)
+                            if (n) { n.x = x; n.y = y }
+                        })
+                        this.layoutBackup = null
+                        this.fitView()
                     },
 
                     startLink(node, key, e) {
@@ -787,11 +1019,61 @@
 
                     focusSearch() {
                         const hit = this.nodes.find((n) => this.matches(n))
-                        if (! hit) return
+                        if (hit) this.focusNode(hit.id)
+                    },
+
+                    focusNode(id) {
+                        const n = this.findNode(id)
+                        if (! n) return
                         const r = this.$refs.viewport.getBoundingClientRect()
-                        this.pan.x = r.width / 2 - (hit.x + this.NODE_W / 2) * this.scale
-                        this.pan.y = r.height / 2 - (hit.y + 80) * this.scale
-                        this.selectedId = hit.id
+                        this.pan.x = r.width / 2 - (n.x + this.NODE_W / 2) * this.scale
+                        this.pan.y = r.height / 2 - (n.y + 80) * this.scale
+                        this.selectedId = n.id
+                    },
+
+                    /**
+                     * Текстовое оглавление веток: обход в глубину от «Старта»
+                     * в порядке выходов; via — подпись выхода, которым пришли.
+                     * Блок показывается на месте первого захода, повторные
+                     * входы в него оглавление не дублируют.
+                     */
+                    outline() {
+                        const rows = []
+                        const visited = new Set()
+                        const start = this.nodes.find((n) => n.type === 'start')
+
+                        const walk = (id, depth, via) => {
+                            const n = this.findNode(id)
+                            if (! n || visited.has(id)) return
+                            visited.add(id)
+                            rows.push({ id, depth, via, label: this.nodeLabel(n) })
+                            this.outputsOf(n).forEach((out) => {
+                                const to = this.targetOf(id, out.key)
+                                if (to) walk(to, depth + 1, out.label)
+                            })
+                        }
+
+                        if (start) walk(start.id, 0, null)
+
+                        this.nodes.forEach((n) => {
+                            if (! visited.has(n.id)) {
+                                rows.push({ id: n.id, depth: 0, via: null, label: this.nodeLabel(n), unreachable: true })
+                            }
+                        })
+
+                        return rows
+                    },
+
+                    checkResult: null,
+
+                    async runCheck() {
+                        this.busy = true
+
+                        try {
+                            this.checkResult = await this.$wire.check(this.serialize())
+                        } finally {
+                            this.busy = false
+                        }
                     },
 
                     serialize() {
@@ -875,8 +1157,46 @@
             .bse-world { position: absolute; left: 0; top: 0; transform-origin: 0 0; }
             .bse-edges { position: absolute; left: 0; top: 0; width: 1px; height: 1px; overflow: visible; pointer-events: none; }
             .bse-edge { fill: none; stroke: rgb(156 163 175); stroke-width: 2; }
-            .bse-arrows { fill: rgb(156 163 175); stroke: none; }
             .bse-edge-temp { stroke: rgb(217 119 6); stroke-dasharray: 6 4; }
+
+            /* Палитра веток: линия, стрелка, подпись и порт-источник — одним
+               цветом; оранжевый занят механикой выделения и связывания. */
+            .bse-edge-svg { transition: opacity 0.15s; }
+            .bse-edge-svg .bse-arrow { fill: rgb(156 163 175); stroke: none; }
+            .bse-edge-label {
+                font-size: 11px; font-weight: 600; fill: rgb(107 114 128);
+                paint-order: stroke; stroke: rgb(249 250 251); stroke-width: 4px; stroke-linejoin: round;
+            }
+            .bse-edge--yes .bse-edge { stroke: rgb(22 163 74); }
+            .bse-edge--yes .bse-arrow, .bse-edge--yes .bse-edge-label { fill: rgb(22 163 74); }
+            .bse-edge--no .bse-edge, .bse-edge--skipped .bse-edge { stroke: rgb(239 68 68); }
+            .bse-edge--no .bse-arrow, .bse-edge--no .bse-edge-label,
+            .bse-edge--skipped .bse-arrow, .bse-edge--skipped .bse-edge-label { fill: rgb(239 68 68); }
+            .bse-edge--timeout .bse-edge { stroke: rgb(139 92 246); }
+            .bse-edge--timeout .bse-arrow, .bse-edge--timeout .bse-edge-label { fill: rgb(139 92 246); }
+            .bse-edge--option .bse-edge { stroke: rgb(59 130 246); }
+            .bse-edge--option .bse-arrow, .bse-edge--option .bse-edge-label { fill: rgb(59 130 246); }
+            .bse-edge--fallback .bse-edge { stroke: rgb(107 114 128); stroke-dasharray: 5 4; }
+            .bse-edge--fallback .bse-arrow, .bse-edge--fallback .bse-edge-label { fill: rgb(107 114 128); }
+            .bse-edge--returning .bse-edge { stroke: rgb(8 145 178); }
+            .bse-edge--returning .bse-arrow, .bse-edge--returning .bse-edge-label { fill: rgb(8 145 178); }
+
+            .bse-edge-active .bse-edge { stroke-width: 3.5; }
+            .bse-edge-active .bse-edge-label { font-weight: 700; }
+            .bse-edge-dim { opacity: 0.18; }
+
+            .bse-legend {
+                position: absolute; left: 0.75rem; bottom: 0.75rem; display: flex; gap: 0.75rem; flex-wrap: wrap;
+                padding: 0.375rem 0.625rem; border-radius: 0.5rem; font-size: 0.6875rem; color: rgb(107 114 128);
+                background: rgb(255 255 255 / 0.85); border: 1px solid rgb(229 231 235); pointer-events: none;
+            }
+            .bse-legend-item { display: inline-flex; align-items: center; }
+            .bse-legend-line { display: inline-block; width: 16px; height: 0; border-top: 2px solid; margin-right: 4px; }
+            .bse-legend-line--yes { border-top-color: rgb(22 163 74); }
+            .bse-legend-line--no { border-top-color: rgb(239 68 68); }
+            .bse-legend-line--timeout { border-top-color: rgb(139 92 246); }
+            .bse-legend-line--option { border-top-color: rgb(59 130 246); }
+            .bse-legend-line--fallback { border-top-color: rgb(107 114 128); border-top-style: dashed; }
 
             .bse-node {
                 position: absolute; width: 260px; border-radius: 0.5rem; background: white;
@@ -897,6 +1217,35 @@
                 background: rgb(229 231 235); border: 2px solid rgb(156 163 175);
             }
             .bse-node-type { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+            /* Типизация блоков: цветная полоска слева, иконка и заголовок
+               в цвете типа — категория блока видна до чтения текста. */
+            .bse-node-icon { width: 16px; height: 16px; flex-shrink: 0; }
+            .bse-btn-icon { width: 14px; height: 14px; display: inline-block; vertical-align: -2px; }
+            .bse-step {
+                min-width: 18px; height: 18px; border-radius: 9999px; background: rgb(243 244 246);
+                color: rgb(75 85 99); font-size: 0.6875rem; font-weight: 600; padding: 0 4px;
+                display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0;
+            }
+            .bse-type-start { border-left: 4px solid rgb(21 128 61); }
+            .bse-type-start .bse-node-header, .bse-icon--start { color: rgb(21 128 61); }
+            .bse-type-text { border-left: 4px solid rgb(2 132 199); }
+            .bse-type-text .bse-node-header, .bse-icon--text { color: rgb(2 132 199); }
+            .bse-type-buttons, .bse-type-list { border-left: 4px solid rgb(14 116 144); }
+            .bse-type-buttons .bse-node-header, .bse-type-list .bse-node-header,
+            .bse-icon--buttons, .bse-icon--list { color: rgb(14 116 144); }
+            .bse-type-message { border-left: 4px solid rgb(13 148 136); }
+            .bse-type-message .bse-node-header, .bse-icon--message { color: rgb(13 148 136); }
+            .bse-type-ai { border-left: 4px solid rgb(124 58 237); }
+            .bse-type-ai .bse-node-header, .bse-icon--ai { color: rgb(124 58 237); }
+            .bse-type-my_listings { border-left: 4px solid rgb(79 70 229); }
+            .bse-type-my_listings .bse-node-header, .bse-icon--my_listings { color: rgb(79 70 229); }
+            .bse-type-condition { border-left: 4px solid rgb(180 83 9); }
+            .bse-type-condition .bse-node-header, .bse-icon--condition { color: rgb(180 83 9); }
+            .bse-type-action { border-left: 4px solid rgb(234 88 12); }
+            .bse-type-action .bse-node-header, .bse-icon--action { color: rgb(234 88 12); }
+            .bse-type-end { border-left: 4px solid rgb(107 114 128); }
+            .bse-type-end .bse-node-header, .bse-icon--end { color: rgb(107 114 128); }
             .bse-node-text {
                 height: 40px; padding: 0.25rem 0.75rem; font-size: 0.75rem; color: rgb(107 114 128);
                 overflow: hidden; border-bottom: 1px solid rgb(243 244 246);
@@ -912,6 +1261,18 @@
             }
             .bse-port:hover { transform: scale(1.3); box-shadow: 0 0 0 4px rgb(217 119 6 / 0.25); }
             .bse-port-connected { background: rgb(217 119 6); }
+            .bse-port--yes { border-color: rgb(22 163 74); }
+            .bse-port--yes.bse-port-connected { background: rgb(22 163 74); }
+            .bse-port--no, .bse-port--skipped { border-color: rgb(239 68 68); }
+            .bse-port--no.bse-port-connected, .bse-port--skipped.bse-port-connected { background: rgb(239 68 68); }
+            .bse-port--timeout { border-color: rgb(139 92 246); }
+            .bse-port--timeout.bse-port-connected { background: rgb(139 92 246); }
+            .bse-port--option { border-color: rgb(59 130 246); }
+            .bse-port--option.bse-port-connected { background: rgb(59 130 246); }
+            .bse-port--fallback { border-color: rgb(107 114 128); }
+            .bse-port--fallback.bse-port-connected { background: rgb(107 114 128); }
+            .bse-port--returning { border-color: rgb(8 145 178); }
+            .bse-port--returning.bse-port-connected { background: rgb(8 145 178); }
             .bse-link-target { outline: 2px dashed rgb(217 119 6); outline-offset: 3px; cursor: pointer; }
 
             .bse-panel {
@@ -920,6 +1281,22 @@
             }
             .bse-panel-body { padding: 1rem; display: flex; flex-direction: column; gap: 0.75rem; }
             .bse-panel-title { font-weight: 600; font-size: 0.9375rem; }
+
+            .bse-check { display: flex; flex-direction: column; gap: 0.375rem; align-items: flex-start; }
+            .bse-check-ok { font-size: 0.8125rem; font-weight: 600; color: rgb(22 163 74); }
+            .bse-check-error { font-size: 0.75rem; color: rgb(220 38 38); }
+            .bse-check-warning { font-size: 0.75rem; color: rgb(180 83 9); }
+            .bse-check-link { cursor: pointer; text-decoration: underline dotted; }
+
+            .bse-outline { display: flex; flex-direction: column; gap: 0.125rem; }
+            .bse-outline-title { font-size: 0.8125rem; font-weight: 600; color: rgb(55 65 81); margin-bottom: 0.25rem; }
+            .bse-outline-row {
+                display: block; width: 100%; text-align: left; font-size: 0.75rem; color: rgb(55 65 81);
+                background: none; border: none; padding: 0.125rem 0.25rem; border-radius: 0.25rem; cursor: pointer;
+            }
+            .bse-outline-row:hover { background: rgb(243 244 246); }
+            .bse-outline-via { color: rgb(107 114 128); }
+            .bse-outline-unreachable { color: rgb(180 83 9); }
             .bse-field { display: flex; flex-direction: column; gap: 0.375rem; font-size: 0.8125rem; font-weight: 500; color: rgb(55 65 81); }
             .bse-note { font-size: 0.75rem; color: rgb(107 114 128); }
             .bse-template-preview { margin-top: 0.5rem; padding: 0.5rem; border: 1px dashed rgb(209 213 219); border-radius: 0.375rem; background: rgb(249 250 251); }
@@ -956,6 +1333,12 @@
             :where(.dark) .bse-panel-title { color: rgb(243 244 246); }
             :where(.dark) .bse-field { color: rgb(209 213 219); }
             :where(.dark) .bse-input { background: rgb(17 24 39); border-color: rgb(75 85 99); color: rgb(243 244 246); }
+            :where(.dark) .bse-edge-label { stroke: rgb(17 24 39); }
+            :where(.dark) .bse-step { background: rgb(55 65 81); color: rgb(209 213 219); }
+            :where(.dark) .bse-outline-title { color: rgb(209 213 219); }
+            :where(.dark) .bse-outline-row { color: rgb(209 213 219); }
+            :where(.dark) .bse-outline-row:hover { background: rgb(55 65 81); }
+            :where(.dark) .bse-legend { background: rgb(31 41 55 / 0.85); border-color: rgb(55 65 81); color: rgb(156 163 175); }
         </style>
     </div>
 </x-filament-panels::page>

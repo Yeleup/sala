@@ -33,6 +33,7 @@ test('оператор создаёт объявление за поставщи
         ->fillForm([
             'contact_id' => $supplier->id,
             'type' => ListingType::Equipment->value,
+            'title' => 'Аренда автокрана 25 т',
             'category_id' => $category->id,
             'description' => 'Кран 25 тонн, стрела 28 м',
             'location_id' => locationNamed('г.Шымкент')->id,
@@ -44,6 +45,7 @@ test('оператор создаёт объявление за поставщи
     expect(Listing::sole())
         ->contact_id->toBe($supplier->id)
         ->status->toBe(ListingStatus::Draft)
+        ->title->toBe('Аренда автокрана 25 т')
         ->category->name->toBe('Автокран')
         ->location->name->toBe('г.Шымкент');
 });
@@ -63,6 +65,7 @@ test('оператор редактирует бизнес-поля объявл
 
     Livewire::test(EditListing::class, ['record' => $listing->id])
         ->fillForm([
+            'title' => 'Аренда экскаватора',
             'category_id' => $category->id,
             'description' => 'Гусеничный экскаватор',
             'price' => '15000 тг/ч',
@@ -71,6 +74,7 @@ test('оператор редактирует бизнес-поля объявл
         ->assertHasNoFormErrors();
 
     expect($listing->refresh())
+        ->title->toBe('Аренда экскаватора')
         ->category->name->toBe('Экскаватор')
         ->description->toBe('Гусеничный экскаватор')
         ->price->toBe('15000 тг/ч');

@@ -5,6 +5,7 @@ namespace App\Http\Requests;
 use App\Enums\ListingType;
 use App\Models\Listing;
 use App\Models\ListingMedia;
+use App\Support\WhatsappText;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\Validator;
@@ -35,6 +36,12 @@ class UpdateSupplierListingRequest extends FormRequest
         if ($this->input('type') === ListingType::Service->value) {
             $this->merge(['brand_id' => null]);
         }
+
+        // The title ends up in WhatsApp template parameters, which Meta
+        // rejects over newlines and space runs — normalize before storing.
+        if (is_string($this->input('title'))) {
+            $this->merge(['title' => WhatsappText::templateParameter($this->input('title')) ?: null]);
+        }
     }
 
     /**
@@ -44,6 +51,7 @@ class UpdateSupplierListingRequest extends FormRequest
     {
         return [
             'type' => ['required', Rule::enum(ListingType::class)],
+            'title' => ['required', 'string', 'max:255'],
             'category_id' => [
                 'required',
                 'integer',
@@ -122,6 +130,7 @@ class UpdateSupplierListingRequest extends FormRequest
     {
         return [
             'type' => 'тип',
+            'title' => 'название',
             'category_id' => 'категория',
             'brand_id' => 'марка',
             'description' => 'описание',

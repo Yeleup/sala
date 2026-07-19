@@ -122,7 +122,7 @@ class NotificationReplyHandler
             $listing->renew();
             $this->messenger->sendText($contact, sprintf(
                 'Продлили: объявление «%s» будет показываться ещё %d дней.',
-                $listing->category?->name ?: 'без категории',
+                $listing->displayName() ?: 'без названия',
                 Listing::LIFETIME_DAYS,
             ));
 
@@ -173,7 +173,7 @@ class NotificationReplyHandler
             $this->messenger->sendText($request->customer, $accepted
                 ? sprintf(
                     'Поставщик согласился по вашей заявке («%s»). Свяжитесь с ним: +%s',
-                    $request->listing->category?->name ?: 'объявление',
+                    $request->listing->displayName() ?: 'объявление',
                     ltrim($request->listing->supplier->phone, '+'),
                 )
                 : 'К сожалению, поставщик отказался по вашей заявке. Напишите нам — подберём другие варианты.');

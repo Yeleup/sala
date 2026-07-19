@@ -29,4 +29,16 @@ class WhatsappText
 
         return mb_substr($text, 0, $maxLength - 1).self::ELLIPSIS;
     }
+
+    /**
+     * Normalizes a template body parameter: Meta rejects parameters that
+     * contain newlines, tabs or runs of consecutive spaces — and since
+     * parameters now carry free text (the listing title, the customer's
+     * query), any of those would fail the send. Whitespace runs collapse
+     * to a single space.
+     */
+    public static function templateParameter(?string $text): string
+    {
+        return trim((string) preg_replace('/\s+/u', ' ', (string) $text));
+    }
 }

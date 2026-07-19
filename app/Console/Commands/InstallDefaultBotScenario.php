@@ -135,8 +135,9 @@ class InstallDefaultBotScenario extends Command
 
     /**
      * Новая заявка: адаптивное уведомление поставщику с кнопками
-     * [Согласиться]/[Отказаться]; решение принимается только пока заявка
-     * ожидает ответа, заказчик уведомляется об исходе.
+     * [Согласиться]/[Отказаться]; исход решает само действие — по уже
+     * решённой заявке (в т.ч. при гонке двух ответов) запуск идёт по
+     * выходу «Заявка уже решена», заказчик уведомляется об исходе.
      *
      * @return array{nodes: list<array<string, mixed>>, edges: list<array<string, mixed>>}
      */
@@ -148,37 +149,33 @@ class InstallDefaultBotScenario extends Command
                 ['id' => 'poll', 'type' => 'message', 'x' => 260, 'y' => 240,
                     'channel' => 'adaptive',
                     'template_name' => WhatsappTemplateLibrary::NEW_CUSTOMER_REQUEST,
-                    'variables' => ['listing.category', 'request.query'],
+                    'variables' => ['listing.title', 'request.query'],
                     'options' => [
                         ['id' => 'accept', 'title' => 'Согласиться'],
                         ['id' => 'decline', 'title' => 'Отказаться'],
                     ]],
-                ['id' => 'check_accept', 'type' => 'condition', 'condition' => 'request_pending', 'x' => 540, 'y' => 120],
-                ['id' => 'check_decline', 'type' => 'condition', 'condition' => 'request_pending', 'x' => 540, 'y' => 360],
-                ['id' => 'do_accept', 'type' => 'action', 'action' => 'accept_request', 'x' => 820, 'y' => 60],
-                ['id' => 'do_decline', 'type' => 'action', 'action' => 'decline_request', 'x' => 820, 'y' => 420],
-                ['id' => 'accepted_text', 'type' => 'text', 'x' => 1100, 'y' => 60,
+                ['id' => 'do_accept', 'type' => 'action', 'action' => 'accept_request', 'x' => 540, 'y' => 80],
+                ['id' => 'do_decline', 'type' => 'action', 'action' => 'decline_request', 'x' => 540, 'y' => 400],
+                ['id' => 'accepted_text', 'type' => 'text', 'x' => 820, 'y' => 80,
                     'text' => 'Отлично! Мы сообщим заказчику, что вы готовы взять заказ.'],
-                ['id' => 'declined_text', 'type' => 'text', 'x' => 1100, 'y' => 420,
+                ['id' => 'declined_text', 'type' => 'text', 'x' => 820, 'y' => 400,
                     'text' => 'Понятно, заявку отклонили. Объявление продолжает показываться в поиске.'],
-                ['id' => 'notify_accept', 'type' => 'action', 'action' => 'notify_customer', 'x' => 1380, 'y' => 60],
-                ['id' => 'notify_decline', 'type' => 'action', 'action' => 'notify_customer', 'x' => 1380, 'y' => 420],
                 ['id' => 'already_decided', 'type' => 'text', 'x' => 820, 'y' => 240,
                     'text' => 'Ответ по этой заявке уже зафиксирован — решение не меняется.'],
-                ['id' => 'end', 'type' => 'end', 'x' => 1620, 'y' => 240],
+                ['id' => 'notify_accept', 'type' => 'action', 'action' => 'notify_customer', 'x' => 1100, 'y' => 80],
+                ['id' => 'notify_decline', 'type' => 'action', 'action' => 'notify_customer', 'x' => 1100, 'y' => 400],
+                ['id' => 'end', 'type' => 'end', 'x' => 1380, 'y' => 240],
             ],
             'edges' => [
                 ['from' => 'start', 'output' => 'continue', 'to' => 'poll'],
-                ['from' => 'poll', 'output' => 'option:accept', 'to' => 'check_accept'],
-                ['from' => 'poll', 'output' => 'option:decline', 'to' => 'check_decline'],
-                ['from' => 'check_accept', 'output' => 'yes', 'to' => 'do_accept'],
-                ['from' => 'check_accept', 'output' => 'no', 'to' => 'already_decided'],
-                ['from' => 'check_decline', 'output' => 'yes', 'to' => 'do_decline'],
-                ['from' => 'check_decline', 'output' => 'no', 'to' => 'already_decided'],
+                ['from' => 'poll', 'output' => 'option:accept', 'to' => 'do_accept'],
+                ['from' => 'poll', 'output' => 'option:decline', 'to' => 'do_decline'],
                 ['from' => 'do_accept', 'output' => 'continue', 'to' => 'accepted_text'],
+                ['from' => 'do_accept', 'output' => 'skipped', 'to' => 'already_decided'],
+                ['from' => 'do_decline', 'output' => 'continue', 'to' => 'declined_text'],
+                ['from' => 'do_decline', 'output' => 'skipped', 'to' => 'already_decided'],
                 ['from' => 'accepted_text', 'output' => 'continue', 'to' => 'notify_accept'],
                 ['from' => 'notify_accept', 'output' => 'continue', 'to' => 'end'],
-                ['from' => 'do_decline', 'output' => 'continue', 'to' => 'declined_text'],
                 ['from' => 'declined_text', 'output' => 'continue', 'to' => 'notify_decline'],
                 ['from' => 'notify_decline', 'output' => 'continue', 'to' => 'end'],
                 ['from' => 'already_decided', 'output' => 'continue', 'to' => 'end'],
@@ -188,9 +185,9 @@ class InstallDefaultBotScenario extends Command
 
     /**
      * Продление объявления: 30-дневный опрос актуальности. Запуск живёт
-     * без таймаута: поздний ответ проверяется условием «объявление
-     * опубликовано» — уже заархивированное (в т.ч. авто-архивом по
-     * истечении срока) не воскресает.
+     * без таймаута: поздний ответ по уже заархивированному объявлению
+     * (в т.ч. авто-архивом по истечении срока) идёт по выходу
+     * «Объявление уже в архиве» самого действия — ничего не воскресает.
      *
      * @return array{nodes: list<array<string, mixed>>, edges: list<array<string, mixed>>}
      */
@@ -202,34 +199,30 @@ class InstallDefaultBotScenario extends Command
                 ['id' => 'poll', 'type' => 'message', 'x' => 260, 'y' => 240,
                     'channel' => 'adaptive',
                     'template_name' => WhatsappTemplateLibrary::LISTING_RENEWAL,
-                    'variables' => ['listing.category'],
+                    'variables' => ['listing.title'],
                     'options' => [
                         ['id' => 'yes', 'title' => 'Да, актуально'],
                         ['id' => 'no', 'title' => 'Нет, в архив'],
                     ]],
-                ['id' => 'check_yes', 'type' => 'condition', 'condition' => 'listing_published', 'x' => 540, 'y' => 120],
-                ['id' => 'check_no', 'type' => 'condition', 'condition' => 'listing_published', 'x' => 540, 'y' => 360],
-                ['id' => 'do_renew', 'type' => 'action', 'action' => 'renew_listing', 'x' => 820, 'y' => 60],
-                ['id' => 'do_archive', 'type' => 'action', 'action' => 'archive_listing', 'x' => 820, 'y' => 420],
-                ['id' => 'renewed_text', 'type' => 'text', 'x' => 1100, 'y' => 60,
-                    'text' => 'Продлили: объявление «{{listing.category}}» будет показываться ещё 30 дней.'],
-                ['id' => 'archived_text', 'type' => 'text', 'x' => 1100, 'y' => 420,
+                ['id' => 'do_renew', 'type' => 'action', 'action' => 'renew_listing', 'x' => 540, 'y' => 80],
+                ['id' => 'do_archive', 'type' => 'action', 'action' => 'archive_listing', 'x' => 540, 'y' => 400],
+                ['id' => 'renewed_text', 'type' => 'text', 'x' => 820, 'y' => 80,
+                    'text' => 'Продлили: объявление «{{listing.title}}» будет показываться ещё 30 дней.'],
+                ['id' => 'archived_text', 'type' => 'text', 'x' => 820, 'y' => 400,
                     'text' => 'Перенесли объявление в архив — оно больше не показывается в поиске.'],
                 ['id' => 'already_archived', 'type' => 'text', 'x' => 820, 'y' => 240,
                     'text' => 'Это объявление уже в архиве. Чтобы разместить его снова, создайте новое объявление.'],
-                ['id' => 'end', 'type' => 'end', 'x' => 1380, 'y' => 240],
+                ['id' => 'end', 'type' => 'end', 'x' => 1100, 'y' => 240],
             ],
             'edges' => [
                 ['from' => 'start', 'output' => 'continue', 'to' => 'poll'],
-                ['from' => 'poll', 'output' => 'option:yes', 'to' => 'check_yes'],
-                ['from' => 'poll', 'output' => 'option:no', 'to' => 'check_no'],
-                ['from' => 'check_yes', 'output' => 'yes', 'to' => 'do_renew'],
-                ['from' => 'check_yes', 'output' => 'no', 'to' => 'already_archived'],
-                ['from' => 'check_no', 'output' => 'yes', 'to' => 'do_archive'],
-                ['from' => 'check_no', 'output' => 'no', 'to' => 'already_archived'],
+                ['from' => 'poll', 'output' => 'option:yes', 'to' => 'do_renew'],
+                ['from' => 'poll', 'output' => 'option:no', 'to' => 'do_archive'],
                 ['from' => 'do_renew', 'output' => 'continue', 'to' => 'renewed_text'],
-                ['from' => 'renewed_text', 'output' => 'continue', 'to' => 'end'],
+                ['from' => 'do_renew', 'output' => 'skipped', 'to' => 'already_archived'],
                 ['from' => 'do_archive', 'output' => 'continue', 'to' => 'archived_text'],
+                ['from' => 'do_archive', 'output' => 'skipped', 'to' => 'already_archived'],
+                ['from' => 'renewed_text', 'output' => 'continue', 'to' => 'end'],
                 ['from' => 'archived_text', 'output' => 'continue', 'to' => 'end'],
                 ['from' => 'already_archived', 'output' => 'continue', 'to' => 'end'],
             ],

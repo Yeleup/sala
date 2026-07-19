@@ -28,6 +28,12 @@
                 </div>
 
                 <div class="field">
+                    <label for="title">Название</label>
+                    <input id="title" name="title" maxlength="255" value="{{ old('title', $listing->title) }}" placeholder="Например: Аренда автокрана 25 т">
+                    @error('title') <p class="error">{{ $message }}</p> @enderror
+                </div>
+
+                <div class="field">
                     <label for="category_id">Категория</label>
                     <select id="category_id" name="category_id">
                         <option value="" @selected(old('category_id', $listing->category_id) === null)>— выберите категорию —</option>
@@ -188,6 +194,8 @@
             <dl style="margin: 1rem 0 0;">
                 <dt>Тип</dt>
                 <dd>{{ $listing->type->getLabel() }}</dd>
+                <dt>Название</dt>
+                <dd>{{ $listing->title ?: '—' }}</dd>
                 <dt>Категория</dt>
                 <dd>{{ $listing->category?->name ?: '—' }}</dd>
                 @if ($listing->type === \App\Enums\ListingType::Equipment)

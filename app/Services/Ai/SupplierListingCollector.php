@@ -574,14 +574,19 @@ class SupplierListingCollector
 
     /**
      * @param  array<string, mixed>  $state
-     * @return array{type: string, category_id: ?int, brand_id: ?int, description: ?string, location_id: ?int, location_detail: ?string, price: ?string}
+     * @return array{type: string, title: ?string, category_id: ?int, brand_id: ?int, description: ?string, location_id: ?int, location_detail: ?string, price: ?string}
      */
     private function listingAttributes(array $state): array
     {
         $fields = $state['fields'];
 
+        // The title ends up in WhatsApp template parameters, which Meta
+        // rejects over newlines and space runs — store it normalized.
+        $title = WhatsappText::templateParameter((string) ($fields['title'] ?? ''));
+
         return [
             'type' => $this->resolveType($state)->value,
+            'title' => $title === '' ? null : Str::limit($title, 255, ''),
             'category_id' => filled($fields['category'] ?? null)
                 ? Category::query()->where('name', $fields['category'])->value('id')
                 : null,
@@ -612,7 +617,15 @@ class SupplierListingCollector
     {
         $summary = filled($fields['summary'] ?? null) ? $fields['summary'] : $this->buildSummary($fields);
 
-        $this->messenger->sendButtons($session->contact, $summary."\nВсё верно? Нажмите «".self::BUTTON_SUBMIT_TITLE.'», чтобы отправить объявление на проверку.', [
+        // The composed title is the listing's future public name (search
+        // rows, notifications, cabinets) — the supplier must see it before
+        // submitting, not first meet it in a notification days later.
+        $text = implode("\n", array_filter([
+            filled($fields['title'] ?? null) ? 'Название: '.$fields['title'] : null,
+            $summary,
+        ]));
+
+        $this->messenger->sendButtons($session->contact, $text."\nВсё верно? Нажмите «".self::BUTTON_SUBMIT_TITLE.'», чтобы отправить объявление на проверку.', [
             ['id' => self::BUTTON_SUBMIT, 'title' => self::BUTTON_SUBMIT_TITLE],
             ['id' => self::BUTTON_EDIT, 'title' => self::BUTTON_EDIT_TITLE],
         ]);

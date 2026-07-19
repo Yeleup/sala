@@ -23,6 +23,9 @@ class ListingInfolist
                         TextEntry::make('type')
                             ->label('Тип')
                             ->badge(),
+                        TextEntry::make('title')
+                            ->label('Название')
+                            ->placeholder('Не указано'),
                         TextEntry::make('category.name')
                             ->label('Категория')
                             ->placeholder('Не указана'),

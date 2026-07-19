@@ -36,19 +36,28 @@ test('the installer publishes the flow scenarios next to the main dialog', funct
 
     $request = BotScenario::publishedForTrigger(BotScenarioTrigger::NewCustomerRequest);
     $requestNodes = collect($request->published_definition['nodes']);
+    $requestDefinition = new ScenarioDefinition($request->published_definition);
 
     expect($requestNodes->firstWhere('id', 'poll'))
         ->toMatchArray(['type' => 'message', 'channel' => 'adaptive', 'template_name' => 'new_customer_request'])
-        ->and($requestNodes->firstWhere('id', 'poll')['variables'])->toBe(['listing.category', 'request.query'])
+        ->and($requestNodes->firstWhere('id', 'poll')['variables'])->toBe(['listing.title', 'request.query'])
         ->and($requestNodes->firstWhere('id', 'do_accept')['action'])->toBe('accept_request')
-        ->and($requestNodes->firstWhere('id', 'check_accept')['condition'])->toBe('request_pending');
+        // Ветвится сам исход действия — отдельных блоков «Условие» больше нет.
+        ->and($requestNodes->where('type', 'condition'))->toBeEmpty()
+        ->and($requestDefinition->target('do_accept', ScenarioDefinition::OUTPUT_CONTINUE))->toBe('accepted_text')
+        ->and($requestDefinition->target('do_accept', ScenarioDefinition::OUTPUT_SKIPPED))->toBe('already_decided')
+        ->and($requestDefinition->target('do_decline', ScenarioDefinition::OUTPUT_SKIPPED))->toBe('already_decided');
 
     $renewal = BotScenario::publishedForTrigger(BotScenarioTrigger::ListingExpiring);
     $renewalNodes = collect($renewal->published_definition['nodes']);
+    $renewalDefinition = new ScenarioDefinition($renewal->published_definition);
 
     expect($renewalNodes->firstWhere('id', 'poll')['template_name'])->toBe('listing_renewal')
         ->and($renewalNodes->firstWhere('id', 'do_renew')['action'])->toBe('renew_listing')
-        ->and($renewalNodes->firstWhere('id', 'do_archive')['action'])->toBe('archive_listing');
+        ->and($renewalNodes->firstWhere('id', 'do_archive')['action'])->toBe('archive_listing')
+        ->and($renewalNodes->where('type', 'condition'))->toBeEmpty()
+        ->and($renewalDefinition->target('do_renew', ScenarioDefinition::OUTPUT_SKIPPED))->toBe('already_archived')
+        ->and($renewalDefinition->target('do_archive', ScenarioDefinition::OUTPUT_SKIPPED))->toBe('already_archived');
 });
 
 test('the installer refuses to overwrite a published scenario without --force', function () {

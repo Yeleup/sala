@@ -24,7 +24,7 @@ use LogicException;
  * free-form supplier input; every business field except the type may stay
  * empty until the supplier completes it via the web interface.
  */
-#[Fillable(['contact_id', 'type', 'category_id', 'brand_id', 'description', 'location_id', 'location_detail', 'price', 'status', 'rejection_reason', 'expires_at', 'renewal_requested_at'])]
+#[Fillable(['contact_id', 'type', 'title', 'category_id', 'brand_id', 'description', 'location_id', 'location_detail', 'price', 'status', 'rejection_reason', 'expires_at', 'renewal_requested_at'])]
 class Listing extends Model
 {
     /** @use HasFactory<ListingFactory> */
@@ -49,7 +49,7 @@ class Listing extends Model
      * The searchable text fields whose change makes the semantic search
      * vector stale (see ListingEmbeddings::sourceText()).
      */
-    private const array EMBEDDING_SOURCE_FIELDS = ['status', 'type', 'category_id', 'brand_id', 'description', 'location_id', 'location_detail'];
+    private const array EMBEDDING_SOURCE_FIELDS = ['status', 'type', 'title', 'category_id', 'brand_id', 'description', 'location_id', 'location_detail'];
 
     /**
      * Media rows go away with the listing via the DB cascade, but the
@@ -97,6 +97,16 @@ class Listing extends Model
     public function location(): BelongsTo
     {
         return $this->belongsTo(Location::class);
+    }
+
+    /**
+     * The name the listing goes by in messages and cabinets: its own
+     * title, or the category name for listings drafted before the title
+     * field existed. Callers append their context-specific fallback.
+     */
+    public function displayName(): ?string
+    {
+        return filled($this->title) ? $this->title : $this->category?->name;
     }
 
     /**

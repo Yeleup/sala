@@ -15,6 +15,8 @@ use App\Filament\Resources\Listings\Tables\ListingsTable;
 use App\Models\Listing;
 use BackedEnum;
 use Filament\Actions\Action;
+use Illuminate\Contracts\Support\Htmlable;
+use Illuminate\Database\Eloquent\Model;
 use Filament\Forms\Components\Textarea;
 use Filament\Notifications\Notification;
 use Filament\Resources\Resource;
@@ -36,11 +38,32 @@ class ListingResource extends Resource
 
     protected static ?string $cluster = MarketplaceCluster::class;
 
+    protected static ?string $recordTitleAttribute = 'title';
+
     protected static ?string $modelLabel = 'объявление';
 
     protected static ?string $pluralModelLabel = 'объявления';
 
     protected static ?int $navigationSort = 1;
+
+    /**
+     * Pre-title listings would otherwise be headed by the bare model label
+     * («объявление») — the category-name fallback keeps them recognizable.
+     *
+     * @param  ?Listing  $record
+     */
+    public static function getRecordTitle(?Model $record): string|Htmlable|null
+    {
+        return $record?->displayName() ?? static::getModelLabel();
+    }
+
+    /**
+     * @return array<string>
+     */
+    public static function getGloballySearchableAttributes(): array
+    {
+        return ['title', 'category.name'];
+    }
 
     public static function form(Schema $schema): Schema
     {

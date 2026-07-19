@@ -54,6 +54,10 @@ class ListingForm
                         $set('brand_id', null);
                     })
                     ->validationMessages(['required' => 'Выберите тип объявления.']),
+                TextInput::make('title')
+                    ->label('Название')
+                    ->placeholder('Например: Аренда автокрана 25 т')
+                    ->maxLength(255),
                 Select::make('category_id')
                     ->label('Категория')
                     ->relationship(

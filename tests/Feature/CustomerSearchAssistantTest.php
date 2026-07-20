@@ -568,43 +568,88 @@ test('a listing outside the requested location subtree is not offered', function
         ->and($session->refresh()->state['attempts'])->toBe(1);
 });
 
-test('an empty subtree offers to widen the search one level up and the click is free', function () {
+test('пустое поддерево места присылает ссылку в каталог уровнем выше', function () {
     SearchQueryExtractionAgent::fake([fullSearchIntake(['subject' => 'кран', 'location' => 'Карааул'])]);
     $region = locationNamed('область Абай');
     $district = locationNamed('Абайский район', $region);
-    $village = locationNamed('с.Карааул', $district);
+    locationNamed('с.Карааул', $district);
+
+    $messenger = fakeSearchMessenger();
+    $messenger->shouldReceive('sendCtaUrl')->once()->withArgs(
+        fn (Contact $contact, string $text, string $button, string $url): bool => str_contains($text, 'По «с.Карааул» сейчас ничего нет')
+            && str_contains($text, '«Абайский район»')
+            && $button === CustomerSearchAssistant::CATALOG_BUTTON_DEAD_END
+            && str_contains($url, "location_id={$district->id}")
+            && str_contains(urldecode($url), 'кран'),
+    );
+
+    $session = searchSession();
+    $outcome = app(CustomerSearchAssistant::class)
+        ->resume($session, customerAiNode(), new InboundMessage(text: 'кран в Караауле'));
+
+    // Ссылка ведёт в каталог с запросом и местом на уровень выше; попытка
+    // потрачена на сам пустой поиск, диалог ждёт уточнённый запрос.
+    expect($outcome)->toBe(AiOutcome::InProgress)
+        ->and($session->refresh()->state['phase'])->toBe('searching')
+        ->and($session->state['attempts'])->toBe(1);
+});
+
+test('нажатие старой кнопки «Искать шире» из прежних сообщений продолжает работать', function () {
+    SearchQueryExtractionAgent::fake()->preventStrayPrompts();
+    $region = locationNamed('область Абай');
+    $district = locationNamed('Абайский район', $region);
     $listing = Listing::factory()->published()->create([
         'category_id' => categoryNamed('Автокран')->id,
         'description' => 'Кран в райцентре',
+        'price' => 'договорная',
         'location_id' => $district->id,
     ]);
 
     $messenger = fakeSearchMessenger();
-    $messenger->shouldReceive('sendButtons')->once()->withArgs(
-        fn (Contact $contact, string $text, array $buttons): bool => str_contains($text, 'Поискать шире')
-            && str_contains($text, 'Абайский район')
-            && $buttons[0]['id'] === CustomerSearchAssistant::BUTTON_EXPAND
-            && mb_strlen($buttons[0]['title']) <= 20,
-    );
     $messenger->shouldReceive('sendList')->once()->withArgs(
         fn (Contact $contact, string $text, string $button, array $rows): bool => $rows[0]['id'] === "listing:{$listing->id}",
     );
     expectCatalogCta($messenger);
 
-    $assistant = app(CustomerSearchAssistant::class);
-    $session = searchSession();
-    $assistant->resume($session, customerAiNode(), new InboundMessage(text: 'кран в Караауле'));
-
-    expect($session->fresh()->state['phase'])->toBe('expanding');
-
-    $fresh = $session->fresh();
-    $outcome = $assistant->resume($fresh, customerAiNode(), new InboundMessage(replyId: CustomerSearchAssistant::BUTTON_EXPAND));
+    // Сессия, ждущая на кнопке прежней версии (фаза expanding).
+    $session = searchSession([
+        'phase' => 'expanding',
+        'query' => 'кран',
+        'expand_location_id' => $district->id,
+        'attempts' => 1,
+    ]);
+    $outcome = app(CustomerSearchAssistant::class)
+        ->resume($session, customerAiNode(), new InboundMessage(replyId: CustomerSearchAssistant::BUTTON_EXPAND));
 
     expect($outcome)->toBe(AiOutcome::InProgress)
-        ->and($fresh->fresh()->state['phase'])->toBe('choosing')
+        ->and($session->refresh()->state['phase'])->toBe('choosing')
         // Расширение — наша собственная подсказка: попытка потрачена только
         // на первоначальную пустую выдачу.
-        ->and($fresh->fresh()->state['attempts'])->toBe(1);
+        ->and($session->state['attempts'])->toBe(1);
+});
+
+test('старая кнопка при пустом уровне выше присылает ссылку в каталог ещё шире', function () {
+    SearchQueryExtractionAgent::fake()->preventStrayPrompts();
+    $region = locationNamed('область Абай');
+    $district = locationNamed('Абайский район', $region);
+
+    $messenger = fakeSearchMessenger();
+    $messenger->shouldReceive('sendCtaUrl')->once()->withArgs(
+        fn (Contact $contact, string $text, string $button, string $url): bool => str_contains($text, 'По «Абайский район» сейчас ничего нет')
+            && str_contains($url, "location_id={$region->id}"),
+    );
+
+    $session = searchSession([
+        'phase' => 'expanding',
+        'query' => 'кран',
+        'expand_location_id' => $district->id,
+        'attempts' => 1,
+    ]);
+    $outcome = app(CustomerSearchAssistant::class)
+        ->resume($session, customerAiNode(), new InboundMessage(replyId: CustomerSearchAssistant::BUTTON_EXPAND));
+
+    expect($outcome)->toBe(AiOutcome::InProgress)
+        ->and($session->refresh()->state['phase'])->toBe('searching');
 });
 
 test('when there is nowhere wider to search the dead-end offers a way back to the menu', function () {
@@ -835,16 +880,18 @@ test('picking a place from the list searches inside the picked subtree', functio
         ->and($session->state['attempts'])->toBe(0);
 });
 
-test('picking a place with an empty subtree offers to widen the search', function () {
+test('picking a place with an empty subtree sends the wider catalog link', function () {
     SearchQueryExtractionAgent::fake()->preventStrayPrompts();
-    $districtA = locationNamed('Абайский район', locationNamed('Карагандинская область'));
+    $regionA = locationNamed('Карагандинская область');
+    $districtA = locationNamed('Абайский район', $regionA);
     $districtB = locationNamed('Абайский район', locationNamed('г.Шымкент'));
 
     $messenger = fakeSearchMessenger();
-    $messenger->shouldReceive('sendButtons')->once()->withArgs(
-        fn (Contact $contact, string $text, array $buttons): bool => str_contains($text, 'Поискать шире')
-            && str_contains($text, 'Карагандинская область')
-            && $buttons[0]['id'] === CustomerSearchAssistant::BUTTON_EXPAND,
+    $messenger->shouldReceive('sendCtaUrl')->once()->withArgs(
+        fn (Contact $contact, string $text, string $button, string $url): bool => str_contains($text, 'По «Абайский район» сейчас ничего нет')
+            && str_contains($text, '«Карагандинская область»')
+            && $button === CustomerSearchAssistant::CATALOG_BUTTON_DEAD_END
+            && str_contains($url, "location_id={$regionA->id}"),
     );
 
     $session = searchSession([
@@ -856,7 +903,7 @@ test('picking a place with an empty subtree offers to widen the search', functio
         ->resume($session, customerAiNode(), new InboundMessage(replyId: "search_location:{$districtA->id}"));
 
     expect($outcome)->toBe(AiOutcome::InProgress)
-        ->and($session->refresh()->state['phase'])->toBe('expanding')
+        ->and($session->refresh()->state['phase'])->toBe('searching')
         // Пустая выдача по выбранному месту — это и есть отложенный
         // первоначальный поиск: попытка тратится как обычно.
         ->and($session->state['attempts'])->toBe(1);

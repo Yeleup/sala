@@ -58,6 +58,12 @@ class CustomerSearchAssistant
 
     public const string LIST_BUTTON = 'Варианты';
 
+    /**
+     * Legacy: the «Искать шире» button of messages sent before the
+     * catalog handoff replaced it. New messages never carry it, but taps
+     * on the old ones keep working (a free in-chat search one level up),
+     * so the constants and the expanding phase stay handled.
+     */
     public const string BUTTON_EXPAND = 'search_expand';
 
     public const string BUTTON_EXPAND_TITLE = 'Искать шире';
@@ -260,10 +266,10 @@ class CustomerSearchAssistant
                 return AiOutcome::Completed;
             }
 
-            // The query named a place with nothing inside: offer to climb
-            // one level of the location tree instead of a dead «не нашлось».
+            // The query named a place with nothing inside: hand off to the
+            // catalog one level up instead of a dead «не нашлось».
             if ($location !== null && $location->parent_id !== null) {
-                return $this->offerExpansion($session, $state, $query, $location);
+                return $this->offerWiderCatalog($session, $state, $query, $location);
             }
 
             $this->persist($session, $state);
@@ -319,21 +325,29 @@ class CustomerSearchAssistant
     }
 
     /**
+     * The queried place has nothing inside: a single message with a URL
+     * button into the web catalog one level up («село → район»), the
+     * query and the wider place already prefilled — instead of a dead
+     * «не нашлось». The fruitless attempt was spent on the empty search
+     * itself; the dialog stays put and keeps waiting for a refined query.
+     *
      * @param  array<string, mixed>  $state
      */
-    protected function offerExpansion(BotSession $session, array $state, string $query, Location $location): AiOutcome
+    protected function offerWiderCatalog(BotSession $session, array $state, string $query, Location $location): AiOutcome
     {
         $parent = $location->parent;
 
-        $state['phase'] = 'expanding';
+        $state['phase'] = 'searching';
         $state['query'] = $query;
-        $state['expand_location_id'] = $parent->id;
+        $state['expand_location_id'] = null;
         $this->persist($session, $state);
 
-        $this->messenger->sendButtons(
-            $session->contact,
-            sprintf('По «%s» сейчас ничего нет. Поискать шире — %s?', $location->name, $parent->name),
-            [['id' => self::BUTTON_EXPAND, 'title' => self::BUTTON_EXPAND_TITLE]],
+        $this->sendCatalogCta(
+            $session,
+            sprintf('По «%s» сейчас ничего нет. Посмотрите шире — в каталоге уже подставлены ваш запрос и «%s».', $location->name, $parent->name),
+            self::CATALOG_BUTTON_DEAD_END,
+            $query,
+            $parent,
         );
 
         return AiOutcome::InProgress;
@@ -436,8 +450,11 @@ class CustomerSearchAssistant
     }
 
     /**
-     * Re-runs the saved query one location level up. Expanding is free: it
-     * is our own suggestion, so it never spends a fruitless-search attempt.
+     * Legacy «Искать шире» tap from a message sent before the catalog
+     * handoff: re-runs the saved query one location level up. Expanding
+     * is free: it is our own suggestion, so it never spends a
+     * fruitless-search attempt. New dialogs never enter the expanding
+     * phase — an empty subtree hands off to the catalog instead.
      *
      * @param  array<string, mixed>  $state
      */
@@ -463,17 +480,7 @@ class CustomerSearchAssistant
         }
 
         if ($location->parent_id !== null) {
-            $parent = $location->parent;
-            $state['expand_location_id'] = $parent->id;
-            $this->persist($session, $state);
-
-            $this->messenger->sendButtons(
-                $session->contact,
-                sprintf('По «%s» тоже пусто. Поискать ещё шире — %s?', $location->name, $parent->name),
-                [['id' => self::BUTTON_EXPAND, 'title' => self::BUTTON_EXPAND_TITLE]],
-            );
-
-            return AiOutcome::InProgress;
+            return $this->offerWiderCatalog($session, $state, $query, $location);
         }
 
         $state['phase'] = 'searching';

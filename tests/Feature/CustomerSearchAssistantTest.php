@@ -731,6 +731,377 @@ test('the exhausted clarification limit searches without the place and labels th
         ->and($session->state['query'])->toBe('погрузчик, Сарыагаш');
 });
 
+test('an ambiguous place offers the same-named locations to pick without spending a clarification', function () {
+    SearchQueryExtractionAgent::fake([fullSearchIntake(['location' => 'Абайский район'])]);
+    $districtA = locationNamed('Абайский район', locationNamed('Карагандинская область'));
+    $districtB = locationNamed('Абайский район', locationNamed('г.Шымкент'));
+
+    $messenger = fakeSearchMessenger();
+    $messenger->shouldReceive('sendList')->once()->withArgs(
+        fn (Contact $contact, string $text, string $button, array $rows): bool => str_contains($text, 'Нашли несколько подходящих мест')
+            && $button === CustomerSearchAssistant::LOCATION_LIST_BUTTON
+            && count($rows) === 2
+            && $rows[0]['id'] === "search_location:{$districtA->id}"
+            && $rows[0]['title'] === 'Абайский район'
+            && $rows[0]['description'] === 'Карагандинская область'
+            && $rows[1]['id'] === "search_location:{$districtB->id}"
+            && $rows[1]['description'] === 'г.Шымкент',
+    );
+
+    $session = searchSession();
+    $outcome = app(CustomerSearchAssistant::class)
+        ->resume($session, customerAiNode(), new InboundMessage(text: 'нужен кран 25 тонн в Абайском районе'));
+
+    expect($outcome)->toBe(AiOutcome::InProgress)
+        ->and($session->refresh()->state['phase'])->toBe('locating')
+        // Список мест — не уточняющий вопрос и не безрезультатная попытка.
+        ->and($session->state['clarifications'])->toBe(0)
+        ->and($session->state['attempts'])->toBe(0)
+        ->and($session->state['location_candidates'])->toBe([$districtA->id, $districtB->id])
+        ->and($session->state['query'])->toBe('кран 25 тонн, Абайский район');
+});
+
+test('picking a place from the list searches inside the picked subtree', function () {
+    SearchQueryExtractionAgent::fake()->preventStrayPrompts();
+    $districtA = locationNamed('Абайский район', locationNamed('Карагандинская область'));
+    $districtB = locationNamed('Абайский район', locationNamed('г.Шымкент'));
+    $inPicked = Listing::factory()->published()->create([
+        'category_id' => categoryNamed('Автокран')->id, 'description' => 'Кран 25 тонн', 'location_id' => $districtA->id,
+    ]);
+    Listing::factory()->published()->create([
+        'category_id' => categoryNamed('Автокран')->id, 'description' => 'Кран 25 тонн', 'location_id' => $districtB->id,
+    ]);
+
+    $messenger = fakeSearchMessenger();
+    $messenger->shouldReceive('sendList')->once()->withArgs(
+        fn (Contact $contact, string $text, string $button, array $rows): bool => str_starts_with($text, 'Вот что нашлось')
+            && count($rows) === 1
+            && $rows[0]['id'] === "listing:{$inPicked->id}",
+    );
+
+    $session = searchSession([
+        'phase' => 'locating',
+        'query' => 'кран 25 тонн, Абайский район',
+        'location_candidates' => [$districtA->id, $districtB->id],
+    ]);
+    $outcome = app(CustomerSearchAssistant::class)
+        ->resume($session, customerAiNode(), new InboundMessage(replyId: "search_location:{$districtA->id}"));
+
+    expect($outcome)->toBe(AiOutcome::InProgress)
+        ->and($session->refresh()->state['phase'])->toBe('choosing')
+        ->and($session->state['location_candidates'])->toBe([])
+        // Выбранное место запоминается для последующих уточнений.
+        ->and($session->state['location_id'])->toBe($districtA->id)
+        // Выбор из списка бесплатен: попытка не потрачена.
+        ->and($session->state['attempts'])->toBe(0);
+});
+
+test('picking a place with an empty subtree offers to widen the search', function () {
+    SearchQueryExtractionAgent::fake()->preventStrayPrompts();
+    $districtA = locationNamed('Абайский район', locationNamed('Карагандинская область'));
+    $districtB = locationNamed('Абайский район', locationNamed('г.Шымкент'));
+
+    $messenger = fakeSearchMessenger();
+    $messenger->shouldReceive('sendButtons')->once()->withArgs(
+        fn (Contact $contact, string $text, array $buttons): bool => str_contains($text, 'Поискать шире')
+            && str_contains($text, 'Карагандинская область')
+            && $buttons[0]['id'] === CustomerSearchAssistant::BUTTON_EXPAND,
+    );
+
+    $session = searchSession([
+        'phase' => 'locating',
+        'query' => 'кран, Абайский район',
+        'location_candidates' => [$districtA->id, $districtB->id],
+    ]);
+    $outcome = app(CustomerSearchAssistant::class)
+        ->resume($session, customerAiNode(), new InboundMessage(replyId: "search_location:{$districtA->id}"));
+
+    expect($outcome)->toBe(AiOutcome::InProgress)
+        ->and($session->refresh()->state['phase'])->toBe('expanding')
+        // Пустая выдача по выбранному месту — это и есть отложенный
+        // первоначальный поиск: попытка тратится как обычно.
+        ->and($session->state['attempts'])->toBe(1);
+});
+
+test('typing the shared name of the same-named places cannot pick and re-offers the list', function () {
+    SearchQueryExtractionAgent::fake([fullSearchIntake(['location' => 'Абайский район'])]);
+    $districtA = locationNamed('Абайский район', locationNamed('Карагандинская область'));
+    $districtB = locationNamed('Абайский район', locationNamed('г.Шымкент'));
+
+    $messenger = fakeSearchMessenger();
+    $messenger->shouldReceive('sendList')->once()->withArgs(
+        fn (Contact $contact, string $text, string $button, array $rows): bool => str_contains($text, 'Нашли несколько подходящих мест'),
+    );
+
+    $session = searchSession([
+        'phase' => 'locating',
+        'transcript' => ['нужен кран 25 тонн в Абайском районе'],
+        'query' => 'кран 25 тонн, Абайский район',
+        'location_candidates' => [$districtA->id, $districtB->id],
+    ]);
+    $outcome = app(CustomerSearchAssistant::class)
+        ->resume($session, customerAiNode(), new InboundMessage(text: 'Абайский район'));
+
+    expect($outcome)->toBe(AiOutcome::InProgress)
+        ->and($session->refresh()->state['phase'])->toBe('locating')
+        // Одинаковые названия текстом не различить — их различают подписи;
+        // повторный список бесплатен, уточнение не потрачено.
+        ->and($session->state['clarifications'])->toBe(0);
+});
+
+test('typing the exact name of one distinct candidate equals picking it', function () {
+    SearchQueryExtractionAgent::fake()->preventStrayPrompts();
+    $region = locationNamed('Туркестанская область');
+    $bulan = locationNamed('с.Карабулан', $region);
+    $bulat = locationNamed('с.Карабулат', $region);
+    $listing = Listing::factory()->published()->create([
+        'category_id' => categoryNamed('Погрузчик')->id, 'description' => 'Фронтальный погрузчик', 'location_id' => $bulan->id,
+    ]);
+
+    $messenger = fakeSearchMessenger();
+    $messenger->shouldReceive('sendList')->once()->withArgs(
+        fn (Contact $contact, string $text, string $button, array $rows): bool => $rows[0]['id'] === "listing:{$listing->id}",
+    );
+
+    $session = searchSession([
+        'phase' => 'locating',
+        'query' => 'погрузчик, Карабулак',
+        'location_candidates' => [$bulan->id, $bulat->id],
+    ]);
+    $outcome = app(CustomerSearchAssistant::class)
+        ->resume($session, customerAiNode(), new InboundMessage(text: 'с.Карабулан'));
+
+    expect($outcome)->toBe(AiOutcome::InProgress)
+        ->and($session->refresh()->state['phase'])->toBe('choosing');
+});
+
+test('any other text while picking a place is treated as a refined search', function () {
+    SearchQueryExtractionAgent::fake([fullSearchIntake(['subject' => 'кран 25 тонн', 'location' => 'Астана'])]);
+    $districtA = locationNamed('Абайский район', locationNamed('Карагандинская область'));
+    $districtB = locationNamed('Абайский район', locationNamed('г.Шымкент'));
+    $listing = Listing::factory()->published()->create([
+        'category_id' => categoryNamed('Автокран')->id, 'description' => 'Кран 25 тонн', 'location_id' => locationNamed('г.Астана')->id,
+    ]);
+
+    $messenger = fakeSearchMessenger();
+    $messenger->shouldReceive('sendList')->once()->withArgs(
+        fn (Contact $contact, string $text, string $button, array $rows): bool => str_starts_with($text, 'Вот что нашлось')
+            && $rows[0]['id'] === "listing:{$listing->id}",
+    );
+
+    $session = searchSession([
+        'phase' => 'locating',
+        'transcript' => ['нужен кран 25 тонн в Абайском районе'],
+        'query' => 'кран 25 тонн, Абайский район',
+        'location_candidates' => [$districtA->id, $districtB->id],
+    ]);
+    $outcome = app(CustomerSearchAssistant::class)
+        ->resume($session, customerAiNode(), new InboundMessage(text: 'лучше в Астане'));
+
+    expect($outcome)->toBe(AiOutcome::InProgress)
+        ->and($session->refresh()->state['phase'])->toBe('choosing')
+        ->and($session->state['location_candidates'])->toBe([]);
+});
+
+test('pressing «В меню» while picking a place releases the contact', function () {
+    SearchQueryExtractionAgent::fake()->preventStrayPrompts();
+    fakeSearchMessenger()->shouldNotReceive('sendText', 'sendButtons', 'sendList');
+    $district = locationNamed('Абайский район', locationNamed('Карагандинская область'));
+
+    $session = searchSession([
+        'phase' => 'locating',
+        'query' => 'кран, Абайский район',
+        'location_candidates' => [$district->id],
+    ]);
+    $outcome = app(CustomerSearchAssistant::class)
+        ->resume($session, customerAiNode(), new InboundMessage(text: 'В меню', replyId: CustomerSearchAssistant::BUTTON_MENU));
+
+    expect($outcome)->toBe(AiOutcome::Completed);
+});
+
+test('the pick list is offered even after the clarification limit is exhausted', function () {
+    SearchQueryExtractionAgent::fake([fullSearchIntake(['location' => 'Абайский район'])]);
+    locationNamed('Абайский район', locationNamed('Карагандинская область'));
+    locationNamed('Абайский район', locationNamed('г.Шымкент'));
+
+    $messenger = fakeSearchMessenger();
+    $messenger->shouldReceive('sendList')->once()->withArgs(
+        fn (Contact $contact, string $text, string $button, array $rows): bool => str_contains($text, 'Нашли несколько подходящих мест'),
+    );
+
+    $session = searchSession(['transcript' => ['нужен кран 25 тонн'], 'clarifications' => 3]);
+    $outcome = app(CustomerSearchAssistant::class)
+        ->resume($session, customerAiNode(), new InboundMessage(text: 'в Абайском районе'));
+
+    expect($outcome)->toBe(AiOutcome::InProgress)
+        ->and($session->refresh()->state['phase'])->toBe('locating')
+        // Список и выбор из него бесплатны, поэтому лимит им не помеха —
+        // в отличие от вопроса, место здесь решается одним нажатием.
+        ->and($session->state['clarifications'])->toBe(3);
+});
+
+test('a subject question outranks the place pick list', function () {
+    SearchQueryExtractionAgent::fake([
+        fullSearchIntake(['subject' => null, 'location' => 'Абайский район', 'clarifying_question' => 'Что именно вам нужно?']),
+    ]);
+    locationNamed('Абайский район', locationNamed('Карагандинская область'));
+    locationNamed('Абайский район', locationNamed('г.Шымкент'));
+
+    $messenger = fakeSearchMessenger();
+    $messenger->shouldReceive('sendText')->once()->withArgs(
+        fn (Contact $contact, string $text): bool => $text === 'Что именно вам нужно?',
+    );
+
+    $session = searchSession();
+    $outcome = app(CustomerSearchAssistant::class)
+        ->resume($session, customerAiNode(), new InboundMessage(text: 'в Абайском районе'));
+
+    expect($outcome)->toBe(AiOutcome::InProgress)
+        ->and($session->refresh()->state['clarifications'])->toBe(1)
+        ->and($session->state['phase'])->toBe('searching');
+});
+
+test('more than ten same-named places ask for a bigger unit instead of the false not-found', function () {
+    SearchQueryExtractionAgent::fake([fullSearchIntake(['location' => 'Абайский район'])]);
+    foreach (range(1, 11) as $i) {
+        locationNamed('Абайский район', locationNamed("Область {$i}"));
+    }
+
+    $messenger = fakeSearchMessenger();
+    $messenger->shouldReceive('sendText')->once()->withArgs(
+        fn (Contact $contact, string $text): bool => str_contains($text, 'Мест с названием «Абайский район» в справочнике слишком много'),
+    );
+
+    $session = searchSession();
+    $outcome = app(CustomerSearchAssistant::class)
+        ->resume($session, customerAiNode(), new InboundMessage(text: 'нужен кран в Абайском районе'));
+
+    expect($outcome)->toBe(AiOutcome::InProgress)
+        // В список WhatsApp помещается максимум 10 строк — за пределами
+        // действует уточнение; «Не нашли» здесь было бы неправдой.
+        ->and($session->refresh()->state['clarifications'])->toBe(1)
+        ->and($session->state['phase'])->toBe('searching');
+});
+
+test('exactly ten same-named places still fit the pick list', function () {
+    SearchQueryExtractionAgent::fake([fullSearchIntake(['location' => 'Абайский район'])]);
+    foreach (range(1, 10) as $i) {
+        locationNamed('Абайский район', locationNamed("Область {$i}"));
+    }
+
+    $messenger = fakeSearchMessenger();
+    $messenger->shouldReceive('sendList')->once()->withArgs(
+        fn (Contact $contact, string $text, string $button, array $rows): bool => count($rows) === 10
+            && str_contains($text, 'Нашли несколько подходящих мест'),
+    );
+
+    $session = searchSession();
+    $outcome = app(CustomerSearchAssistant::class)
+        ->resume($session, customerAiNode(), new InboundMessage(text: 'нужен кран в Абайском районе'));
+
+    expect($outcome)->toBe(AiOutcome::InProgress)
+        ->and($session->refresh()->state['phase'])->toBe('locating');
+});
+
+test('equally close spelling corrections offer the pick list through the intake', function () {
+    SearchQueryExtractionAgent::fake([fullSearchIntake(['subject' => 'погрузчик', 'location' => 'Карабулак'])]);
+    $region = locationNamed('Туркестанская область');
+    $bulan = locationNamed('с.Карабулан', $region);
+    $bulat = locationNamed('с.Карабулат', $region);
+
+    $messenger = fakeSearchMessenger();
+    $messenger->shouldReceive('sendList')->once()->withArgs(
+        fn (Contact $contact, string $text, string $button, array $rows): bool => str_contains($text, 'Нашли несколько подходящих мест')
+            && $rows[0]['id'] === "search_location:{$bulan->id}"
+            && $rows[1]['id'] === "search_location:{$bulat->id}",
+    );
+
+    $session = searchSession();
+    $outcome = app(CustomerSearchAssistant::class)
+        ->resume($session, customerAiNode(), new InboundMessage(text: 'нужен погрузчик в Карабулаке'));
+
+    expect($outcome)->toBe(AiOutcome::InProgress)
+        ->and($session->refresh()->state['phase'])->toBe('locating');
+});
+
+test('a location row id outside the offered candidates is not a pick and keeps the list alive', function () {
+    SearchQueryExtractionAgent::fake()->preventStrayPrompts();
+    $districtA = locationNamed('Абайский район', locationNamed('Карагандинская область'));
+    $districtB = locationNamed('Абайский район', locationNamed('г.Шымкент'));
+    $foreign = locationNamed('г.Астана');
+
+    $messenger = fakeSearchMessenger();
+    $messenger->shouldReceive('sendText')->once()->withArgs(
+        fn (Contact $contact, string $text): bool => str_contains($text, 'Опишите, пожалуйста, текстом'),
+    );
+
+    $session = searchSession([
+        'phase' => 'locating',
+        'query' => 'кран, Абайский район',
+        'location_candidates' => [$districtA->id, $districtB->id],
+    ]);
+    $outcome = app(CustomerSearchAssistant::class)
+        ->resume($session, customerAiNode(), new InboundMessage(replyId: "search_location:{$foreign->id}"));
+
+    expect($outcome)->toBe(AiOutcome::InProgress)
+        // Посторонний id (или стикер) не выбирает и не гасит открытый
+        // список — нажатие на видимую строку продолжает работать.
+        ->and($session->refresh()->state['phase'])->toBe('locating')
+        ->and($session->state['location_candidates'])->toBe([$districtA->id, $districtB->id]);
+});
+
+test('at the exhausted limit the pick list still outranks the country-wide search', function () {
+    SearchQueryExtractionAgent::fake([fullSearchIntake(['subject' => null, 'location' => 'Абайский район'])]);
+    locationNamed('Абайский район', locationNamed('Карагандинская область'));
+    locationNamed('Абайский район', locationNamed('г.Шымкент'));
+
+    $messenger = fakeSearchMessenger();
+    $messenger->shouldReceive('sendList')->once()->withArgs(
+        fn (Contact $contact, string $text, string $button, array $rows): bool => str_contains($text, 'Нашли несколько подходящих мест'),
+    );
+
+    $session = searchSession(['transcript' => ['нужно что-то арендовать'], 'clarifications' => 3]);
+    $outcome = app(CustomerSearchAssistant::class)
+        ->resume($session, customerAiNode(), new InboundMessage(text: 'в Абайском районе'));
+
+    expect($outcome)->toBe(AiOutcome::InProgress)
+        // Вопрос о предмете задать уже нельзя, а список бесплатен — он
+        // важнее выдачи по всей стране с ложной пометкой «Не нашли».
+        ->and($session->refresh()->state['phase'])->toBe('locating')
+        ->and($session->state['clarifications'])->toBe(3);
+});
+
+test('a refinement after the pick keeps the picked place without re-offering the list', function () {
+    SearchQueryExtractionAgent::fake([fullSearchIntake(['subject' => 'кран дешевле', 'location' => 'Абайский район'])]);
+    $districtA = locationNamed('Абайский район', locationNamed('Карагандинская область'));
+    $districtB = locationNamed('Абайский район', locationNamed('г.Шымкент'));
+    $inPicked = Listing::factory()->published()->create([
+        'category_id' => categoryNamed('Автокран')->id, 'description' => 'Кран 25 тонн', 'location_id' => $districtA->id,
+    ]);
+    Listing::factory()->published()->create([
+        'category_id' => categoryNamed('Автокран')->id, 'description' => 'Кран 25 тонн', 'location_id' => $districtB->id,
+    ]);
+
+    $messenger = fakeSearchMessenger();
+    $messenger->shouldReceive('sendList')->once()->withArgs(
+        fn (Contact $contact, string $text, string $button, array $rows): bool => str_starts_with($text, 'Вот что нашлось')
+            && count($rows) === 1
+            && $rows[0]['id'] === "listing:{$inPicked->id}",
+    );
+
+    $session = searchSession([
+        'transcript' => ['нужен кран 25 тонн в Абайском районе'],
+        'location_id' => $districtA->id,
+    ]);
+    $outcome = app(CustomerSearchAssistant::class)
+        ->resume($session, customerAiNode(), new InboundMessage(text: 'а дешевле есть?'));
+
+    expect($outcome)->toBe(AiOutcome::InProgress)
+        // Сделанный ранее выбор места действует и на уточнения — список
+        // повторно не приходит, лишний AI-вызов не тратится.
+        ->and($session->refresh()->state['phase'])->toBe('choosing');
+});
+
 test('an explicit «any place» satisfies the intake and searches the whole base', function () {
     SearchQueryExtractionAgent::fake([fullSearchIntake(['subject' => 'кран', 'location' => null, 'location_any' => true])]);
     $listing = Listing::factory()->published()->create([

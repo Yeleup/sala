@@ -18,6 +18,7 @@ use App\Services\CustomerRequestNotifier;
 use App\Services\DereuMessenger;
 use App\Services\Locations\LocationResolver;
 use App\Support\WhatsappText;
+use Illuminate\Database\Eloquent\Collection as EloquentCollection;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
@@ -49,6 +50,10 @@ class CustomerSearchAssistant
     private const int MAX_CLARIFICATIONS = 3;
 
     private const string ROW_ID_PREFIX = 'listing:';
+
+    public const string LOCATION_ROW_PREFIX = 'search_location:';
+
+    public const string LOCATION_LIST_BUTTON = 'Выбрать место';
 
     /** WhatsApp limits: list row title 24 chars, description 72, button 20. */
     private const int ROW_TITLE_LIMIT = 24;
@@ -105,6 +110,10 @@ class CustomerSearchAssistant
         // dialog regardless of the phase — routed strictly by button id.
         if ($message->replyId === self::BUTTON_MENU) {
             return AiOutcome::Completed;
+        }
+
+        if ($state['phase'] === 'locating') {
+            return $this->handleLocating($session, $state, $message);
         }
 
         if ($state['phase'] === 'choosing') {
@@ -177,16 +186,40 @@ class CustomerSearchAssistant
         // tolerating close distortions of transcribed voice input) or
         // counts as unsettled and gets asked about, instead of being
         // silently dropped into a country-wide search.
-        $location = filled($requirements['location'] ?? null)
-            ? $this->locations->detectPlace((string) $requirements['location'])
-            : null;
+        $candidates = filled($requirements['location'] ?? null)
+            ? $this->locations->placeCandidates((string) $requirements['location'])
+            : new EloquentCollection;
+
+        $location = $candidates->count() === 1 ? $candidates->first() : null;
+
+        // The customer already picked one of these same-named places
+        // earlier in the dialog: the pick holds across refinements — no
+        // repeated list, no wasted round trip.
+        if ($location === null && $candidates->count() > 1) {
+            $location = $candidates->firstWhere('id', (int) ($state['location_id'] ?? 0));
+        }
 
         $missing = $this->missingRequirements($requirements, $location);
+
+        // Several same-named (or equally close) places tie at one level:
+        // a pick list instead of a question, mirroring the supplier
+        // collector. Offering the list and picking from it spend neither a
+        // clarification nor a fruitless attempt, so the list goes out even
+        // with the limit exhausted — there it also outranks the subject
+        // question, which can no longer be asked. Within the limit the
+        // subject question keeps its priority (missingRequirements orders
+        // it first) and the tie is re-detected on the next turn.
+        if (in_array('location_unresolved', $missing, true)
+            && $candidates->count() > 1
+            && $candidates->count() <= LocationResolver::MAX_CANDIDATES
+            && ($missing === ['location_unresolved'] || $state['clarifications'] >= self::MAX_CLARIFICATIONS)) {
+            return $this->offerLocationChoices($session, $state, $requirements, $candidates);
+        }
 
         if ($missing !== [] && $state['clarifications'] < self::MAX_CLARIFICATIONS) {
             $state['clarifications']++;
             $this->persist($session, $state);
-            $this->messenger->sendText($session->contact, $this->clarifyingQuestion($requirements, $missing));
+            $this->messenger->sendText($session->contact, $this->clarifyingQuestion($requirements, $missing, $candidates));
 
             return AiOutcome::InProgress;
         }
@@ -206,6 +239,9 @@ class CustomerSearchAssistant
      */
     protected function runSearch(BotSession $session, array $state, string $query, ?Location $location = null): AiOutcome
     {
+        // A running search supersedes an open place pick list.
+        $state['location_candidates'] = [];
+
         $location ??= $this->locations->detectInQuery($query);
         $matches = $this->matcher->match($query, $location);
 
@@ -285,6 +321,102 @@ class CustomerSearchAssistant
         );
 
         return AiOutcome::InProgress;
+    }
+
+    /**
+     * Several dictionary places match the named location: the same-named
+     * candidates go out as an interactive list (mirroring the supplier
+     * collector), identical titles told apart by the ancestor-chain
+     * captions. The search itself waits for the pick.
+     *
+     * @param  array<string, mixed>  $state
+     * @param  array<string, mixed>  $requirements
+     * @param  EloquentCollection<int, Location>  $candidates
+     */
+    protected function offerLocationChoices(BotSession $session, array $state, array $requirements, EloquentCollection $candidates): AiOutcome
+    {
+        $state['phase'] = 'locating';
+        $state['query'] = $this->composeQuery($state, $requirements);
+        $state['location_candidates'] = $candidates->pluck('id')->all();
+        $state['offered'] = [];
+        $state['expand_location_id'] = null;
+        $this->persist($session, $state);
+
+        $this->messenger->sendList(
+            $session->contact,
+            'Нашли несколько подходящих мест — уточните, в каком из них искать.',
+            self::LOCATION_LIST_BUTTON,
+            $candidates
+                ->map(fn (Location $location): array => array_filter([
+                    'id' => self::LOCATION_ROW_PREFIX.$location->id,
+                    'title' => WhatsappText::clamp($location->name, self::ROW_TITLE_LIMIT),
+                    'description' => WhatsappText::clamp(
+                        $location->ancestors()->sortByDesc('depth')->pluck('name')->implode(', '),
+                        self::ROW_DESCRIPTION_LIMIT,
+                    ) ?: null,
+                ]))
+                ->values()
+                ->all(),
+        );
+
+        return AiOutcome::InProgress;
+    }
+
+    /**
+     * The customer picks one of the same-named places — by the list row or
+     * by typing a candidate's name matching exactly one of them (the
+     * scenario-wide convention). Same-named candidates cannot be told
+     * apart by typed text, so such a reply — like any other text — goes
+     * through the normal intake, which re-offers the list.
+     *
+     * @param  array<string, mixed>  $state
+     */
+    protected function handleLocating(BotSession $session, array $state, InboundMessage $message): AiOutcome
+    {
+        $candidates = array_map(intval(...), (array) $state['location_candidates']);
+        $picked = $this->matchLocationChoice($candidates, $message);
+
+        if ($picked !== null && (string) $state['query'] !== '') {
+            $state['phase'] = 'searching';
+            $state['location_id'] = $picked->id;
+
+            return $this->runSearch($session, $state, (string) $state['query'], $picked);
+        }
+
+        // Not a pick: the reply goes through the normal intake as a
+        // refinement. The open list stays valid until a search supersedes
+        // or re-offers it — an unreadable message (a sticker, a stray row
+        // id) must not kill the awaited tap.
+        return $this->search($session, $state, $message);
+    }
+
+    /**
+     * @param  list<int>  $candidates
+     */
+    protected function matchLocationChoice(array $candidates, InboundMessage $message): ?Location
+    {
+        if ($candidates === []) {
+            return null;
+        }
+
+        $replyId = (string) $message->replyId;
+
+        if (str_starts_with($replyId, self::LOCATION_ROW_PREFIX)) {
+            $id = (int) Str::after($replyId, self::LOCATION_ROW_PREFIX);
+
+            return in_array($id, $candidates, true) ? Location::find($id) : null;
+        }
+
+        $text = mb_strtolower(trim((string) $message->text));
+
+        if ($text === '') {
+            return null;
+        }
+
+        $byName = Location::query()->whereIn('id', $candidates)->get()
+            ->filter(fn (Location $location): bool => mb_strtolower($location->name) === $text);
+
+        return $byName->count() === 1 ? $byName->first() : null;
     }
 
     /**
@@ -530,17 +662,25 @@ class CustomerSearchAssistant
     /**
      * @param  array<string, mixed>  $requirements
      * @param  list<string>  $missing
+     * @param  EloquentCollection<int, Location>  $candidates
      */
-    protected function clarifyingQuestion(array $requirements, array $missing): string
+    protected function clarifyingQuestion(array $requirements, array $missing, EloquentCollection $candidates): string
     {
         // The extractor believes the place is settled, so its question
         // would miss the dictionary lookup failure — same wording as the
-        // supplier collector for an unknown place.
+        // supplier collector for an unknown place. More namesakes than a
+        // list can hold is its own case: the name IS in the dictionary,
+        // so retyping it cannot help — only a bigger unit can.
         if ($missing[0] === 'location_unresolved') {
-            return sprintf(
-                'Не нашли «%s» в справочнике мест. Напишите город, район или село точнее.',
-                $requirements['location'],
-            );
+            return $candidates->count() > LocationResolver::MAX_CANDIDATES
+                ? sprintf(
+                    'Мест с названием «%s» в справочнике слишком много. Напишите точнее — вместе с областью или районом.',
+                    $requirements['location'],
+                )
+                : sprintf(
+                    'Не нашли «%s» в справочнике мест. Напишите город, район или село точнее.',
+                    $requirements['location'],
+                );
         }
 
         if (filled($requirements['clarifying_question'] ?? null)) {
@@ -583,6 +723,8 @@ class CustomerSearchAssistant
             'transcript' => [],
             'query' => null,
             'offered' => [],
+            'location_candidates' => [],
+            'location_id' => null,
             'expand_location_id' => null,
             'unresolved_location' => null,
         ];

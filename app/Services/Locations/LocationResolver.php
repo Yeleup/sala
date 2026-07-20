@@ -68,20 +68,78 @@ class LocationResolver
 
     /**
      * The single location the given place name refers to, tolerating close
-     * distortions of the wording (a misheard voice message, a typo): exact
-     * resolution first — the same rules as in a search query — then trigram
-     * correction with the usual «biggest unique unit wins» arbitration.
+     * distortions of the wording (a misheard voice message, a typo): the
+     * placeCandidates() funnel collapsed to its unambiguous outcome — one
+     * candidate resolves, a tie or an unknown name stays null.
      * Only for text known to name a place; free text goes to detectInQuery.
      */
     public function detectPlace(string $name): ?Location
     {
-        $detected = $this->detectInQuery($name);
+        $candidates = $this->placeCandidates($name);
 
-        if ($detected !== null) {
-            return $detected;
+        return $candidates->count() === 1 ? $candidates->first() : null;
+    }
+
+    /**
+     * The dictionary nodes the given place name may refer to — exactly, or
+     * (when nothing matches exactly) by close-distortion correction.
+     * Exactly one element: the name resolved (the «biggest unique unit»
+     * arbitration won). Several (up to the caller's cap): an unbreakable
+     * tie of same-named or equally close places, cut to their biggest
+     * disputed level — deeper same-named nodes are dropped. Empty: no
+     * such place.
+     *
+     * @return Collection<int, Location>
+     */
+    public function placeCandidates(string $name): Collection
+    {
+        $raw = $this->rawMatchesInQuery($name);
+
+        if ($raw->isEmpty()) {
+            $raw = $this->rawFuzzyMatches(LocationName::searchKey($name));
         }
 
-        $matches = $this->fuzzyMatches(LocationName::searchKey($name));
+        if ($raw->isEmpty()) {
+            return new Collection;
+        }
+
+        $collapsed = $this->collapseAncestors($raw);
+
+        if ($collapsed->count() === 1) {
+            return $collapsed;
+        }
+
+        // The competing «biggest units»: chain tops of the raw set, cut to
+        // their shallowest level. Cut from the raw set, not the collapsed
+        // one — collapseAncestors would evict a district whose own
+        // same-named okrug matched, silently handing the name to its rival.
+        $contenders = $this->collapseDescendants($raw)->sortBy('depth')->groupBy('depth')->first();
+
+        if ($contenders->count() > 1) {
+            return $contenders->sortBy('id')->values();
+        }
+
+        // A single biggest unit — the name is unambiguous. The usual
+        // arbitration names the exact node (the actual place of a wrapper
+        // chain) as long as it stays inside that unit; otherwise the unit
+        // itself is the answer — a foreign namesake must not inherit the
+        // name of a district evicted by its own same-named descendant.
+        $unit = $contenders->first();
+        $winner = $this->uniqueShallowest($collapsed);
+
+        return new Collection([
+            $winner !== null && ($winner->is($unit) || $winner->isDescendantOf($unit)) ? $winner : $unit,
+        ]);
+    }
+
+    /**
+     * The single location a free-text search query talks about, or null
+     * when none or several are plausible (the caller falls back to plain
+     * text matching). Longer name matches win over shorter ones.
+     */
+    public function detectInQuery(string $query): ?Location
+    {
+        $matches = $this->collapseAncestors($this->rawMatchesInQuery($query));
 
         if ($matches->count() === 1) {
             return $matches->first();
@@ -95,11 +153,14 @@ class LocationResolver
     }
 
     /**
-     * The single location a free-text search query talks about, or null
-     * when none or several are plausible (the caller falls back to plain
-     * text matching). Longer name matches win over shorter ones.
+     * The uncollapsed dictionary matches of a query: the same longest-name
+     * walk as detectInQuery() — 1–3-word windows, longer names win —
+     * stopping at the first window size that matches anything, minus the
+     * arbitration.
+     *
+     * @return Collection<int, Location>
      */
-    public function detectInQuery(string $query): ?Location
+    protected function rawMatchesInQuery(string $query): Collection
     {
         $words = LocationName::searchWords($query);
 
@@ -118,20 +179,18 @@ class LocationResolver
                 continue;
             }
 
-            $matches = $this->collapseAncestors(
-                Location::query()->whereIn('search_name', array_unique($keys))->get(),
-            );
+            $matches = Location::query()
+                ->whereIn('search_name', array_unique($keys))
+                ->orderBy('depth')
+                ->orderBy('id')
+                ->get();
 
-            if ($matches->count() === 1) {
-                return $matches->first();
-            }
-
-            if ($matches->count() > 1) {
-                return $this->uniqueShallowest($matches);
+            if ($matches->isNotEmpty()) {
+                return $matches;
             }
         }
 
-        return null;
+        return new Collection;
     }
 
     /**
@@ -209,15 +268,25 @@ class LocationResolver
      */
     protected function fuzzyMatches(string $key): Collection
     {
+        return $this->collapseAncestors($this->rawFuzzyMatches($key));
+    }
+
+    /**
+     * The uncollapsed dictionary nodes whose names are close distortions
+     * of the given key. Postgres-only: on other drivers matching stays
+     * strictly exact.
+     *
+     * @return Collection<int, Location>
+     */
+    protected function rawFuzzyMatches(string $key): Collection
+    {
         $keys = $this->closeKeys($key);
 
         if ($keys === []) {
             return new Collection;
         }
 
-        return $this->collapseAncestors(
-            Location::query()->whereIn('search_name', $keys)->orderBy('depth')->orderBy('id')->get(),
-        );
+        return Location::query()->whereIn('search_name', $keys)->orderBy('depth')->orderBy('id')->get();
     }
 
     /**
@@ -262,6 +331,23 @@ class LocationResolver
         return $candidates
             ->reject(fn (Location $candidate): bool => $candidates->contains(
                 fn (Location $other): bool => $other->isDescendantOf($candidate),
+            ))
+            ->values();
+    }
+
+    /**
+     * The inverse of collapseAncestors(): each matched ancestor chain
+     * keeps only its top node — a district subsumes its own matched
+     * okrugs.
+     *
+     * @param  Collection<int, Location>  $candidates
+     * @return Collection<int, Location>
+     */
+    protected function collapseDescendants(Collection $candidates): Collection
+    {
+        return $candidates
+            ->reject(fn (Location $candidate): bool => $candidates->contains(
+                fn (Location $other): bool => $candidate->isDescendantOf($other),
             ))
             ->values();
     }

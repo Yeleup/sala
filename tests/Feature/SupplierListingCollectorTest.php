@@ -590,6 +590,54 @@ test('picking a location from the list resolves it and continues to confirmation
         ->and(Listing::sole()->location_id)->toBe($picked->id);
 });
 
+test('too many namesakes for a list are cut to their biggest disputed level', function () {
+    // Продакшен-форма «Абайского района»: 3 района (у одного внутри
+    // одноимённая г.а.) и 9 одноимённых с.о. — всего больше лимита
+    // списка, но спорный уровень один — районы.
+    $districtA = locationNamed('Абайский район', locationNamed('Карагандинская область'));
+    locationNamed('Абайская г.а.', $districtA);
+    $districtB = locationNamed('Абайский район', locationNamed('область Абай'));
+    $districtC = locationNamed('Абайский район', locationNamed('г.Шымкент'));
+    foreach (range(1, 9) as $i) {
+        locationNamed('Абайский с.о.', locationNamed("Р-{$i} район", locationNamed("Обл {$i}")));
+    }
+
+    ListingExtractionAgent::fake([fullExtraction(['location' => 'Абайский район'])]);
+    $session = collectorSession();
+
+    fakeCollectorMessenger()->shouldReceive('sendList')->once()
+        ->withArgs(fn (Contact $to, string $text, string $button, array $rows) => count($rows) === 3
+            && collect($rows)->pluck('id')->contains('listing_location:'.$districtA->id)
+            && collect($rows)->pluck('id')->contains('listing_location:'.$districtB->id)
+            && collect($rows)->pluck('id')->contains('listing_location:'.$districtC->id));
+
+    $outcome = app(SupplierListingCollector::class)
+        ->resume($session, supplierAiNode(), new InboundMessage(text: 'Трактор, Абайский район, 10000 тг/час'));
+
+    expect($outcome)->toBe(AiOutcome::InProgress)
+        ->and($session->fresh()->state['phase'])->toBe('locating')
+        ->and($session->fresh()->state['attempts'])->toBe(0);
+});
+
+test('namesakes beyond the list even at their biggest level ask for a bigger unit', function () {
+    foreach (range(1, 11) as $i) {
+        locationNamed('Абайский район', locationNamed("Обл {$i}"));
+    }
+
+    ListingExtractionAgent::fake([fullExtraction(['location' => 'Абайский район'])]);
+    $session = collectorSession();
+
+    fakeCollectorMessenger()->shouldReceive('sendText')->once()
+        ->withArgs(fn (Contact $to, string $text) => str_contains($text, 'Мест с названием «Абайский район» в справочнике слишком много'));
+
+    $outcome = app(SupplierListingCollector::class)
+        ->resume($session, supplierAiNode(), new InboundMessage(text: 'Трактор, Абайский район, 10000 тг/час'));
+
+    expect($outcome)->toBe(AiOutcome::InProgress)
+        ->and($session->fresh()->state['attempts'])->toBe(1)
+        ->and(Listing::count())->toBe(0);
+});
+
 test('a location outside the dictionary is asked again with the not-found hint', function () {
     ListingExtractionAgent::fake([fullExtraction(['location' => 'Хогвартс'])]);
     $session = collectorSession();

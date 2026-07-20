@@ -450,12 +450,21 @@ class SupplierListingCollector
     {
         $fields['location_id'] = null;
         $fields['location_candidates'] = [];
+        $fields['location_overflow'] = false;
 
         if (blank($fields['location'] ?? null)) {
             return $fields;
         }
 
         $candidates = $this->locations->resolve((string) $fields['location']);
+
+        // More namesakes than a WhatsApp list holds: cut to their biggest
+        // disputed level, the same way the customer search does —
+        // «Абайский район» offers its three districts, not twelve nodes.
+        if ($candidates->count() > LocationResolver::MAX_CANDIDATES) {
+            $candidates = $this->locations->placeCandidates((string) $fields['location']);
+            $fields['location_overflow'] = $candidates->count() > LocationResolver::MAX_CANDIDATES;
+        }
 
         if ($candidates->count() === 1) {
             $fields['location_id'] = $candidates->first()->id;
@@ -657,11 +666,19 @@ class SupplierListingCollector
 
         // The named place did not resolve to the dictionary — the extractor
         // believes the location is filled, so its question would miss this.
+        // More namesakes than a list can hold even at their biggest level
+        // is its own case: the name IS in the dictionary, so retyping it
+        // cannot help — only a bigger unit can.
         if (($missing[0] ?? null) === 'location_id' && filled($fields['location'] ?? null)) {
-            return sprintf(
-                'Не нашли «%s» в справочнике мест. Напишите город, район или село точнее.',
-                $fields['location'],
-            );
+            return ($fields['location_overflow'] ?? false)
+                ? sprintf(
+                    'Мест с названием «%s» в справочнике слишком много. Напишите точнее — вместе с областью или районом.',
+                    $fields['location'],
+                )
+                : sprintf(
+                    'Не нашли «%s» в справочнике мест. Напишите город, район или село точнее.',
+                    $fields['location'],
+                );
         }
 
         if (filled($fields['clarifying_question'] ?? null)) {

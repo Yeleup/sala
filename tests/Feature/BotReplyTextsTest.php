@@ -149,6 +149,27 @@ describe('переопределённые тексты в рантайме', fu
         app(BotEngine::class)->handle($contact, new InboundMessage(text: 'x', replyId: 'ghost_button'));
     });
 
+    test('нераспознанное нажатие получает свой текст вместо стандартного', function () {
+        $scenario = replyTextsMenuScenario();
+        $contact = Contact::factory()->create();
+        $session = BotSession::factory()->waitingAt('menu')->create([
+            'contact_id' => $contact->id,
+            'bot_scenario_id' => $scenario->id,
+            'scenario_version' => $scenario->published_version,
+        ]);
+
+        BotReplyText::query()->create(['key' => 'unrecognized_press', 'text' => 'Свой текст про сбой']);
+
+        // Ровно одно сообщение: без повтора шага и без перезапуска диалога.
+        $messenger = test()->mock(DereuMessenger::class);
+        $messenger->shouldReceive('sendText')->once()
+            ->withArgs(fn (Contact $to, string $text): bool => $text === 'Свой текст про сбой');
+
+        app(BotEngine::class)->handle($contact, new InboundMessage(unrecognizedPress: true));
+
+        expect($session->fresh()->current_node_id)->toBe('menu');
+    });
+
     test('клик по кнопке завершённого запуска получает свой текст «вопрос закрыт»', function () {
         $contact = Contact::factory()->withOpenSessionWindow()->create();
         $run = ScenarioRun::factory()->completed()->create(['contact_id' => $contact->id]);

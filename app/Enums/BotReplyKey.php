@@ -14,13 +14,10 @@ enum BotReplyKey: string
     /**
      * Meta fails to deliver which button was pressed for some WhatsApp Web
      * devices migrated to LID identifiers (escalated to Meta, no ETA) — the
-     * choice is unrecoverable, so the contact is asked to answer again.
+     * choice is unrecoverable, so the bot only explains and takes no
+     * further action.
      */
-    case UnrecognizedPressMenu = 'unrecognized_press_menu';
-
-    case UnrecognizedPressAi = 'unrecognized_press_ai';
-
-    case UnrecognizedPressIdle = 'unrecognized_press_idle';
+    case UnrecognizedPress = 'unrecognized_press';
 
     case RunDecisionFinal = 'run_decision_final';
 
@@ -29,9 +26,7 @@ enum BotReplyKey: string
     {
         return match ($this) {
             self::StaleButton => 'Эта кнопка из прежней версии бота и больше не действует.',
-            self::UnrecognizedPressMenu => 'Не получилось распознать нажатие кнопки (такое бывает в WhatsApp Web). Ответьте цифрой:',
-            self::UnrecognizedPressAi => 'Не получилось распознать нажатие кнопки — напишите, пожалуйста, текстом.',
-            self::UnrecognizedPressIdle => 'Не получилось распознать нажатие кнопки. Если это была кнопка из уведомления о заявке или объявлении — ответьте, пожалуйста, с телефона.',
+            self::UnrecognizedPress => 'Не получилось распознать нажатие кнопки. Если это была кнопка из уведомления о заявке или объявлении — ответьте, пожалуйста, с телефона.',
             self::RunDecisionFinal => 'Этот вопрос уже закрыт — ответ был зафиксирован ранее.',
         };
     }
@@ -40,9 +35,7 @@ enum BotReplyKey: string
     {
         return match ($this) {
             self::StaleButton => 'Кнопка из прежней версии бота',
-            self::UnrecognizedPressMenu => 'Нажатие не распознано: шаг с кнопками',
-            self::UnrecognizedPressAi => 'Нажатие не распознано: AI-шаг',
-            self::UnrecognizedPressIdle => 'Нажатие не распознано: вне диалога',
+            self::UnrecognizedPress => 'Нажатие кнопки не распознано',
             self::RunDecisionFinal => 'Вопрос уже закрыт',
         };
     }
@@ -52,9 +45,7 @@ enum BotReplyKey: string
     {
         return match ($this) {
             self::StaleButton => 'Отправляется, когда контакт нажал кнопку, которой нет в текущей опубликованной версии сценария; после текста бот повторяет текущий шаг или начинает диалог заново.',
-            self::UnrecognizedPressMenu => 'WhatsApp не смог передать, какая кнопка нажата (бывает в WhatsApp Web). Контакт стоит на шаге с кнопками или списком — после текста бот повторяет шаг с пронумерованными вариантами, ответить можно цифрой.',
-            self::UnrecognizedPressAi => 'То же нераспознанное нажатие, но контакт находится на шаге AI-ассистента — бот просит ответить текстом.',
-            self::UnrecognizedPressIdle => 'То же нераспознанное нажатие, когда активного диалога нет (например, нажата кнопка из уведомления о заявке или продлении — токен кнопки тоже потерян).',
+            self::UnrecognizedPress => 'WhatsApp не смог передать, какая кнопка нажата (бывает в WhatsApp Web). Бот отправляет только это пояснение и больше ничего не делает: активный диалог остаётся на текущем шаге, новый не начинается. Кнопки уведомлений о заявке или объявлении при таком сбое восстановить нельзя — стандартный текст советует ответить с телефона.',
             self::RunDecisionFinal => 'Отправляется при нажатии кнопки уже завершённого запуска — например, второй кнопки того же уведомления после принятого решения.',
         };
     }

@@ -5,16 +5,12 @@ namespace App\Services\Ai;
 use App\Ai\Agents\SearchQueryExtractionAgent;
 use App\Enums\AiOperationType;
 use App\Enums\AiOutcome;
-use App\Enums\BotScenarioTrigger;
-use App\Models\BotScenario;
 use App\Models\BotSession;
-use App\Models\CustomerRequest;
 use App\Models\Listing;
 use App\Models\Location;
 use App\Services\Ai\Audit\AiAudit;
 use App\Services\Bot\InboundMessage;
-use App\Services\Bot\ScenarioRunner;
-use App\Services\CustomerRequestNotifier;
+use App\Services\CustomerRequestPlacer;
 use App\Services\DereuMessenger;
 use App\Services\Locations\LocationResolver;
 use App\Support\WhatsappText;
@@ -71,13 +67,18 @@ class CustomerSearchAssistant
 
     public const string BUTTON_MENU_TITLE = 'В меню';
 
+    /** WhatsApp caps URL-button titles at 20 characters. */
+    public const string CATALOG_BUTTON_RESULTS = 'Все варианты';
+
+    public const string CATALOG_BUTTON_DEAD_END = 'Открыть каталог';
+
     private const string QUERY_EXAMPLE = 'например: «кран 25 тонн, Шымкент»';
 
     public function __construct(
         private readonly DereuMessenger $messenger,
         private readonly ListingMatcher $matcher,
-        private readonly ScenarioRunner $runner,
-        private readonly CustomerRequestNotifier $notifier,
+        private readonly CustomerRequestPlacer $placer,
+        private readonly CtaLinkBuilder $links,
         private readonly LocationResolver $locations,
         private readonly AiAudit $audit,
     ) {}
@@ -250,9 +251,10 @@ class CustomerSearchAssistant
 
             if ($state['attempts'] >= self::MAX_FRUITLESS_SEARCHES) {
                 $this->persist($session, $state);
-                $this->messenger->sendText(
-                    $session->contact,
-                    'К сожалению, сейчас ничего подходящего не нашлось. Загляните позже — объявления пополняются каждый день.',
+                $this->sendCatalogCta(
+                    $session,
+                    'К сожалению, сейчас ничего подходящего не нашлось. Загляните в каталог — там все объявления, база пополняется каждый день.',
+                    self::CATALOG_BUTTON_DEAD_END,
                 );
 
                 return AiOutcome::Completed;
@@ -273,14 +275,20 @@ class CustomerSearchAssistant
             return AiOutcome::InProgress;
         }
 
-        return $this->offerMatches($session, $state, $query, $matches);
+        return $this->offerMatches($session, $state, $query, $matches, $location);
     }
 
     /**
+     * The catalog CTA rides with every результат: the chat list holds at
+     * most 10 rows, the catalog shows everything. The prefill mirrors
+     * exactly what this search ranked by — the query and the location the
+     * matcher actually filtered with (none when the place stayed
+     * unresolved).
+     *
      * @param  array<string, mixed>  $state
      * @param  Collection<int, Listing>  $matches
      */
-    protected function offerMatches(BotSession $session, array $state, string $query, Collection $matches): AiOutcome
+    protected function offerMatches(BotSession $session, array $state, string $query, Collection $matches, ?Location $location = null): AiOutcome
     {
         $state['phase'] = 'choosing';
         $state['query'] = $query;
@@ -297,6 +305,14 @@ class CustomerSearchAssistant
                 : 'Вот что нашлось по вашему запросу. Выберите вариант — и мы отправим заявку поставщику:',
             self::LIST_BUTTON,
             $matches->map(fn (Listing $listing): array => $this->listRow($listing))->all(),
+        );
+
+        $this->sendCatalogCta(
+            $session,
+            'Показали до 10 самых подходящих вариантов. В каталоге — все объявления: поиск, фильтры по месту и категории, заявка в пару нажатий.',
+            self::CATALOG_BUTTON_RESULTS,
+            $query,
+            $location,
         );
 
         return AiOutcome::InProgress;
@@ -443,7 +459,7 @@ class CustomerSearchAssistant
         $matches = $this->matcher->match($query, $location);
 
         if ($matches->isNotEmpty()) {
-            return $this->offerMatches($session, $state, $query, $matches);
+            return $this->offerMatches($session, $state, $query, $matches, $location);
         }
 
         if ($location->parent_id !== null) {
@@ -474,7 +490,10 @@ class CustomerSearchAssistant
     /**
      * A fruitless search that still waits for the contact: the prompt to
      * rephrase plus a «В меню» button so the contact is never stuck without
-     * a way back to the main dialog.
+     * a way back to the main dialog. The catalog CTA follows as its own
+     * message (WhatsApp cannot mix reply buttons and a URL button) — an
+     * empty выдача is exactly what browsing the full catalog fixes. No
+     * prefill: this query just proved empty against the same matcher.
      */
     protected function sendDeadEnd(BotSession $session, string $text): void
     {
@@ -483,6 +502,38 @@ class CustomerSearchAssistant
             $text,
             [['id' => self::BUTTON_MENU, 'title' => self::BUTTON_MENU_TITLE]],
         );
+
+        $this->sendCatalogCta(
+            $session,
+            'А ещё можно посмотреть весь каталог — вдруг подойдёт что-то из него.',
+            self::CATALOG_BUTTON_DEAD_END,
+        );
+    }
+
+    /**
+     * The handoff to the web catalog: a personal signed link, sent with
+     * every search outcome (a выдача or a dead end) and never with an
+     * open question the bot is waiting on. Always a free session message
+     * — every send happens in the turn of an inbound customer message,
+     * so the 24-hour window is open by definition. A failure is logged
+     * and swallowed: the CTA is an enhancement and must not break the
+     * already-delivered outcome.
+     */
+    protected function sendCatalogCta(BotSession $session, string $text, string $button, ?string $query = null, ?Location $location = null): void
+    {
+        try {
+            $this->messenger->sendCtaUrl(
+                $session->contact,
+                $text,
+                $button,
+                $this->links->catalogUrl($session->contact, $query, $location),
+            );
+        } catch (Throwable $e) {
+            Log::warning('Failed to send the catalog CTA.', [
+                'bot_session_id' => $session->id,
+                'error' => $e->getMessage(),
+            ]);
+        }
     }
 
     protected function matchesExpandButton(InboundMessage $message): bool
@@ -492,45 +543,28 @@ class CustomerSearchAssistant
     }
 
     /**
+     * A second pick of the same listing while the earlier request is
+     * still pending is deduplicated by the placer (the customer may have
+     * already pressed «Выбрать» in the web catalog) — the supplier is
+     * not pinged twice, the customer just hears the request is on its way.
+     *
      * @param  array<string, mixed>  $state
      */
     protected function placeRequest(BotSession $session, array $state, Listing $listing): AiOutcome
     {
-        $request = CustomerRequest::create([
-            'contact_id' => $session->contact->id,
-            'listing_id' => $listing->id,
-            'query_text' => (string) $state['query'],
-        ]);
-
-        $this->notifySupplier($request);
+        $request = $this->placer->place($session->contact, $listing, (string) $state['query']);
 
         $this->messenger->sendText(
             $session->contact,
             sprintf(
-                'Заявка по варианту «%s» отправлена поставщику. Как только он ответит, мы сразу сообщим вам.',
+                $request->wasRecentlyCreated
+                    ? 'Заявка по варианту «%s» отправлена поставщику. Как только он ответит, мы сразу сообщим вам.'
+                    : 'Заявка по варианту «%s» уже отправлена поставщику — ждём его ответа.',
                 $listing->displayName() ?: 'объявление',
             ),
         );
 
         return AiOutcome::Completed;
-    }
-
-    /**
-     * The published «Новая заявка» scenario orchestrates the supplier
-     * notification as an isolated run; while none is published, the
-     * legacy hardcoded notifier keeps the flow working.
-     */
-    protected function notifySupplier(CustomerRequest $request): void
-    {
-        $scenario = BotScenario::publishedForTrigger(BotScenarioTrigger::NewCustomerRequest);
-
-        if ($scenario !== null) {
-            $this->runner->launch($scenario, $request->listing->supplier, $request);
-
-            return;
-        }
-
-        $this->notifier->notifySupplier($request);
     }
 
     /**

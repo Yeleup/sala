@@ -1,7 +1,9 @@
 <?php
 
+use App\Http\Controllers\CustomerCatalogController;
 use App\Http\Controllers\LocationSearchController;
 use App\Http\Controllers\SupplierListingController;
+use App\Http\Middleware\ValidateSignatureExceptQuery;
 use Illuminate\Support\Facades\Route;
 
 Route::get('/', function () {
@@ -31,4 +33,20 @@ Route::middleware('signed')->name('supplier.listings.')->group(function (): void
         ->whereNumber('listing')->name('update');
     Route::post('/supplier/listings/{listing}/archive', [SupplierListingController::class, 'archive'])
         ->whereNumber('listing')->name('archive');
+});
+
+/**
+ * Customer web catalog (Modules 2–3): every published listing with search
+ * and filters, opened from WhatsApp via a personal signed CTA link. The
+ * catalog page validates only the path and expiry of its signature, so
+ * the filter form and pagination never break the link; the select action
+ * is a strictly signed personal URL.
+ */
+Route::name('customer.listings.')->group(function (): void {
+    Route::get('/customer/{contact}/listings', [CustomerCatalogController::class, 'index'])
+        ->middleware(ValidateSignatureExceptQuery::class)
+        ->whereNumber('contact')->name('index');
+    Route::post('/customer/{contact}/listings/{listing}/select', [CustomerCatalogController::class, 'select'])
+        ->middleware('signed')
+        ->whereNumber('contact')->whereNumber('listing')->name('select');
 });

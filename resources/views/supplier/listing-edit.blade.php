@@ -71,16 +71,13 @@
                     @error('description') <p class="error">{{ $message }}</p> @enderror
                 </div>
 
-                <div class="field">
-                    <label for="location_search">Локация</label>
-                    <input id="location_search" name="location_label" list="location-options" autocomplete="off"
-                           value="{{ old('location_label', $listing->location?->label()) }}"
-                           placeholder="Начните вводить: город, район или село">
-                    <datalist id="location-options"></datalist>
-                    <input type="hidden" id="location_id" name="location_id" value="{{ old('location_id', $listing->location_id) }}">
+                <x-location-picker label="Локация" label-name="location_label"
+                                   :value="old('location_id', $listing->location_id)"
+                                   :initial-text="old('location_label', $listing->location?->label())"
+                                   placeholder="Начните вводить: город, район или село">
                     <p class="muted" style="margin: 0.25rem 0 0;">Выберите вариант из подсказок.</p>
                     @error('location_id') <p class="error">{{ $message }}</p> @enderror
-                </div>
+                </x-location-picker>
 
                 <div class="field">
                     <label for="location_detail">Уточнение адреса (необязательно)</label>
@@ -141,45 +138,6 @@
 
                     typeSelect.addEventListener('change', toggleBrandField);
                     toggleBrandField();
-                })();
-
-                (function () {
-                    const input = document.getElementById('location_search');
-                    const datalist = document.getElementById('location-options');
-                    const hidden = document.getElementById('location_id');
-                    let optionIds = {};
-                    let timer = null;
-
-                    input.addEventListener('input', function () {
-                        hidden.value = optionIds[input.value] ?? '';
-
-                        if (hidden.value !== '') {
-                            return;
-                        }
-
-                        clearTimeout(timer);
-                        const query = input.value.trim();
-
-                        if (query.length < 2) {
-                            return;
-                        }
-
-                        timer = setTimeout(function () {
-                            fetch('{{ route('locations.search') }}?q=' + encodeURIComponent(query))
-                                .then((response) => response.json())
-                                .then((items) => {
-                                    optionIds = {};
-                                    datalist.innerHTML = '';
-                                    items.forEach((item) => {
-                                        optionIds[item.label] = item.id;
-                                        const option = document.createElement('option');
-                                        option.value = item.label;
-                                        datalist.appendChild(option);
-                                    });
-                                    hidden.value = optionIds[input.value] ?? '';
-                                });
-                        }, 200);
-                    });
                 })();
             </script>
         @else

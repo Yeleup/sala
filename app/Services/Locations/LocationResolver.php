@@ -213,6 +213,9 @@ class LocationResolver
      * words — plus everything inside them, so «Шымкент» offers the city
      * and its districts. Several words narrow the branch: «Шымкент Абай…»
      * offers only nodes inside Шымкент. Parents come before children.
+     * When no name starts with the typed word, close distortions are
+     * offered instead («сарагаш» suggests «г.Сарыагаш») — a correction is
+     * a guess, so its subtree is not expanded.
      *
      * @return Collection<int, Location>
      */
@@ -238,7 +241,7 @@ class LocationResolver
         // «Шымкент Абайский»: the first word anchors the branch, the last
         // one filters the nodes inside it.
         if ($branchKey !== '' && $anchors->isNotEmpty()) {
-            return $query
+            $matches = $query
                 ->where('search_name', 'like', $nodeKey.'%')
                 ->where(function ($constraint) use ($anchors): void {
                     foreach ($anchors as $anchor) {
@@ -246,10 +249,12 @@ class LocationResolver
                     }
                 })
                 ->get();
+
+            return $matches->isNotEmpty() ? $matches : $this->suggestCorrections($nodeKey, $anchors, $limit);
         }
 
         // One word: the matching nodes themselves and their subtrees.
-        return $query
+        $matches = $query
             ->where(function ($constraint) use ($nodeKey, $anchors): void {
                 $constraint->where('search_name', 'like', $nodeKey.'%');
 
@@ -258,6 +263,64 @@ class LocationResolver
                 }
             })
             ->get();
+
+        return $matches->isNotEmpty() ? $matches : $this->suggestCorrections($nodeKey, null, $limit);
+    }
+
+    /**
+     * The top of the KATO tree — the menu an empty autocomplete field
+     * opens with: cities of republican significance first, then the
+     * oblasts alphabetically. The full fixed set (about twenty nodes),
+     * deliberately uncapped — the dropdown scrolls.
+     *
+     * @return Collection<int, Location>
+     */
+    public function topLevel(): Collection
+    {
+        return Location::query()
+            ->where('depth', 0)
+            ->orderByRaw("CASE WHEN name LIKE 'г.%' THEN 0 ELSE 1 END")
+            ->orderBy('name')
+            ->get();
+    }
+
+    /**
+     * Close-distortion suggestions for a typed word no dictionary name
+     * starts with. Ranked by similarity (the closeKeys() order), then
+     * parents before children; a non-empty branch keeps its subtree
+     * constraint, and a branch that itself matched nothing is not
+     * corrected — that is out of an autocomplete's depth.
+     *
+     * @param  Collection<int, Location>|null  $anchors
+     * @return Collection<int, Location>
+     */
+    protected function suggestCorrections(string $nodeKey, ?Collection $anchors, int $limit): Collection
+    {
+        $keys = $this->closeKeys($nodeKey);
+
+        if ($keys === []) {
+            return new Collection;
+        }
+
+        $matches = Location::query()
+            ->whereIn('search_name', $keys)
+            ->when($anchors, function ($query) use ($anchors): void {
+                $query->where(function ($constraint) use ($anchors): void {
+                    foreach ($anchors as $anchor) {
+                        $constraint->orWhere('path', 'like', $anchor->path.'%');
+                    }
+                });
+            })
+            ->get();
+
+        return $matches
+            ->sortBy([
+                fn (Location $a, Location $b): int => array_search($a->search_name, $keys) <=> array_search($b->search_name, $keys),
+                ['depth', 'asc'],
+                ['name', 'asc'],
+            ])
+            ->take($limit)
+            ->values();
     }
 
     /**
@@ -302,8 +365,12 @@ class LocationResolver
             return [];
         }
 
+        // The % operator engages the trigram GIN index (its default 0.3
+        // threshold is looser than ours, so it only pre-filters); the
+        // similarity() clause stays the real cut-off.
         $candidates = Location::query()
             ->selectRaw('search_name, similarity(search_name, ?) as sim', [$key])
+            ->whereRaw('search_name % ?', [$key])
             ->whereRaw('similarity(search_name, ?) >= ?', [$key, self::FUZZY_SIMILARITY_THRESHOLD])
             ->groupBy('search_name')
             ->orderByDesc('sim')

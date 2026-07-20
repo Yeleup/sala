@@ -155,6 +155,18 @@ describe('редактирование', function () {
             ->assertSee('Шымкент');
     });
 
+    test('поле локации — выпадающий список с префиллом текущего места', function () {
+        $listing = Listing::factory()->create([
+            'location_id' => locationNamed('Каратауский район', locationNamed('г.Шымкент'))->id,
+        ]);
+
+        $this->get(portalLinks()->editUrl($listing))
+            ->assertOk()
+            ->assertSee('location-picker', false)
+            ->assertSee('name="location_id"', false)
+            ->assertSee('value="Каратауский район, г.Шымкент"', false);
+    });
+
     test('отклонённое открывается с формой и причиной отклонения', function () {
         $listing = Listing::factory()->rejected()->create();
 

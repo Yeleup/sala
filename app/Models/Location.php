@@ -107,6 +107,45 @@ class Location extends Model
             ->implode(', ');
     }
 
+    /**
+     * The ancestor chains («район Ақсуат, область Абай») for a whole set
+     * of nodes in one query — label() per node would query ancestors once
+     * per node, too chatty for an autocomplete response. Top-level nodes
+     * map to an empty string.
+     *
+     * @param  Collection<int, Location>  $locations
+     * @return array<int, string>
+     */
+    public static function chainsFor(Collection $locations): array
+    {
+        $ancestorIds = $locations
+            ->flatMap(fn (Location $location): array => array_slice(
+                array_values(array_filter(explode('/', $location->path))),
+                0,
+                -1,
+            ))
+            ->unique();
+
+        $names = self::query()->whereIn('id', $ancestorIds)->pluck('name', 'id');
+
+        return $locations
+            ->mapWithKeys(function (Location $location) use ($names): array {
+                // The materialized path is root-first; the chain reads
+                // deepest-first, so the ancestors are reversed.
+                $ids = array_reverse(array_slice(
+                    array_values(array_filter(explode('/', $location->path))),
+                    0,
+                    -1,
+                ));
+
+                return [$location->id => implode(', ', array_map(
+                    fn (string $id): string => (string) $names[(int) $id],
+                    $ids,
+                ))];
+            })
+            ->all();
+    }
+
     protected function resolvedParent(): Location
     {
         return $this->relationLoaded('parent') && $this->parent !== null

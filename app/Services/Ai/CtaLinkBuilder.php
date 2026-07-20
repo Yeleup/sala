@@ -4,13 +4,15 @@ namespace App\Services\Ai;
 
 use App\Models\Contact;
 use App\Models\Listing;
+use App\Models\Location;
 use Illuminate\Support\Facades\URL;
 
 /**
- * Builds the signed URLs into the supplier web portal: the CTA links the
- * bot hands off to (editing a draft, «Мои объявления») and the portal's
- * own action endpoints (see docs/modules/whatsapp-integration.md,
- * «Веб-кабинет поставщика»).
+ * Builds the signed URLs into the web interface: the CTA links the bot
+ * hands off to — the supplier portal (editing a draft, «Мои объявления»)
+ * and the customer catalog — plus the pages' own action endpoints (see
+ * docs/modules/whatsapp-integration.md, «Веб-кабинет поставщика» and
+ * «Веб-каталог заказчика»).
  *
  * Every link is personal, signed and time-limited to 7 days.
  */
@@ -41,6 +43,33 @@ class CtaLinkBuilder
     public function archiveUrl(Listing $listing): string
     {
         return $this->signed('supplier.listings.archive', ['listing' => $listing->getKey()]);
+    }
+
+    /**
+     * The customer catalog with the chat search prefilled. The prefill
+     * params ride outside the signature on purpose: the catalog route
+     * ignores everything but the path and expiry when validating (see
+     * ValidateSignatureExceptQuery), so the filter form and pagination
+     * keep working on the same personal link.
+     */
+    public function catalogUrl(Contact $contact, ?string $query = null, ?Location $location = null): string
+    {
+        $url = $this->signed('customer.listings.index', ['contact' => $contact->getKey()]);
+
+        $prefill = http_build_query(array_filter([
+            'q' => $query,
+            'location_id' => $location?->getKey(),
+        ]));
+
+        return $prefill === '' ? $url : $url.'&'.$prefill;
+    }
+
+    public function selectUrl(Contact $contact, Listing $listing): string
+    {
+        return $this->signed('customer.listings.select', [
+            'contact' => $contact->getKey(),
+            'listing' => $listing->getKey(),
+        ]);
     }
 
     /**

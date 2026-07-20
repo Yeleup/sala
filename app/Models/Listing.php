@@ -161,6 +161,20 @@ class Listing extends Model
             ->where('expires_at', '>', now());
     }
 
+    /**
+     * Listings located inside the given subtree (the node itself
+     * included) — the same materialized-path filter customer search
+     * uses. A null root applies no filter.
+     */
+    #[Scope]
+    protected function inLocation(Builder $query, ?Location $root): void
+    {
+        $query->when($root, fn (Builder $builder): Builder => $builder->whereHas(
+            'location',
+            fn (Builder $location) => $location->where('path', 'like', $root->path.'%'),
+        ));
+    }
+
     public function submitForModeration(): void
     {
         $this->assertStatusIn([ListingStatus::Draft, ListingStatus::Rejected], 'submit for moderation');

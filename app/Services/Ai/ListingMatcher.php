@@ -50,9 +50,23 @@ class ListingMatcher
     public function __construct(private readonly ListingEmbeddings $embeddings) {}
 
     /**
+     * The chat list: the top of the full ranking, capped to what a
+     * WhatsApp list message can hold.
+     *
      * @return Collection<int, Listing>
      */
     public function match(string $query, ?Location $within = null): Collection
+    {
+        return $this->matchAll($query, $within)->take(self::MAX_RESULTS)->values();
+    }
+
+    /**
+     * The full ranking without the chat cap — the customer web catalog
+     * shows every match, paginated on its side.
+     *
+     * @return Collection<int, Listing>
+     */
+    public function matchAll(string $query, ?Location $within = null): Collection
     {
         $tokens = $this->tokenize($query);
 
@@ -68,7 +82,6 @@ class ListingMatcher
 
         return $ranked
             ->sortBy([['score', 'desc'], ['listing.created_at', 'desc']])
-            ->take(self::MAX_RESULTS)
             ->map(fn (array $item): Listing => $item['listing'])
             ->values();
     }

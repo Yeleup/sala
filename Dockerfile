@@ -73,6 +73,7 @@ RUN mkdir -p \
         storage/framework/sessions \
         storage/framework/views \
         storage/logs \
+    && rm -f bootstrap/cache/*.php public/hot \
     && composer dump-autoload \
         --no-dev \
         --no-interaction \

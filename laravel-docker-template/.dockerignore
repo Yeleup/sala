@@ -10,7 +10,17 @@
 
 node_modules
 vendor
+auth.json
 
+bootstrap/cache/*
+!bootstrap/cache/.gitignore
+
+public/build
+public/hot
+public/storage
+public/fonts-manifest.dev.json
+
+storage/pail
 storage/app/*
 storage/framework/cache/*
 storage/framework/sessions/*

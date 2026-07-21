@@ -185,8 +185,15 @@ class CustomerSearchAssistant
         // The AI provider is unavailable: degrade to searching the raw
         // text right away — the customer is never left without an answer.
         if ($requirements === null) {
+            $state['subject'] = null;
+
             return $this->runSearch($session, $state, implode(', ', $state['transcript']));
         }
+
+        // The extracted subject on its own feeds the catalog link: with a
+        // resolved place the place goes into the catalog's location
+        // filter, so the search text must not duplicate it.
+        $state['subject'] = filled($requirements['subject'] ?? null) ? (string) $requirements['subject'] : null;
 
         // The KATO dictionary is the only source of truth for the place:
         // a named location either resolves to a node (the subtree filter,
@@ -287,9 +294,10 @@ class CustomerSearchAssistant
     /**
      * The catalog CTA rides with every результат: the chat list holds at
      * most 10 rows, the catalog shows everything. The prefill mirrors
-     * exactly what this search ranked by — the query and the location the
-     * matcher actually filtered with (none when the place stayed
-     * unresolved).
+     * what this search ranked by, without duplication: with a resolved
+     * place the link carries the subject alone plus the place as the
+     * location filter; an unresolved place stays in the search text
+     * (there it can still match the listings' location wording).
      *
      * @param  array<string, mixed>  $state
      * @param  Collection<int, Listing>  $matches
@@ -317,7 +325,7 @@ class CustomerSearchAssistant
             $session,
             'Показали до 10 самых подходящих вариантов. В каталоге — все объявления: поиск, фильтры по месту и категории, заявка в пару нажатий.',
             self::CATALOG_BUTTON_RESULTS,
-            $query,
+            $location !== null ? (($state['subject'] ?? null) ?: $query) : $query,
             $location,
         );
 
@@ -346,7 +354,7 @@ class CustomerSearchAssistant
             $session,
             sprintf('По «%s» сейчас ничего нет. Посмотрите шире — в каталоге уже подставлены ваш запрос и «%s».', $location->name, $parent->name),
             self::CATALOG_BUTTON_DEAD_END,
-            $query,
+            (($state['subject'] ?? null) ?: $query),
             $parent,
         );
 
@@ -763,6 +771,7 @@ class CustomerSearchAssistant
             'clarifications' => 0,
             'transcript' => [],
             'query' => null,
+            'subject' => null,
             'offered' => [],
             'location_candidates' => [],
             'location_id' => null,

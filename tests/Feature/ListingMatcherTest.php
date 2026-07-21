@@ -205,3 +205,50 @@ test('фильтр по поддереву локации действует и 
 
     expect($matches->pluck('id')->all())->toBe([$inShymkent->id]);
 });
+
+test('опечатка в виде техники исправляется по справочнику категорий', function () {
+    fakeSemanticSpace();
+
+    $digger = Listing::factory()->published()->create([
+        'category_id' => categoryNamed('Экскаваторы')->id,
+        'description' => 'Копаем котлованы',
+        'price' => 'договорная',
+    ]);
+    Listing::factory()->published()->create([
+        'category_id' => categoryNamed('Автокраны')->id,
+        'description' => 'Стрела 28 метров',
+        'price' => 'договорная',
+    ]);
+
+    // «Эксковатор» не подстрока ни одного объявления, но близок к слову
+    // «экскаваторы» операторского справочника — токен исправляется, и
+    // словесное совпадение снова работает.
+    expect(app(ListingMatcher::class)->match('эксковатор')->pluck('id')->all())->toBe([$digger->id]);
+});
+
+test('опечатка в марке исправляется по справочнику марок', function () {
+    fakeSemanticSpace();
+
+    $hitachi = Listing::factory()->published()->create([
+        'category_id' => categoryNamed('Экскаваторы')->id,
+        'brand_id' => brandNamed('Hitachi')->id,
+        'description' => 'Гусеничный',
+        'price' => 'договорная',
+    ]);
+
+    expect(app(ListingMatcher::class)->match('hitachy')->pluck('id')->all())->toBe([$hitachi->id]);
+});
+
+test('слово без близкого словарного не притягивается к категориям', function () {
+    fakeSemanticSpace();
+
+    Listing::factory()->published()->create([
+        'category_id' => categoryNamed('Экскаваторы')->id,
+        'description' => 'Копаем котлованы',
+        'price' => 'договорная',
+    ]);
+
+    // «Вертолёт» ни на что из справочников не похож — исправление не
+    // выдумывается, выдача остаётся честно пустой.
+    expect(app(ListingMatcher::class)->match('вертолёт'))->toBeEmpty();
+});

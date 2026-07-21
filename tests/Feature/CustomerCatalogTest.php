@@ -112,6 +112,18 @@ describe('содержимое каталога', function () {
             ->assertDontSee('Гусеничный экскаватор');
     });
 
+    test('опечатка в поисковом запросе исправляется по справочнику категорий', function () {
+        $contact = Contact::factory()->create();
+        Listing::factory()->published()->create([
+            'title' => 'Гусеничный экскаватор', 'category_id' => categoryNamed('Экскаваторы')->id,
+            'description' => 'Копаем котлованы', 'price' => 'договорная',
+        ]);
+
+        $this->get(catalogLinks()->catalogUrl($contact, 'эксковаторы'))
+            ->assertOk()
+            ->assertSee('Гусеничный экскаватор');
+    });
+
     test('релевантность чат-матчера сохраняется в порядке карточек', function () {
         $contact = Contact::factory()->create();
         Listing::factory()->published()->create([

@@ -580,7 +580,8 @@ test('пустое поддерево места присылает ссылку
             && str_contains($text, '«Абайский район»')
             && $button === CustomerSearchAssistant::CATALOG_BUTTON_DEAD_END
             && str_contains($url, "location_id={$district->id}")
-            && str_contains(urldecode($url), 'кран'),
+            && str_contains(urldecode($url), 'кран')
+            && ! str_contains(urldecode($url), 'Карааул'),
     );
 
     $session = searchSession();
@@ -1272,7 +1273,7 @@ test('the intake extraction is recorded in the AI audit with dialog links', func
         ->bot_session_id->toBe($session->id);
 });
 
-test('the results CTA link carries the query and the resolved place', function () {
+test('the results CTA link carries the subject and the resolved place without duplication', function () {
     SearchQueryExtractionAgent::fake([fullSearchIntake(['subject' => 'кран'])]);
     $city = locationNamed('г.Шымкент');
     Listing::factory()->published()->create([
@@ -1286,7 +1287,10 @@ test('the results CTA link carries the query and the resolved place', function (
             && str_contains($url, "/customer/{$contact->id}/listings")
             && str_contains($url, 'signature=')
             && str_contains(urldecode($url), 'кран')
-            && str_contains($url, "location_id={$city->id}"),
+            && str_contains($url, "location_id={$city->id}")
+            // Распознанное место уходит в фильтр каталога — в строке
+            // поиска оно не дублируется.
+            && ! str_contains(urldecode($url), 'Шымкент'),
     );
 
     $outcome = app(CustomerSearchAssistant::class)

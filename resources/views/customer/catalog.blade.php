@@ -1,6 +1,8 @@
 <x-customer.layout title="Каталог объявлений">
-    <h1>Каталог объявлений</h1>
-    <p class="muted" style="margin: 0 0 1rem;">Спецтехника и услуги — все опубликованные объявления.</p>
+    <header class="page-header">
+        <h1>Каталог объявлений</h1>
+        <p>Спецтехника и услуги — все опубликованные объявления.</p>
+    </header>
 
     <form method="GET" action="{{ url()->current() }}" class="card">
         {{-- The personal link's signature covers only the path and expiry, so the form can change every filter freely. --}}
@@ -50,7 +52,7 @@
         </div>
     </form>
 
-    <p class="muted" style="margin: 0 0 1rem;">Найдено объявлений: {{ $listings->total() }}</p>
+    <p class="muted result-count">Найдено объявлений: {{ $listings->total() }}</p>
 
     @forelse ($listings as $listing)
         <div class="card listing-card">
@@ -65,9 +67,12 @@
                 @if ($listing->description)
                     <p class="listing-line">{{ \Illuminate\Support\Str::limit($listing->description, 140) }}</p>
                 @endif
-                <p class="listing-line">
-                    {{ collect([$listing->locationLine(), $listing->price])->filter()->implode(' · ') }}
-                </p>
+                @if ($listing->locationLine())
+                    <p class="listing-line muted">{{ $listing->locationLine() }}</p>
+                @endif
+                @if ($listing->price)
+                    <p class="listing-line listing-price">{{ $listing->price }}</p>
+                @endif
                 @if ($listing->supplier->displayName())
                     <p class="listing-line muted">Поставщик: {{ $listing->supplier->displayName() }}</p>
                 @endif
@@ -89,7 +94,7 @@
             </div>
         </div>
     @empty
-        <div class="card">
+        <div class="card empty-state">
             <p style="margin: 0;">Ничего не нашлось. Измените запрос или сбросьте фильтры.</p>
         </div>
     @endforelse

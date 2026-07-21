@@ -7,6 +7,7 @@
     catalog.blade.php + components/customer/layout.blade.php): состояния
     desktop и mobile, панель фильтров, карточки с «Выбрать» и бейджем
     отправленной заявки, баннеры успеха/дубликата/ошибки, пустая выдача.
+    Тема — синяя (градиентная шапка, синие кнопки и акценты).
 --}}
 <!DOCTYPE html>
 <html lang="ru">
@@ -20,7 +21,7 @@
         body { font-family: system-ui, sans-serif; margin: 0; padding: 2rem 1.5rem 4rem; background: #e5e7eb; color: #111827; }
         .preview-section { max-width: 64rem; margin: 0 auto 2.5rem; }
         .preview-section > h2 { font-size: 1rem; margin: 0 0 0.75rem; color: #374151; }
-        .viewport { background: #f9fafb; border: 1px solid #d1d5db; border-radius: 1rem; overflow: hidden; box-shadow: 0 1px 3px rgb(0 0 0 / 0.1); }
+        .viewport { background: #f4f7fc; border: 1px solid #d1d5db; border-radius: 1rem; overflow: hidden; box-shadow: 0 1px 3px rgb(0 0 0 / 0.1); color: #1e293b; --lp-active-bg: #dbeafe; }
         .viewport-desktop { padding: 1.5rem 1rem 3rem; }
         .viewport-mobile { width: 375px; margin: 0; padding: 1.5rem 1rem 3rem; }
         .viewport main { max-width: 48rem; margin: 0 auto; }
@@ -29,32 +30,44 @@
         /* Копия стилей components/customer/layout.blade.php */
         .viewport h1 { font-size: 1.25rem; margin: 0 0 0.25rem; }
         .viewport a { color: inherit; }
-        .card { background: #fff; border: 1px solid #e5e7eb; border-radius: 0.75rem; padding: 1.25rem; margin-bottom: 1rem; }
-        .muted { color: #6b7280; font-size: 0.875rem; }
+        .page-header { background: linear-gradient(135deg, #1e40af, #3b82f6); border-radius: 1rem; padding: 1.375rem 1.5rem; margin-bottom: 1.25rem; color: #fff; box-shadow: 0 10px 25px -12px rgb(30 64 175 / 0.5); }
+        .page-header h1 { font-size: 1.375rem; letter-spacing: -0.01em; }
+        .page-header p { margin: 0; color: #dbeafe; font-size: 0.875rem; }
+        .card { background: #fff; border: 1px solid #e2e8f0; border-radius: 1rem; padding: 1.25rem; margin-bottom: 1rem; box-shadow: 0 1px 2px rgb(15 23 42 / 0.04); }
+        .muted { color: #64748b; font-size: 0.875rem; }
+        .result-count { margin: 0 0 1rem; padding-left: 0.25rem; }
         .badge { display: inline-block; white-space: nowrap; font-size: 0.75rem; font-weight: 600; padding: 0.125rem 0.625rem; border-radius: 9999px; }
         .badge-green { background: #d1fae5; color: #065f46; }
-        .flash { background: #d1fae5; color: #065f46; border-radius: 0.5rem; padding: 0.75rem 1rem; margin-bottom: 1rem; font-size: 0.875rem; }
+        .flash { background: #d1fae5; color: #065f46; border-radius: 0.625rem; padding: 0.75rem 1rem; margin-bottom: 1rem; font-size: 0.875rem; }
         .flash-error { background: #fef2f2; border: 1px solid #fecaca; color: #991b1b; }
-        .btn { display: inline-block; border: 0; border-radius: 0.5rem; padding: 0.625rem 1rem; font-size: 0.875rem; font-weight: 600; cursor: pointer; text-decoration: none; font-family: inherit; }
-        .btn-primary { background: #111827; color: #fff; }
-        .btn-secondary { background: #f3f4f6; color: #374151; }
+        .btn { display: inline-block; border: 1px solid transparent; border-radius: 0.625rem; padding: 0.625rem 1.125rem; font-size: 0.875rem; font-weight: 600; cursor: pointer; text-decoration: none; font-family: inherit; transition: background-color 0.15s ease, box-shadow 0.15s ease; }
+        .btn-primary { background: #2563eb; color: #fff; box-shadow: 0 1px 3px rgb(37 99 235 / 0.4); }
+        .btn-primary:hover { background: #1d4ed8; }
+        .btn-primary:focus-visible { outline: 2px solid #93c5fd; outline-offset: 2px; }
+        .btn-secondary { background: #fff; color: #334155; border-color: #cbd5e1; }
+        .btn-secondary:hover { background: #f1f5f9; }
         .actions { margin-top: 1rem; display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center; }
         .field { margin-bottom: 0.875rem; }
-        .field label { display: block; font-size: 0.75rem; color: #6b7280; text-transform: uppercase; margin-bottom: 0.25rem; }
-        .field input, .field select { width: 100%; border: 1px solid #d1d5db; border-radius: 0.5rem; padding: 0.625rem 0.75rem; font: inherit; background: #fff; }
+        .field label { display: block; font-size: 0.75rem; color: #64748b; font-weight: 600; letter-spacing: 0.03em; text-transform: uppercase; margin-bottom: 0.25rem; }
+        .field input, .field select { width: 100%; border: 1px solid #cbd5e1; border-radius: 0.625rem; padding: 0.625rem 0.75rem; font: inherit; background: #fff; transition: border-color 0.15s ease, box-shadow 0.15s ease; }
+        .field input:focus, .field select:focus { outline: none; border-color: #2563eb; box-shadow: 0 0 0 3px rgb(37 99 235 / 0.15); }
         .filter-row { display: grid; grid-template-columns: 1fr; gap: 0 1rem; }
         .viewport-desktop .filter-row { grid-template-columns: 1fr 1fr 1fr; }
-        .listing-card { display: flex; gap: 1rem; }
-        .listing-card .thumb { width: 6rem; height: 6rem; object-fit: cover; border-radius: 0.5rem; border: 1px solid #e5e7eb; flex-shrink: 0; }
+        .listing-card { display: flex; gap: 1rem; transition: border-color 0.15s ease, box-shadow 0.15s ease; }
+        .listing-card:hover { border-color: #bfdbfe; box-shadow: 0 6px 16px -6px rgb(37 99 235 / 0.25); }
+        .listing-card .thumb { width: 6rem; height: 6rem; object-fit: cover; border-radius: 0.625rem; border: 1px solid #e2e8f0; flex-shrink: 0; }
         .listing-card .listing-body { flex: 1; min-width: 0; }
-        .listing-title { font-size: 1rem; margin: 0 0 0.25rem; overflow-wrap: anywhere; }
+        .listing-title { font-size: 1.0625rem; color: #0f172a; margin: 0 0 0.25rem; overflow-wrap: anywhere; }
         .listing-line { margin: 0.25rem 0; font-size: 0.875rem; overflow-wrap: anywhere; }
+        .listing-price { color: #1d4ed8; font-weight: 700; font-size: 0.9375rem; }
+        .empty-state { text-align: center; padding: 2rem 1.25rem; color: #475569; }
         .pager { display: flex; justify-content: space-between; align-items: center; gap: 0.5rem; margin: 1.5rem 0 0; }
-        .pager-link { font-size: 0.875rem; font-weight: 600; text-decoration: none; }
-        .pager-link.disabled { color: #d1d5db; }
+        .pager-link { font-size: 0.875rem; font-weight: 600; text-decoration: none; color: #1d4ed8; background: #dbeafe; padding: 0.5rem 0.875rem; border-radius: 0.625rem; transition: background-color 0.15s ease; }
+        .pager-link:hover { background: #bfdbfe; }
+        .pager-link.disabled { color: #94a3b8; background: #e9edf3; }
 
         /* Фото-плейсхолдер только для превью (в продакшене — <img> из хранилища) */
-        .thumb-placeholder { width: 6rem; height: 6rem; border-radius: 0.5rem; border: 1px solid #e5e7eb; background: repeating-linear-gradient(45deg, #f3f4f6, #f3f4f6 8px, #e5e7eb 8px, #e5e7eb 16px); flex-shrink: 0; display: flex; align-items: center; justify-content: center; color: #9ca3af; font-size: 0.6875rem; }
+        .thumb-placeholder { width: 6rem; height: 6rem; border-radius: 0.625rem; border: 1px solid #e2e8f0; background: repeating-linear-gradient(45deg, #f3f4f6, #f3f4f6 8px, #e5e7eb 8px, #e5e7eb 16px); flex-shrink: 0; display: flex; align-items: center; justify-content: center; color: #9ca3af; font-size: 0.6875rem; }
 
         /* Копия стилей components/location-picker.blade.php */
         .location-picker { position: relative; }
@@ -62,7 +75,7 @@
         .location-picker .lp-clear { position: absolute; top: 0; right: 0; border: 0; background: none; font-size: 1.25rem; line-height: 1; color: #6b7280; cursor: pointer; padding: 0.625rem 0.75rem; }
         .location-picker .lp-list { position: absolute; top: calc(100% + 0.25rem); left: 0; right: 0; z-index: 30; margin: 0; padding: 0.25rem; list-style: none; background: #fff; border: 1px solid #d1d5db; border-radius: 0.5rem; box-shadow: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1); max-height: 16rem; overflow-y: auto; }
         .location-picker .lp-option { padding: 0.5rem 0.625rem; border-radius: 0.375rem; cursor: pointer; }
-        .location-picker .lp-option.active { background: #f3f4f6; }
+        .location-picker .lp-option.active, .location-picker .lp-option:hover { background: var(--lp-active-bg, #f3f4f6); }
         .location-picker .lp-name { display: block; font-weight: 600; font-size: 0.875rem; }
         .location-picker .lp-chain { display: block; color: #6b7280; font-size: 0.8125rem; }
         /* В превью открытые списки показываются в потоке, чтобы не перекрывать соседние секции */
@@ -77,8 +90,10 @@
         <main>
             <div class="flash">Заявка отправлена поставщику. Его ответ придёт вам в WhatsApp.</div>
 
-            <h1>Каталог объявлений</h1>
-            <p class="muted" style="margin: 0 0 1rem;">Спецтехника и услуги — все опубликованные объявления.</p>
+            <header class="page-header">
+                <h1>Каталог объявлений</h1>
+                <p>Спецтехника и услуги — все опубликованные объявления.</p>
+            </header>
 
             <div class="card">
                 <div class="field">
@@ -113,7 +128,7 @@
                 </div>
             </div>
 
-            <p class="muted" style="margin: 0 0 1rem;">Найдено объявлений: 27</p>
+            <p class="muted result-count">Найдено объявлений: 27</p>
 
             <div class="card listing-card">
                 <div class="thumb-placeholder">фото</div>
@@ -121,7 +136,8 @@
                     <h2 class="listing-title">Аренда автокрана 25 т</h2>
                     <p class="listing-line muted">Техника · Автокран · XCMG</p>
                     <p class="listing-line">Кран 25 тонн со стрелой 40 м, работаем по городу и области, опытный машинист.</p>
-                    <p class="listing-line">г.Шымкент, центр · 20000 тг/ч</p>
+                    <p class="listing-line muted">г.Шымкент, центр</p>
+                    <p class="listing-line listing-price">20000 тг/ч</p>
                     <p class="listing-line muted">Поставщик: Асхат</p>
                     <div class="actions"><button class="btn btn-primary">Выбрать</button></div>
                 </div>
@@ -132,7 +148,8 @@
                     <h2 class="listing-title">Кран-манипулятор 5 т</h2>
                     <p class="listing-line muted">Техника · Автокран</p>
                     <p class="listing-line">Борт 6 метров, перевозка и разгрузка в одной машине.</p>
-                    <p class="listing-line">Каратауский район, г.Шымкент · 15000 тг/ч</p>
+                    <p class="listing-line muted">Каратауский район, г.Шымкент</p>
+                    <p class="listing-line listing-price">15000 тг/ч</p>
                     <p class="listing-line muted">Поставщик: Мағжан</p>
                     <div class="actions"><span class="badge badge-green">Заявка отправлена — ждём ответа поставщика</span></div>
                 </div>
@@ -151,8 +168,10 @@
     <h2>Каталог заказчика — mobile 375px (фильтры в одну колонку)</h2>
     <div class="viewport viewport-mobile">
         <main>
-            <h1>Каталог объявлений</h1>
-            <p class="muted" style="margin: 0 0 1rem;">Спецтехника и услуги — все опубликованные объявления.</p>
+            <header class="page-header">
+                <h1>Каталог объявлений</h1>
+                <p>Спецтехника и услуги — все опубликованные объявления.</p>
+            </header>
 
             <div class="card">
                 <div class="field">
@@ -189,14 +208,15 @@
                 </div>
             </div>
 
-            <p class="muted" style="margin: 0 0 1rem;">Найдено объявлений: 27</p>
+            <p class="muted result-count">Найдено объявлений: 27</p>
 
             <div class="card listing-card">
                 <div class="thumb-placeholder">фото</div>
                 <div class="listing-body">
                     <h2 class="listing-title">Аренда автокрана 25 т</h2>
                     <p class="listing-line muted">Техника · Автокран · XCMG</p>
-                    <p class="listing-line">г.Шымкент, центр · 20000 тг/ч</p>
+                    <p class="listing-line muted">г.Шымкент, центр</p>
+                    <p class="listing-line listing-price">20000 тг/ч</p>
                     <p class="listing-line muted">Поставщик: Асхат</p>
                     <div class="actions"><button class="btn btn-primary">Выбрать</button></div>
                 </div>
@@ -225,8 +245,8 @@
     <h2>Пустая выдача</h2>
     <div class="viewport viewport-desktop">
         <main>
-            <p class="muted" style="margin: 0 0 1rem;">Найдено объявлений: 0</p>
-            <div class="card">
+            <p class="muted result-count">Найдено объявлений: 0</p>
+            <div class="card empty-state">
                 <p style="margin: 0;">Ничего не нашлось. Измените запрос или сбросьте фильтры.</p>
             </div>
         </main>

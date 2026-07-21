@@ -26,7 +26,8 @@
     .location-picker .lp-clear { position: absolute; top: 0; right: 0; border: 0; background: none; font-size: 1.25rem; line-height: 1; color: #6b7280; cursor: pointer; padding: 0.625rem 0.75rem; }
     .location-picker .lp-list { position: absolute; top: calc(100% + 0.25rem); left: 0; right: 0; z-index: 30; margin: 0; padding: 0.25rem; list-style: none; background: #fff; border: 1px solid #d1d5db; border-radius: 0.5rem; box-shadow: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1); max-height: 16rem; overflow-y: auto; -webkit-overflow-scrolling: touch; }
     .location-picker .lp-option { padding: 0.5rem 0.625rem; border-radius: 0.375rem; cursor: pointer; }
-    .location-picker .lp-option.active { background: #f3f4f6; }
+    /* Цвет подсветки задаётся страницей через --lp-active-bg (каталог заказчика — голубой), по умолчанию — серый. */
+    .location-picker .lp-option.active, .location-picker .lp-option:hover { background: var(--lp-active-bg, #f3f4f6); }
     .location-picker .lp-name { display: block; font-weight: 600; font-size: 0.875rem; }
     .location-picker .lp-chain { display: block; color: #6b7280; font-size: 0.8125rem; }
     .location-picker .lp-empty { padding: 0.5rem 0.625rem; color: #6b7280; font-size: 0.875rem; }

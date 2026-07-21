@@ -3,6 +3,7 @@
 namespace App\Services\Bot;
 
 use App\Enums\ScenarioVariable;
+use App\Models\Contact;
 use App\Models\CustomerRequest;
 use App\Models\Listing;
 use App\Models\ScenarioRun;
@@ -38,11 +39,30 @@ class ScenarioVariableResolver
             ScenarioVariable::ListingLocation => $listing?->locationLine(),
             ScenarioVariable::ListingPrice => $listing?->price,
             ScenarioVariable::RequestQuery => $subject instanceof CustomerRequest ? $subject->query_text : null,
+            ScenarioVariable::RequestCustomer => $subject instanceof CustomerRequest ? $this->customerLine($subject->customer) : null,
             ScenarioVariable::ContactName => $run->contact->displayName(),
             ScenarioVariable::ContactPhone => '+'.ltrim($run->contact->phone, '+'),
         };
 
         return Str::limit(trim((string) $value), self::VALUE_LIMIT);
+    }
+
+    /**
+     * «Асель, +7700…» of the request's author — deliberately not the run's
+     * contact, which is the supplier receiving the notification. The name is
+     * capped within VALUE_LIMIT (minus the «...» a truncation appends) so the
+     * trailing phone — the payload the supplier calls — always survives.
+     */
+    private function customerLine(Contact $customer): string
+    {
+        $phone = '+'.ltrim($customer->phone, '+');
+        $name = trim((string) $customer->displayName());
+
+        if ($name === '') {
+            return $phone;
+        }
+
+        return Str::limit($name, self::VALUE_LIMIT - Str::length(", {$phone}") - 3).", {$phone}";
     }
 
     /**

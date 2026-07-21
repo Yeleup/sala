@@ -16,6 +16,7 @@ enum ScenarioVariable: string
     case ListingLocation = 'listing.location';
     case ListingPrice = 'listing.price';
     case RequestQuery = 'request.query';
+    case RequestCustomer = 'request.customer';
     case ContactName = 'contact.name';
     case ContactPhone = 'contact.phone';
 
@@ -27,7 +28,8 @@ enum ScenarioVariable: string
             self::ListingDescription,
             self::ListingLocation,
             self::ListingPrice => in_array($trigger, [BotScenarioTrigger::NewCustomerRequest, BotScenarioTrigger::ListingExpiring], true),
-            self::RequestQuery => $trigger === BotScenarioTrigger::NewCustomerRequest,
+            self::RequestQuery,
+            self::RequestCustomer => $trigger === BotScenarioTrigger::NewCustomerRequest,
             self::ContactName,
             self::ContactPhone => $trigger->isRunBased(),
         };
@@ -42,8 +44,9 @@ enum ScenarioVariable: string
             self::ListingLocation => 'Объявление: локация',
             self::ListingPrice => 'Объявление: цена/тариф',
             self::RequestQuery => 'Заявка: текст запроса',
-            self::ContactName => 'Контакт: имя',
-            self::ContactPhone => 'Контакт: телефон',
+            self::RequestCustomer => 'Заявка: заказчик (имя, телефон)',
+            self::ContactName => 'Получатель: имя',
+            self::ContactPhone => 'Получатель: телефон',
         };
     }
 }

@@ -64,6 +64,20 @@ class CtaLinkBuilder
         return $prefill === '' ? $url : $url.'&'.$prefill;
     }
 
+    /**
+     * The catalog's listing page: all photos and the full description of
+     * one listing. Like the catalog itself, the signature covers only the
+     * path and expiry — the appended filter state for the «back» link
+     * never breaks the link.
+     */
+    public function listingUrl(Contact $contact, Listing $listing): string
+    {
+        return $this->signed('customer.listings.show', [
+            'contact' => $contact->getKey(),
+            'listing' => $listing->getKey(),
+        ]);
+    }
+
     public function selectUrl(Contact $contact, Listing $listing): string
     {
         return $this->signed('customer.listings.select', [

@@ -57,10 +57,15 @@
     @forelse ($listings as $listing)
         <div class="card listing-card">
             @if ($listing->photos->isNotEmpty())
-                <img class="thumb" src="{{ $listing->photos->first()->url() }}" alt="Фото объявления">
+                <a class="thumb-link" href="{{ $detailUrls[$listing->id] }}">
+                    <img class="thumb" src="{{ $listing->photos->first()->url() }}" alt="Фото объявления">
+                    @if ($listing->photos->count() > 1)
+                        <span class="thumb-count">{{ $listing->photos->count() }} фото</span>
+                    @endif
+                </a>
             @endif
             <div class="listing-body">
-                <h2 class="listing-title">{{ $listing->displayName() ?: 'Объявление №'.$listing->id }}</h2>
+                <h2 class="listing-title"><a class="title-link" href="{{ $detailUrls[$listing->id] }}">{{ $listing->displayName() ?: 'Объявление №'.$listing->id }}</a></h2>
                 <p class="listing-line muted">
                     {{ collect([$listing->type->getLabel(), $listing->category?->name, $listing->brand?->name])->filter()->unique()->implode(' · ') }}
                 </p>
@@ -78,7 +83,10 @@
                 @endif
 
                 @if (in_array($listing->id, $requestedListingIds, true))
-                    <div class="actions"><span class="badge badge-green">Заявка отправлена — ждём ответа поставщика</span></div>
+                    <div class="actions">
+                        <span class="badge badge-green">Заявка отправлена — ждём ответа поставщика</span>
+                        <a class="btn btn-secondary" href="{{ $detailUrls[$listing->id] }}">Подробнее</a>
+                    </div>
                 @else
                     <form method="POST" action="{{ $selectUrls[$listing->id] }}" class="actions">
                         @csrf
@@ -89,6 +97,7 @@
                         <input type="hidden" name="sort" value="{{ $filters['sort'] }}">
                         <input type="hidden" name="page" value="{{ $listings->currentPage() }}">
                         <button type="submit" class="btn btn-primary">Выбрать</button>
+                        <a class="btn btn-secondary" href="{{ $detailUrls[$listing->id] }}">Подробнее</a>
                     </form>
                 @endif
             </div>

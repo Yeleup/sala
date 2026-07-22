@@ -37,8 +37,8 @@
         .viewport h1 { font-size: 1.25rem; margin: 0 0 0.25rem; }
         .viewport a { color: inherit; }
         .page-header { background: linear-gradient(135deg, #1e40af, #3b82f6); border-radius: 1rem; padding: 1.375rem 1.5rem; margin-bottom: 1.25rem; color: #fff; box-shadow: 0 10px 25px -12px rgb(30 64 175 / 0.5); }
-        .page-header h1 { font-size: 1.375rem; letter-spacing: -0.01em; }
-        .page-header p { margin: 0; color: #dbeafe; font-size: 0.875rem; }
+        .page-header h1 { font-size: 1.375rem; letter-spacing: -0.01em; overflow-wrap: anywhere; }
+        .page-header p { margin: 0; color: #dbeafe; font-size: 0.875rem; overflow-wrap: anywhere; }
         .card { background: #fff; border: 1px solid #e2e8f0; border-radius: 1rem; padding: 1.25rem; margin-bottom: 1rem; box-shadow: 0 1px 2px rgb(15 23 42 / 0.04); }
         .muted { color: #64748b; font-size: 0.875rem; }
         .result-count { margin: 0 0 1rem; padding-left: 0.25rem; }
@@ -61,11 +61,19 @@
         .viewport-desktop .filter-row { grid-template-columns: 1fr 1fr 1fr; }
         .listing-card { display: flex; gap: 1rem; transition: border-color 0.15s ease, box-shadow 0.15s ease; }
         .listing-card:hover { border-color: #bfdbfe; box-shadow: 0 6px 16px -6px rgb(37 99 235 / 0.25); }
-        .listing-card .thumb { width: 6rem; height: 6rem; object-fit: cover; border-radius: 0.625rem; border: 1px solid #e2e8f0; flex-shrink: 0; }
+        .listing-card .thumb { display: block; width: 6rem; height: 6rem; object-fit: cover; border-radius: 0.625rem; border: 1px solid #e2e8f0; flex-shrink: 0; }
         .listing-card .listing-body { flex: 1; min-width: 0; }
+        .thumb-link { position: relative; flex-shrink: 0; align-self: flex-start; }
+        .thumb-count { position: absolute; left: 0.25rem; bottom: 0.25rem; background: rgb(15 23 42 / 0.7); color: #fff; font-size: 0.6875rem; font-weight: 600; padding: 0.125rem 0.375rem; border-radius: 0.375rem; pointer-events: none; }
         .listing-title { font-size: 1.0625rem; color: #0f172a; margin: 0 0 0.25rem; overflow-wrap: anywhere; }
+        .title-link { text-decoration: none; }
+        .title-link:hover { color: #1d4ed8; text-decoration: underline; }
         .listing-line { margin: 0.25rem 0; font-size: 0.875rem; overflow-wrap: anywhere; }
         .listing-price { color: #1d4ed8; font-weight: 700; font-size: 0.9375rem; }
+        .gallery { display: flex; gap: 0.5rem; overflow-x: auto; scroll-snap-type: x mandatory; margin-bottom: 0.75rem; }
+        .gallery img { display: block; width: 100%; flex-shrink: 0; aspect-ratio: 4 / 3; object-fit: cover; border-radius: 0.75rem; border: 1px solid #e2e8f0; scroll-snap-align: center; }
+        .gallery-hint { margin: 0.5rem 0 0.75rem; }
+        .prewrap { white-space: pre-line; }
         .empty-state { text-align: center; padding: 2rem 1.25rem; color: #475569; }
         .pager { display: flex; justify-content: space-between; align-items: center; gap: 0.5rem; margin: 1.5rem 0 0; }
         .pager-link { font-size: 0.875rem; font-weight: 600; text-decoration: none; color: #1d4ed8; background: #dbeafe; padding: 0.5rem 0.875rem; border-radius: 0.625rem; transition: background-color 0.15s ease; }
@@ -178,27 +186,33 @@
             <p class="muted result-count">Найдено объявлений: 27</p>
 
             <div class="card listing-card">
-                <div class="thumb-placeholder">фото</div>
+                <a class="thumb-link" href="#"><div class="thumb-placeholder">фото</div><span class="thumb-count">4 фото</span></a>
                 <div class="listing-body">
-                    <h2 class="listing-title">Аренда автокрана 25 т</h2>
+                    <h2 class="listing-title"><a class="title-link" href="#">Аренда автокрана 25 т</a></h2>
                     <p class="listing-line muted">Техника · Автокран · XCMG</p>
                     <p class="listing-line">Кран 25 тонн со стрелой 40 м, работаем по городу и области, опытный машинист.</p>
                     <p class="listing-line muted">г.Шымкент, центр</p>
                     <p class="listing-line listing-price">20000 тг/ч</p>
                     <p class="listing-line muted">Поставщик: Асхат</p>
-                    <div class="actions"><button class="btn btn-primary">Выбрать</button></div>
+                    <div class="actions">
+                        <button class="btn btn-primary">Выбрать</button>
+                        <a class="btn btn-secondary" href="#">Подробнее</a>
+                    </div>
                 </div>
             </div>
 
             <div class="card listing-card">
                 <div class="listing-body">
-                    <h2 class="listing-title">Кран-манипулятор 5 т</h2>
+                    <h2 class="listing-title"><a class="title-link" href="#">Кран-манипулятор 5 т</a></h2>
                     <p class="listing-line muted">Техника · Автокран</p>
                     <p class="listing-line">Борт 6 метров, перевозка и разгрузка в одной машине.</p>
                     <p class="listing-line muted">Каратауский район, г.Шымкент</p>
                     <p class="listing-line listing-price">15000 тг/ч</p>
                     <p class="listing-line muted">Поставщик: Мағжан</p>
-                    <div class="actions"><span class="badge badge-green">Заявка отправлена — ждём ответа поставщика</span></div>
+                    <div class="actions">
+                        <span class="badge badge-green">Заявка отправлена — ждём ответа поставщика</span>
+                        <a class="btn btn-secondary" href="#">Подробнее</a>
+                    </div>
                 </div>
             </div>
 
@@ -258,14 +272,17 @@
             <p class="muted result-count">Найдено объявлений: 27</p>
 
             <div class="card listing-card">
-                <div class="thumb-placeholder">фото</div>
+                <a class="thumb-link" href="#"><div class="thumb-placeholder">фото</div><span class="thumb-count">4 фото</span></a>
                 <div class="listing-body">
-                    <h2 class="listing-title">Аренда автокрана 25 т</h2>
+                    <h2 class="listing-title"><a class="title-link" href="#">Аренда автокрана 25 т</a></h2>
                     <p class="listing-line muted">Техника · Автокран · XCMG</p>
                     <p class="listing-line muted">г.Шымкент, центр</p>
                     <p class="listing-line listing-price">20000 тг/ч</p>
                     <p class="listing-line muted">Поставщик: Асхат</p>
-                    <div class="actions"><button class="btn btn-primary">Выбрать</button></div>
+                    <div class="actions">
+                        <button class="btn btn-primary">Выбрать</button>
+                        <a class="btn btn-secondary" href="#">Подробнее</a>
+                    </div>
                 </div>
             </div>
 
@@ -295,6 +312,61 @@
             <p class="muted result-count">Найдено объявлений: 0</p>
             <div class="card empty-state">
                 <p style="margin: 0;">Ничего не нашлось. Измените запрос или сбросьте фильтры.</p>
+            </div>
+        </main>
+    </div>
+</div>
+
+<div class="preview-section">
+    <h2>Каталог заказчика — страница объявления, mobile 375px (свайп-галерея всех фото, полное описание)</h2>
+    <div class="viewport viewport-mobile">
+        <main>
+            <a class="back" href="#">&larr; Назад к каталогу</a>
+
+            <header class="page-header">
+                <h1>Аренда автокрана 25 т</h1>
+                <p>Техника · Автокран · XCMG</p>
+            </header>
+
+            <div class="card">
+                {{-- В продакшене фото листаются свайпом: по одному на экран --}}
+                <div class="gallery">
+                    <div class="thumb-placeholder" style="width: 100%; flex-shrink: 0; aspect-ratio: 4 / 3; height: auto; border-radius: 0.75rem; scroll-snap-align: center;">фото 1</div>
+                    <div class="thumb-placeholder" style="width: 100%; flex-shrink: 0; aspect-ratio: 4 / 3; height: auto; border-radius: 0.75rem; scroll-snap-align: center;">фото 2</div>
+                    <div class="thumb-placeholder" style="width: 100%; flex-shrink: 0; aspect-ratio: 4 / 3; height: auto; border-radius: 0.75rem; scroll-snap-align: center;">фото 3</div>
+                    <div class="thumb-placeholder" style="width: 100%; flex-shrink: 0; aspect-ratio: 4 / 3; height: auto; border-radius: 0.75rem; scroll-snap-align: center;">фото 4</div>
+                </div>
+                <p class="muted gallery-hint">Фотографий: 4 — листайте вбок.</p>
+
+                <p class="listing-line prewrap">Кран 25 тонн со стрелой 40 м, работаем по городу и области, опытный машинист. Выезд в день обращения, помощь с расчётом нагрузки. Оплата наличными или на счёт.</p>
+                <p class="listing-line muted">г.Шымкент, центр</p>
+                <p class="listing-line listing-price">20000 тг/ч</p>
+                <p class="listing-line muted">Поставщик: Асхат</p>
+
+                <div class="actions"><button class="btn btn-primary">Выбрать</button></div>
+            </div>
+        </main>
+    </div>
+</div>
+
+<div class="preview-section">
+    <h2>Страница объявления — без фото и с уже отправленной заявкой (бейдж вместо кнопки)</h2>
+    <div class="viewport viewport-mobile">
+        <main>
+            <a class="back" href="#">&larr; Назад к каталогу</a>
+
+            <header class="page-header">
+                <h1>Кран-манипулятор 5 т</h1>
+                <p>Техника · Автокран</p>
+            </header>
+
+            <div class="card">
+                <p class="listing-line prewrap">Борт 6 метров, перевозка и разгрузка в одной машине.</p>
+                <p class="listing-line muted">Каратауский район, г.Шымкент</p>
+                <p class="listing-line listing-price">15000 тг/ч</p>
+                <p class="listing-line muted">Поставщик: Мағжан</p>
+
+                <div class="actions"><span class="badge badge-green">Заявка отправлена — ждём ответа поставщика</span></div>
             </div>
         </main>
     </div>

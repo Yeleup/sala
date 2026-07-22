@@ -6,6 +6,7 @@ use App\Models\BotSession;
 use App\Models\Contact;
 use App\Models\CustomerRequest;
 use App\Models\Listing;
+use App\Models\ListingMedia;
 use App\Models\WhatsappTemplate;
 use App\Services\Ai\CtaLinkBuilder;
 use App\Services\DereuMessenger;
@@ -393,5 +394,86 @@ describe('«Выбрать» — заявка с веба', function () {
         // гонку двойного выбора решает дедупликация заявок.
         expect($session->refresh()->state['phase'])->toBe('choosing')
             ->and($session->state['offered'])->toBe([$listing->id]);
+    });
+});
+
+describe('страница объявления', function () {
+    test('страница недоступна без подписи', function () {
+        $contact = Contact::factory()->create();
+        $listing = Listing::factory()->published()->create();
+
+        $this->get("/customer/{$contact->id}/listings/{$listing->id}")->assertForbidden();
+    });
+
+    test('показывает все фотографии и полное описание', function () {
+        $contact = Contact::factory()->create();
+        $listing = Listing::factory()->published()->create([
+            'title' => 'Аренда автокрана 25 т',
+            'description' => 'Начало описания. '.str_repeat('Подробности работы крана. ', 10).'Самый конец описания.',
+        ]);
+        $photos = ListingMedia::factory()->count(3)->for($listing)->create();
+
+        $response = $this->get(catalogLinks()->listingUrl($contact, $listing))
+            ->assertOk()
+            ->assertSee('Аренда автокрана 25 т')
+            ->assertSee('Фотографий: 3')
+            // Каталожная карточка обрезает описание — страница показывает целиком.
+            ->assertSee('Самый конец описания.')
+            ->assertSee('Выбрать');
+
+        $photos->each(fn (ListingMedia $photo) => $response->assertSee($photo->url(), false));
+    });
+
+    test('карточка каталога ведёт на страницу объявления и показывает счётчик фото', function () {
+        $contact = Contact::factory()->create();
+        $listing = Listing::factory()->published()->create(['title' => 'Кран с тремя фото']);
+        ListingMedia::factory()->count(3)->for($listing)->create();
+
+        $this->get(catalogLinks()->catalogUrl($contact))
+            ->assertOk()
+            ->assertSee('3 фото')
+            ->assertSee('Подробнее')
+            ->assertSee("/customer/{$contact->id}/listings/{$listing->id}?", false);
+    });
+
+    test('лишние параметры фильтров не ломают подпись страницы объявления', function () {
+        $contact = Contact::factory()->create();
+        $listing = Listing::factory()->published()->create();
+
+        $this->get(catalogLinks()->listingUrl($contact, $listing).'&q=кран&page=2&fbclid=IwAR123')->assertOk();
+    });
+
+    test('подпись страницы объявления не подходит для другого объявления', function () {
+        $contact = Contact::factory()->create();
+        $listing = Listing::factory()->published()->create();
+        $other = Listing::factory()->published()->create();
+
+        $url = catalogLinks()->listingUrl($contact, $listing);
+
+        $this->get(str_replace("/listings/{$listing->id}?", "/listings/{$other->id}?", $url))->assertForbidden();
+    });
+
+    test('ушедшее из публикации объявление возвращает в каталог с пояснением', function () {
+        $contact = Contact::factory()->create();
+        $listing = Listing::factory()->archived()->create();
+
+        $this->get(catalogLinks()->listingUrl($contact, $listing))
+            ->assertRedirect()
+            ->assertSessionHas('error', fn (string $error): bool => str_contains($error, 'уже не публикуется'));
+    });
+
+    test('после отправленной заявки вместо кнопки — бейдж ожидания', function () {
+        $contact = Contact::factory()->create();
+        $listing = Listing::factory()->published()->create();
+        CustomerRequest::factory()->create([
+            'contact_id' => $contact->id,
+            'listing_id' => $listing->id,
+            'status' => CustomerRequestStatus::Pending,
+        ]);
+
+        $this->get(catalogLinks()->listingUrl($contact, $listing))
+            ->assertOk()
+            ->assertSee('Заявка отправлена — ждём ответа поставщика')
+            ->assertDontSee('>Выбрать<', false);
     });
 });

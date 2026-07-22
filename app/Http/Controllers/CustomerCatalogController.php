@@ -70,12 +70,48 @@ class CustomerCatalogController extends Controller
             'selectUrls' => collect($listings->items())->mapWithKeys(
                 fn (Listing $listing): array => [$listing->id => $this->links->selectUrl($contact, $listing)],
             ),
+            'detailUrls' => collect($listings->items())->mapWithKeys(
+                fn (Listing $listing): array => [$listing->id => $this->listingDetailUrl($contact, $listing, $filters, $listings->currentPage())],
+            ),
             'requestedListingIds' => CustomerRequest::query()
                 ->where('contact_id', $contact->id)
                 ->where('status', CustomerRequestStatus::Pending)
                 ->whereIn('listing_id', $pageIds)
                 ->pluck('listing_id')
                 ->all(),
+        ]);
+    }
+
+    /**
+     * The listing page: every photo as a swipeable gallery and the full
+     * description — the catalog card shows only the first photo and a
+     * truncated text. The «Выбрать» action here is the same select as on
+     * the card.
+     */
+    public function show(Request $request, Contact $contact, Listing $listing): View|RedirectResponse
+    {
+        // Same honest refusal as select: the listing may have left
+        // publication after the catalog page (or an old link) was rendered.
+        if (! Listing::query()->searchable()->whereKey($listing->getKey())->exists()) {
+            return redirect()->to($this->catalogReturnUrl($request, $contact))
+                ->with('error', 'Это объявление уже не публикуется. Выберите, пожалуйста, другой вариант.');
+        }
+
+        $listing->load(['supplier', 'category', 'brand', 'location', 'photos']);
+
+        return view('customer.listing-show', [
+            'listing' => $listing,
+            'backUrl' => $this->catalogReturnUrl($request, $contact),
+            'selectUrl' => $this->links->selectUrl($contact, $listing),
+            // Junk deep-link params degrade silently, so only scalars ride into the hidden fields.
+            'filterState' => collect($request->only(['q', 'location_id', 'category_id', 'sort', 'page']))
+                ->filter(fn ($value): bool => is_scalar($value))
+                ->all(),
+            'alreadyRequested' => CustomerRequest::query()
+                ->where('contact_id', $contact->id)
+                ->where('status', CustomerRequestStatus::Pending)
+                ->where('listing_id', $listing->id)
+                ->exists(),
         ]);
     }
 
@@ -195,6 +231,28 @@ class CustomerCatalogController extends Controller
         $url = $this->links->catalogUrl($contact);
 
         return $filters === '' ? $url : $url.'&'.$filters;
+    }
+
+    /**
+     * A card's link to the listing page, carrying the current filter state
+     * outside the signature so the page's «back» link restores the same
+     * catalog view.
+     *
+     * @param  array{q: string, category: Category|null, location: Location|null, sort: string}  $filters
+     */
+    protected function listingDetailUrl(Contact $contact, Listing $listing, array $filters, int $page): string
+    {
+        $state = http_build_query(array_filter([
+            'q' => $filters['q'],
+            'category_id' => $filters['category']?->id,
+            'location_id' => $filters['location']?->id,
+            'sort' => $filters['sort'],
+            'page' => $page > 1 ? $page : null,
+        ]));
+
+        $url = $this->links->listingUrl($contact, $listing);
+
+        return $state === '' ? $url : $url.'&'.$state;
     }
 
     /**

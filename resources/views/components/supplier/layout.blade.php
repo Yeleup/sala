@@ -14,8 +14,8 @@
         h1 { font-size: 1.25rem; margin: 0 0 0.25rem; }
         a { color: inherit; }
         .page-header { background: linear-gradient(135deg, #1e40af, #3b82f6); border-radius: 1rem; padding: 1.375rem 1.5rem; margin-bottom: 1.25rem; color: #fff; box-shadow: 0 10px 25px -12px rgb(30 64 175 / 0.5); }
-        .page-header h1 { font-size: 1.375rem; letter-spacing: -0.01em; }
-        .page-header p { margin: 0; color: #dbeafe; font-size: 0.875rem; }
+        .page-header h1 { font-size: 1.375rem; letter-spacing: -0.01em; overflow-wrap: anywhere; }
+        .page-header p { margin: 0; color: #dbeafe; font-size: 0.875rem; overflow-wrap: anywhere; }
         .page-header .meta h1 { margin: 0; }
         .page-header .meta + p { margin-top: 0.25rem; }
         .card { background: #fff; border: 1px solid #e2e8f0; border-radius: 1rem; padding: 1.25rem; margin-bottom: 1rem; box-shadow: 0 1px 2px rgb(15 23 42 / 0.04); }

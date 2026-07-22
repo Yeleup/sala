@@ -54,6 +54,9 @@ Route::name('customer.listings.')->group(function (): void {
     Route::get('/customer/{contact}/listings', [CustomerCatalogController::class, 'index'])
         ->middleware(ValidateSignatureExceptQuery::class)
         ->whereNumber('contact')->name('index');
+    Route::get('/customer/{contact}/listings/{listing}', [CustomerCatalogController::class, 'show'])
+        ->middleware(ValidateSignatureExceptQuery::class)
+        ->whereNumber('contact')->whereNumber('listing')->name('show');
     Route::post('/customer/{contact}/listings/{listing}/select', [CustomerCatalogController::class, 'select'])
         ->middleware('signed')
         ->whereNumber('contact')->whereNumber('listing')->name('select');

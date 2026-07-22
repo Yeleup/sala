@@ -119,9 +119,18 @@
                     <div class="upload-zone">
                         <input type="file" id="photos" name="photos[]" multiple accept="image/jpeg,image/png,image/webp" aria-describedby="upload-warning">
                         <span class="upload-icon" aria-hidden="true">+</span>
-                        <span class="upload-title">Выбрать фото</span>
+                        <div class="upload-actions">
+                            {{-- Декоративная кнопка: клик проходит сквозь неё к невидимому инпуту галереи, накрывающему зону. --}}
+                            <span class="btn btn-primary upload-choose" aria-hidden="true">Выбрать фото</span>
+                            <label class="btn btn-secondary upload-camera">
+                                Снять на камеру
+                                {{-- Без name: скрипт переносит кадры в общий выбор; при недоступном DataTransfer name ставится как запасной путь. --}}
+                                <input type="file" id="photos-camera" accept="image/jpeg,image/png,image/webp" capture="environment">
+                            </label>
+                        </div>
                         <span class="upload-hint">или перетащите файлы сюда</span>
                         <span class="upload-count" id="upload-count" role="status" hidden></span>
+                        <button type="button" class="upload-clear" id="upload-clear" hidden>очистить выбор</button>
                     </div>
                     <p class="muted" style="margin: 0.25rem 0 0;">До {{ \App\Models\Listing::MAX_PHOTOS }} фото на объявление: JPG, PNG или WebP, каждое до {{ \App\Models\ListingMedia::MAX_PHOTO_KILOBYTES / 1024 }} МБ.</p>
                     <p class="error" id="upload-warning" role="alert" hidden></p>
@@ -158,10 +167,17 @@
 
                 (function () {
                     const input = document.getElementById('photos');
+                    const camera = document.getElementById('photos-camera');
                     const count = document.getElementById('upload-count');
+                    const clear = document.getElementById('upload-clear');
                     const warning = document.getElementById('upload-warning');
                     const maxBytes = @json(\App\Models\ListingMedia::MAX_PHOTO_KILOBYTES * 1024);
                     const maxMegabytes = @json(\App\Models\ListingMedia::MAX_PHOTO_KILOBYTES / 1024);
+
+                    // Общий выбор: галерея и камера складываются сюда, чтобы можно
+                    // было снять несколько кадров подряд — file-input сам по себе
+                    // хранит только последний выбор.
+                    let selected = [];
 
                     function fileNoun(n) {
                         const mod100 = n % 100;
@@ -174,20 +190,70 @@
                         return mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14) ? 'файла' : 'файлов';
                     }
 
-                    input.addEventListener('change', function () {
-                        const files = Array.from(input.files);
+                    function render(warningText) {
+                        count.hidden = selected.length === 0;
+                        clear.hidden = selected.length === 0;
+                        count.textContent = 'Выбрано: ' + selected.length + ' ' + fileNoun(selected.length);
+                        warning.hidden = warningText === '';
+                        warning.textContent = warningText;
+                    }
 
-                        count.hidden = files.length === 0;
-                        count.textContent = 'Выбрано: ' + files.length + ' ' + fileNoun(files.length);
+                    function merge(files) {
+                        // Файл сверх лимита в выбор не попадает: иначе один такой файл
+                        // отклонил бы всё сохранение серверной валидацией — после впустую
+                        // загруженных мегабайт с телефона. Сервер остаётся страховкой.
+                        const rejected = [];
 
-                        // Подсказка до отправки формы; решает всё равно серверная валидация.
-                        // Один файл сверх лимита отклоняет сохранение целиком — формулировка не должна обещать частичный приём.
-                        const oversize = files.filter(function (file) { return file.size > maxBytes; });
-                        const names = oversize.map(function (file) { return '«' + file.name + '»'; }).join(', ');
-                        warning.hidden = oversize.length === 0;
-                        warning.textContent = oversize.length === 0 ? '' : (oversize.length === 1
-                            ? 'Файл ' + names + ' больше ' + maxMegabytes + ' МБ — выберите фото заново без него, иначе сохранение не пройдёт.'
-                            : 'Файлы ' + names + ' больше ' + maxMegabytes + ' МБ — выберите фото заново без них, иначе сохранение не пройдёт.');
+                        Array.from(files).forEach(function (file) {
+                            if (file.size > maxBytes) {
+                                rejected.push('«' + file.name + '»');
+
+                                return;
+                            }
+
+                            const known = selected.some(function (item) {
+                                return item.name === file.name && item.size === file.size && item.lastModified === file.lastModified;
+                            });
+
+                            if (!known) {
+                                selected.push(file);
+                            }
+                        });
+
+                        let warningText = rejected.length === 0 ? '' : (rejected.length === 1
+                            ? 'Файл ' + rejected[0] + ' больше ' + maxMegabytes + ' МБ и не добавлен — уменьшите его или выберите другой.'
+                            : 'Файлы ' + rejected.join(', ') + ' больше ' + maxMegabytes + ' МБ и не добавлены — уменьшите их или выберите другие.');
+
+                        try {
+                            const transfer = new DataTransfer();
+                            selected.forEach(function (file) { transfer.items.add(file); });
+                            input.files = transfer.files;
+                            camera.value = '';
+                            camera.removeAttribute('name');
+                        } catch (error) {
+                            // Без DataTransfer накопление и отсев невозможны: каждый инпут отправляет
+                            // свой последний выбор как есть, снятый кадр уходит через запасное имя.
+                            camera.files.length ? camera.setAttribute('name', 'photos[]') : camera.removeAttribute('name');
+                            selected = Array.from(input.files).concat(Array.from(camera.files));
+
+                            const oversize = selected.filter(function (file) { return file.size > maxBytes; })
+                                .map(function (file) { return '«' + file.name + '»'; });
+                            warningText = oversize.length === 0 ? '' :
+                                'Больше ' + maxMegabytes + ' МБ: ' + oversize.join(', ') + ' — уберите, иначе сохранение не пройдёт.';
+                        }
+
+                        render(warningText);
+                    }
+
+                    input.addEventListener('change', function () { merge(input.files); });
+                    camera.addEventListener('change', function () { merge(camera.files); });
+
+                    clear.addEventListener('click', function () {
+                        selected = [];
+                        input.value = '';
+                        camera.value = '';
+                        camera.removeAttribute('name');
+                        render('');
                     });
                 })();
             </script>

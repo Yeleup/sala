@@ -11,6 +11,14 @@ Route::get('/', function () {
 });
 
 /**
+ * Static design-review mockup of the storefront UI (no real data).
+ * Available only in the local environment.
+ */
+if (app()->environment('local')) {
+    Route::view('/design-preview', 'storefront-design-preview')->name('design.preview');
+}
+
+/**
  * Location dictionary autocomplete: public read-only reference data used
  * by the supplier web form.
  */

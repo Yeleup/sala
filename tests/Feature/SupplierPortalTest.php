@@ -155,6 +155,17 @@ describe('редактирование', function () {
             ->assertSee('Шымкент');
     });
 
+    test('форма предлагает выбрать фото из галереи или снять камерой', function () {
+        $listing = Listing::factory()->create();
+
+        $this->get(portalLinks()->editUrl($listing))
+            ->assertOk()
+            ->assertSee('Выбрать фото')
+            ->assertSee('Снять на камеру')
+            ->assertSee('name="photos[]"', false)
+            ->assertSee('capture="environment"', false);
+    });
+
     test('поле локации — выпадающий список с префиллом текущего места', function () {
         $listing = Listing::factory()->create([
             'location_id' => locationNamed('Каратауский район', locationNamed('г.Шымкент'))->id,

@@ -64,9 +64,17 @@
         /* Невидимый file-input растянут на всю зону: клик, клавиатура и перетаскивание работают нативно. */
         .upload-zone input[type="file"] { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; border: 0; padding: 0; cursor: pointer; }
         .upload-icon { width: 2.25rem; height: 2.25rem; border-radius: 9999px; background: #dbeafe; color: #1d4ed8; font-size: 1.375rem; line-height: 2.25rem; font-weight: 600; }
-        .upload-title { font-weight: 600; color: #1d4ed8; font-size: 0.9375rem; }
+        .upload-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 0.5rem; margin-top: 0.375rem; }
+        /* «Выбрать фото» — декорация: клик сквозь неё попадает в невидимый инпут галереи под ней. */
+        .upload-actions .upload-choose { pointer-events: none; }
+        /* Кнопка камеры перекрывает инпут галереи и ловит клики сама — внутри неё свой capture-инпут.
+           Типографика кнопки возвращается поверх стилей подписей .field label. */
+        .field .upload-camera { position: relative; z-index: 1; margin: 0; font-size: 0.875rem; font-weight: 600; letter-spacing: normal; text-transform: none; color: #334155; }
+        .upload-camera:focus-within { outline: 2px solid #93c5fd; outline-offset: 2px; }
         .upload-hint { color: #64748b; font-size: 0.8125rem; }
         .upload-count { color: #1e293b; font-size: 0.875rem; font-weight: 600; margin-top: 0.25rem; }
+        .upload-clear { position: relative; z-index: 1; border: 0; background: none; padding: 0; color: #64748b; font: inherit; font-size: 0.8125rem; text-decoration: underline; cursor: pointer; }
+        .upload-clear:hover { color: #1e293b; }
         .empty-state { text-align: center; padding: 2rem 1.25rem; color: #475569; }
     </style>
 </head>

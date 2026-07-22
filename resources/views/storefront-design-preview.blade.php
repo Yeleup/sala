@@ -103,13 +103,18 @@
         .upload-zone:focus-within { border-color: #2563eb; box-shadow: 0 0 0 3px rgb(37 99 235 / 0.15); }
         .upload-zone input[type="file"] { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; border: 0; padding: 0; cursor: pointer; }
         .upload-icon { width: 2.25rem; height: 2.25rem; border-radius: 9999px; background: #dbeafe; color: #1d4ed8; font-size: 1.375rem; line-height: 2.25rem; font-weight: 600; }
-        .upload-title { font-weight: 600; color: #1d4ed8; font-size: 0.9375rem; }
+        .upload-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 0.5rem; margin-top: 0.375rem; }
+        .upload-actions .upload-choose { pointer-events: none; }
+        .field .upload-camera { position: relative; z-index: 1; margin: 0; font-size: 0.875rem; font-weight: 600; letter-spacing: normal; text-transform: none; color: #334155; }
+        .upload-camera:focus-within { outline: 2px solid #93c5fd; outline-offset: 2px; }
         .upload-hint { color: #64748b; font-size: 0.8125rem; }
         .upload-count { color: #1e293b; font-size: 0.875rem; font-weight: 600; margin-top: 0.25rem; }
+        .upload-clear { position: relative; z-index: 1; border: 0; background: none; padding: 0; color: #64748b; font: inherit; font-size: 0.8125rem; text-decoration: underline; cursor: pointer; }
+        .upload-clear:hover { color: #1e293b; }
 
         /* Фото-плейсхолдеры только для превью (в продакшене — <img> из хранилища) */
         .thumb-placeholder { width: 6rem; height: 6rem; border-radius: 0.625rem; border: 1px solid #e2e8f0; background: repeating-linear-gradient(45deg, #f3f4f6, #f3f4f6 8px, #e5e7eb 8px, #e5e7eb 16px); flex-shrink: 0; display: flex; align-items: center; justify-content: center; color: #9ca3af; font-size: 0.6875rem; }
-        .photo-placeholder { width: 5rem; height: 5rem; border-radius: 0.625rem; border: 1px solid #e2e8f0; background: repeating-linear-gradient(45deg, #f3f4f6, #f3f4f6 8px, #e5e7eb 8px, #e5e7eb 16px); display: flex; align-items: center; justify-content: center; color: #9ca3af; font-size: 0.6875rem; }
+        .photo-placeholder { width: 6rem; height: 6rem; border-radius: 0.625rem; border: 1px solid #e2e8f0; background: repeating-linear-gradient(45deg, #f3f4f6, #f3f4f6 8px, #e5e7eb 8px, #e5e7eb 16px); display: flex; align-items: center; justify-content: center; color: #9ca3af; font-size: 0.6875rem; transition: opacity 0.15s ease, border-color 0.15s ease; }
 
         /* Копия стилей components/location-picker.blade.php */
         .location-picker { position: relative; }
@@ -447,12 +452,16 @@
                     <div class="upload-zone">
                         <input type="file" multiple>
                         <span class="upload-icon" aria-hidden="true">+</span>
-                        <span class="upload-title">Выбрать фото</span>
+                        <div class="upload-actions">
+                            <span class="btn btn-primary upload-choose">Выбрать фото</span>
+                            <label class="btn btn-secondary upload-camera">Снять на камеру<input type="file" capture="environment"></label>
+                        </div>
                         <span class="upload-hint">или перетащите файлы сюда</span>
                         <span class="upload-count">Выбрано: 3 файла</span>
+                        <button type="button" class="upload-clear">очистить выбор</button>
                     </div>
                     <p class="muted" style="margin: 0.25rem 0 0;">До 10 фото на объявление: JPG, PNG или WebP, каждое до 10 МБ.</p>
-                    <p class="error">Больше 10 МБ: «IMG_0117.jpg» — эти файлы не будут приняты.</p>
+                    <p class="error">Файл «IMG_0117.jpg» больше 10 МБ и не добавлен — уменьшите его или выберите другой.</p>
                 </div>
                 <div class="actions">
                     <button class="btn btn-primary">Сохранить и отправить на проверку</button>

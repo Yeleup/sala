@@ -10,9 +10,15 @@ use Laravel\Ai\Transcription;
  * Turns a downloaded WhatsApp voice message into text, recording the AI
  * call in the audit journal. Shared by the supplier collector and the
  * customer search (docs/modules/ai-assistant.md).
+ *
+ * Speech is expected only in Russian or Kazakh (possibly mixed within one
+ * phrase), so the provider is given a context prompt instead of a hard
+ * single-language code — the model still transcribes each word as spoken.
  */
 class VoiceTranscriber
 {
+    private const LANGUAGE_HINT = 'Речь на русском или казахском языке, возможна смесь обоих языков в одной фразе.';
+
     public function __construct(private readonly AiAudit $audit) {}
 
     /**
@@ -25,7 +31,7 @@ class VoiceTranscriber
             fn (): string => trim((string) Transcription::fromBase64(
                 base64_encode($contents),
                 $mimeType,
-            )->generate()),
+            )->withProviderOptions(['prompt' => self::LANGUAGE_HINT])->generate()),
             $links,
         );
     }

@@ -16,6 +16,7 @@ use App\Services\DereuMediaDownloader;
 use App\Services\DereuMessenger;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Storage;
+use Laravel\Ai\Prompts\TranscriptionPrompt;
 use Laravel\Ai\Transcription;
 use Mockery\MockInterface;
 
@@ -228,6 +229,10 @@ test('a voice message is stored, transcribed and used for extraction', function 
         ->and($media->type)->toBe(ListingMediaType::Audio)
         ->and($media->transcription)->toBe('Сдаю трактор в Шымкенте, десять тысяч тенге в час')
         ->and($media->listing_id)->toBe(Listing::sole()->id);
+
+    Transcription::assertGenerated(fn (TranscriptionPrompt $prompt): bool => str_contains(
+        (string) ($prompt->providerOptions['prompt'] ?? ''), 'русском или казахском',
+    ));
 
     Storage::disk('public')->assertExists($media->path);
 });

@@ -20,6 +20,7 @@ use App\Services\DereuMessenger;
 use App\Services\WhatsappTemplateLibrary;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Laravel\Ai\Embeddings;
+use Laravel\Ai\Prompts\TranscriptionPrompt;
 use Laravel\Ai\Transcription;
 use Mockery\MockInterface;
 
@@ -227,6 +228,10 @@ test('a voice message is transcribed and used as the search query', function () 
         ->and($session->refresh()->state['query'])->toBe('кран, Шымкент')
         ->and($session->state['transcript'])->toBe(['нужен кран, Шымкент'])
         ->and(AiOperation::query()->where('operation', AiOperationType::Transcription)->count())->toBe(1);
+
+    Transcription::assertGenerated(fn (TranscriptionPrompt $prompt): bool => str_contains(
+        (string) ($prompt->providerOptions['prompt'] ?? ''), 'русском или казахском',
+    ));
 });
 
 test('an undownloadable voice message asks to type the query without spending an attempt', function () {

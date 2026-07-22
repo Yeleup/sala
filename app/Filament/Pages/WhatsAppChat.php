@@ -126,6 +126,208 @@ class WhatsAppChat extends Page
     }
 
     /**
+     * What the message payload carried beyond plain text: interactive
+     * reply buttons, list rows behind the opener button, CTA links, the
+     * template body with substituted values, the machine id of the option
+     * the contact picked, and Meta errors of broken inbound payloads. The
+     * chat is an observation window — the operator must see exactly what
+     * the bot offered and what was tapped, not a bare «Интерактив» chip.
+     *
+     * @return array{chip: ?string, buttons: list<array{title: ?string, id: ?string, url: ?string}>, list_button: ?string, rows: list<array{id: ?string, title: ?string, description: ?string}>, body: ?string, reply_id: ?string, errors: list<string>}
+     */
+    public function messageExtras(ChannelMessage $message): array
+    {
+        $payload = $message->payload ?? [];
+
+        $extras = [
+            'chip' => null,
+            'buttons' => [],
+            'list_button' => null,
+            'rows' => [],
+            'body' => null,
+            'reply_id' => null,
+            'errors' => $this->payloadErrors($payload),
+        ];
+
+        return match (true) {
+            $message->type === 'interactive' && $message->direction === ChannelDirection::Outbound => $this->outboundInteractiveExtras($payload, $extras),
+            $message->type === 'interactive' => $this->inboundInteractiveExtras($payload, $extras),
+            $message->type === 'button' => [...$extras, 'chip' => '↩ Кнопка шаблона', 'reply_id' => $this->stringOrNull($payload['payload'] ?? null)],
+            $message->type === 'template' => $this->templateExtras($message, $payload, $extras),
+            default => $extras,
+        };
+    }
+
+    /**
+     * @param  array<string, mixed>  $payload
+     * @param  array{chip: ?string, buttons: list<array{title: ?string, id: ?string, url: ?string}>, list_button: ?string, rows: list<array{id: ?string, title: ?string, description: ?string}>, body: ?string, reply_id: ?string, errors: list<string>}  $extras
+     * @return array{chip: ?string, buttons: list<array{title: ?string, id: ?string, url: ?string}>, list_button: ?string, rows: list<array{id: ?string, title: ?string, description: ?string}>, body: ?string, reply_id: ?string, errors: list<string>}
+     */
+    private function outboundInteractiveExtras(array $payload, array $extras): array
+    {
+        $action = (array) ($payload['action'] ?? []);
+
+        switch ($payload['type'] ?? null) {
+            case 'button':
+                $extras['chip'] = '🔘 Кнопки';
+
+                foreach ((array) ($action['buttons'] ?? []) as $button) {
+                    $title = $this->stringOrNull($button['reply']['title'] ?? null);
+                    $id = $this->stringOrNull($button['reply']['id'] ?? null);
+
+                    if ($title !== null || $id !== null) {
+                        $extras['buttons'][] = ['title' => $title, 'id' => $id, 'url' => null];
+                    }
+                }
+                break;
+
+            case 'cta_url':
+                $extras['chip'] = '🔗 Кнопка-ссылка';
+                $parameters = (array) ($action['parameters'] ?? []);
+                $title = $this->stringOrNull($parameters['display_text'] ?? null);
+                $url = $this->stringOrNull($parameters['url'] ?? null);
+
+                if ($title !== null || $url !== null) {
+                    $extras['buttons'][] = ['title' => $title, 'id' => null, 'url' => $url];
+                }
+                break;
+
+            case 'list':
+                $extras['chip'] = '📑 Список';
+                $extras['list_button'] = $this->stringOrNull($action['button'] ?? null);
+
+                foreach ((array) ($action['sections'] ?? []) as $section) {
+                    foreach ((array) ($section['rows'] ?? []) as $row) {
+                        $title = $this->stringOrNull($row['title'] ?? null);
+                        $id = $this->stringOrNull($row['id'] ?? null);
+
+                        if ($title !== null || $id !== null) {
+                            $extras['rows'][] = [
+                                'id' => $id,
+                                'title' => $title,
+                                'description' => $this->stringOrNull($row['description'] ?? null),
+                            ];
+                        }
+                    }
+                }
+                break;
+        }
+
+        return $extras;
+    }
+
+    /**
+     * @param  array<string, mixed>  $payload
+     * @param  array{chip: ?string, buttons: list<array{title: ?string, id: ?string, url: ?string}>, list_button: ?string, rows: list<array{id: ?string, title: ?string, description: ?string}>, body: ?string, reply_id: ?string, errors: list<string>}  $extras
+     * @return array{chip: ?string, buttons: list<array{title: ?string, id: ?string, url: ?string}>, list_button: ?string, rows: list<array{id: ?string, title: ?string, description: ?string}>, body: ?string, reply_id: ?string, errors: list<string>}
+     */
+    private function inboundInteractiveExtras(array $payload, array $extras): array
+    {
+        if (isset($payload['button_reply'])) {
+            $extras['chip'] = '↩ Нажата кнопка';
+            $extras['reply_id'] = $this->stringOrNull($payload['button_reply']['id'] ?? null);
+        } elseif (isset($payload['list_reply'])) {
+            $extras['chip'] = '↩ Выбран пункт списка';
+            $extras['reply_id'] = $this->stringOrNull($payload['list_reply']['id'] ?? null);
+        }
+
+        return $extras;
+    }
+
+    /**
+     * The send payload of a template holds only parameter values and
+     * machine button payloads; the human text lives in the template row
+     * ({{n}} placeholders in body, button titles in Meta-synced components).
+     * Substituting one into the other restores what the contact saw.
+     *
+     * @param  array<string, mixed>  $payload
+     * @param  array{chip: ?string, buttons: list<array{title: ?string, id: ?string, url: ?string}>, list_button: ?string, rows: list<array{id: ?string, title: ?string, description: ?string}>, body: ?string, reply_id: ?string, errors: list<string>}  $extras
+     * @return array{chip: ?string, buttons: list<array{title: ?string, id: ?string, url: ?string}>, list_button: ?string, rows: list<array{id: ?string, title: ?string, description: ?string}>, body: ?string, reply_id: ?string, errors: list<string>}
+     */
+    private function templateExtras(ChannelMessage $message, array $payload, array $extras): array
+    {
+        $template = $message->template;
+        $components = array_values((array) ($payload['components'] ?? []));
+
+        if ($template !== null && filled($template->body)) {
+            $extras['chip'] = '📋 Шаблон «'.$template->name.'»';
+
+            $bodyComponent = array_find($components, fn (mixed $component): bool => is_array($component) && ($component['type'] ?? '') === 'body');
+
+            // Одним проходом (strtr), а не последовательными заменами:
+            // литеральный «{{n}}» внутри значения параметра не должен
+            // подставляться повторно — контакт видел его как есть.
+            $replacements = [];
+
+            foreach (array_values((array) ($bodyComponent['parameters'] ?? [])) as $index => $parameter) {
+                $replacements['{{'.($index + 1).'}}'] = $this->stringOrNull(((array) $parameter)['text'] ?? null) ?? '';
+            }
+
+            $extras['body'] = strtr($template->body, $replacements);
+        }
+
+        $titlesComponent = array_find(
+            array_values((array) ($template?->components ?? [])),
+            fn (mixed $component): bool => is_array($component) && strtoupper((string) ($component['type'] ?? '')) === 'BUTTONS',
+        );
+        $titles = array_values((array) ($titlesComponent['buttons'] ?? []));
+
+        foreach ($components as $position => $component) {
+            if (! is_array($component) || ($component['type'] ?? '') !== 'button') {
+                continue;
+            }
+
+            $index = (int) ($component['index'] ?? $position);
+            $title = $this->stringOrNull($titles[$index]['text'] ?? null);
+            $id = $this->stringOrNull($component['parameters'][0]['payload'] ?? null);
+
+            if ($title !== null || $id !== null) {
+                $extras['buttons'][] = ['title' => $title, 'id' => $id, 'url' => null];
+            }
+        }
+
+        return $extras;
+    }
+
+    /**
+     * Meta delivery errors embedded in an inbound payload — e.g. an
+     * «Unsupported webhook payload» instead of message content.
+     *
+     * @param  array<string, mixed>  $payload
+     * @return list<string>
+     */
+    private function payloadErrors(array $payload): array
+    {
+        $lines = [];
+
+        foreach ((array) ($payload['errors'] ?? []) as $error) {
+            $error = (array) $error;
+            $title = $error['title'] ?? null;
+            $details = $error['error_data']['details'] ?? $error['message'] ?? null;
+
+            $line = trim(implode(': ', array_filter(
+                [$this->stringOrNull($title), $details !== $title ? $this->stringOrNull($details) : null],
+                fn (?string $part): bool => filled($part),
+            )));
+
+            if ($line !== '') {
+                $lines[] = $line;
+            }
+        }
+
+        return $lines;
+    }
+
+    /**
+     * Payload — внешние данные произвольной формы: где ждём строку, но
+     * лежит мусор, показываем пусто, а не роняем весь тред TypeError'ом.
+     */
+    private function stringOrNull(mixed $value): ?string
+    {
+        return is_scalar($value) ? (string) $value : null;
+    }
+
+    /**
      * What the selected contact has cost so far — AI calls plus delivered
      * template messages — and the dialog's message counters.
      *

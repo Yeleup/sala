@@ -8,6 +8,7 @@ use App\Models\AiOperation;
 use App\Models\ChannelMessage;
 use App\Models\Contact;
 use App\Models\User;
+use App\Models\WhatsappTemplate;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Livewire\Livewire;
 
@@ -57,6 +58,188 @@ test('тред показывает входящие и исходящие со 
         ->assertSee('Хочу сдать экскаватор')
         ->assertSee('Какая цена?')
         ->assertSee('Не доставлено: Meta rejected: invalid recipient');
+});
+
+test('тред показывает кнопки, элементы списка и ссылку исходящих интерактивов', function () {
+    $contact = Contact::factory()->create();
+
+    ChannelMessage::factory()->for($contact)->outbound()->create([
+        'type' => 'interactive',
+        'text' => 'Что вы хотите сделать?',
+        'payload' => [
+            'type' => 'button',
+            'body' => ['text' => 'Что вы хотите сделать?'],
+            'action' => ['buttons' => [
+                ['type' => 'reply', 'reply' => ['id' => 'supplier', 'title' => 'Я поставщик']],
+                ['type' => 'reply', 'reply' => ['id' => 'customer', 'title' => 'Я заказчик']],
+            ]],
+        ],
+    ]);
+
+    ChannelMessage::factory()->for($contact)->outbound()->create([
+        'type' => 'interactive',
+        'text' => 'Уточните, какое место ваше.',
+        'payload' => [
+            'type' => 'list',
+            'body' => ['text' => 'Уточните, какое место ваше.'],
+            'action' => [
+                'button' => 'Выбрать место',
+                'sections' => [['rows' => [
+                    ['id' => 'listing_location:15531', 'title' => 'г.Астана'],
+                    ['id' => 'listing_location:2602', 'title' => 'район Астана', 'description' => 'Актобе Г.А., Актюбинская область'],
+                ]]],
+            ],
+        ],
+    ]);
+
+    ChannelMessage::factory()->for($contact)->outbound()->create([
+        'type' => 'interactive',
+        'text' => 'Откройте кабинет, чтобы исправить объявление.',
+        'payload' => [
+            'type' => 'cta_url',
+            'body' => ['text' => 'Откройте кабинет, чтобы исправить объявление.'],
+            'action' => ['name' => 'cta_url', 'parameters' => [
+                'display_text' => 'Открыть кабинет',
+                'url' => 'https://example.test/supplier/listings?signature=abc',
+            ]],
+        ],
+    ]);
+
+    Livewire::test(WhatsAppChat::class)
+        ->call('selectContact', $contact->id)
+        ->assertSee('Кнопки')
+        ->assertSee('Я поставщик')
+        ->assertSee('Я заказчик')
+        ->assertSee('Список')
+        ->assertSee('Выбрать место')
+        ->assertSee('г.Астана')
+        ->assertSee('район Астана')
+        ->assertSee('Актобе Г.А., Актюбинская область')
+        ->assertSee('Кнопка-ссылка')
+        ->assertSee('Открыть кабинет')
+        // Адрес виден текстом, но живой ссылкой не является: это персональная
+        // подписанная ссылка контакта, переход из админки не предусмотрен.
+        ->assertSee('https://example.test/supplier/listings?signature=abc')
+        ->assertDontSeeHtml('href="https://example.test/supplier/listings?signature=abc"');
+});
+
+test('тред показывает, какую кнопку или пункт списка нажал контакт, и ошибки входящего payload', function () {
+    $contact = Contact::factory()->create();
+
+    ChannelMessage::factory()->for($contact)->create([
+        'type' => 'interactive',
+        'text' => 'Я заказчик',
+        'payload' => ['type' => 'button_reply', 'button_reply' => ['id' => 'customer', 'title' => 'Я заказчик']],
+    ]);
+    ChannelMessage::factory()->for($contact)->create([
+        'type' => 'interactive',
+        'text' => 'г.Астана',
+        'payload' => ['type' => 'list_reply', 'list_reply' => ['id' => 'listing_location:15531', 'title' => 'г.Астана']],
+    ]);
+    ChannelMessage::factory()->for($contact)->create([
+        'type' => 'button',
+        'text' => 'Согласиться',
+        'payload' => ['text' => 'Согласиться', 'payload' => 'flow:token123:accept'],
+    ]);
+    ChannelMessage::factory()->for($contact)->create([
+        'type' => 'interactive',
+        'text' => null,
+        'payload' => ['errors' => [['code' => 131000, 'title' => 'Something went wrong', 'error_data' => ['details' => 'Unsupported webhook payload']]]],
+    ]);
+
+    Livewire::test(WhatsAppChat::class)
+        ->call('selectContact', $contact->id)
+        ->assertSee('Нажата кнопка')
+        ->assertSee('id: customer')
+        ->assertSee('Выбран пункт списка')
+        ->assertSee('id: listing_location:15531')
+        ->assertSee('Кнопка шаблона')
+        ->assertSee('id: flow:token123:accept')
+        ->assertSee('Something went wrong: Unsupported webhook payload');
+});
+
+test('тред показывает текст шаблона с подставленными значениями и его кнопки', function () {
+    $contact = Contact::factory()->create();
+
+    $template = WhatsappTemplate::factory()->approved()->create([
+        'name' => 'new_customer_request',
+        'body' => 'По вашему объявлению «{{1}}» новая заявка от заказчика: «{{2}}». Готовы взять заказ?',
+        'components' => [
+            ['type' => 'BODY', 'text' => 'По вашему объявлению «{{1}}» новая заявка от заказчика: «{{2}}». Готовы взять заказ?'],
+            ['type' => 'BUTTONS', 'buttons' => [
+                ['type' => 'QUICK_REPLY', 'text' => 'Согласиться'],
+                ['type' => 'QUICK_REPLY', 'text' => 'Отказаться'],
+            ]],
+        ],
+    ]);
+
+    // Литеральный «{{2}}» в значении первого параметра остаётся как есть —
+    // Meta подставляет плейсхолдеры одним проходом, без повторной замены.
+    ChannelMessage::factory()->for($contact)->template($template)->create([
+        'payload' => [
+            'name' => 'new_customer_request',
+            'language' => ['code' => 'ru'],
+            'components' => [
+                ['type' => 'body', 'parameters' => [
+                    ['type' => 'text', 'text' => 'Самосвалы {{2}}'],
+                    ['type' => 'text', 'text' => 'нужен самосвал, Астана'],
+                ]],
+                ['type' => 'button', 'sub_type' => 'quick_reply', 'index' => '0', 'parameters' => [['type' => 'payload', 'payload' => 'flow:tok:accept']]],
+                ['type' => 'button', 'sub_type' => 'quick_reply', 'index' => '1', 'parameters' => [['type' => 'payload', 'payload' => 'flow:tok:decline']]],
+            ],
+        ],
+    ]);
+
+    // Шаблон, синхронизированный без кнопочных заголовков, — машинный payload кнопки виден как есть.
+    $bare = WhatsappTemplate::factory()->approved()->create([
+        'name' => 'bare_template',
+        'body' => 'Объявление «{{1}}» скоро истечёт.',
+        'components' => [['type' => 'BODY', 'text' => 'Объявление «{{1}}» скоро истечёт.']],
+    ]);
+
+    ChannelMessage::factory()->for($contact)->template($bare)->create([
+        'payload' => [
+            'name' => 'bare_template',
+            'language' => ['code' => 'ru'],
+            'components' => [
+                ['type' => 'body', 'parameters' => [['type' => 'text', 'text' => 'Кран 25 тонн']]],
+                ['type' => 'button', 'sub_type' => 'quick_reply', 'index' => '0', 'parameters' => [['type' => 'payload', 'payload' => 'flow:tok2:renew']]],
+            ],
+        ],
+    ]);
+
+    Livewire::test(WhatsAppChat::class)
+        ->call('selectContact', $contact->id)
+        ->assertSee('Шаблон «new_customer_request»')
+        ->assertSee('По вашему объявлению «Самосвалы {{2}}» новая заявка от заказчика: «нужен самосвал, Астана». Готовы взять заказ?')
+        ->assertSee('Согласиться')
+        ->assertSee('Отказаться')
+        ->assertSee('Шаблон «bare_template»')
+        ->assertSee('Объявление «Кран 25 тонн» скоро истечёт.')
+        ->assertSee('flow:tok2:renew');
+});
+
+test('мусорный payload не роняет тред: нестроковые поля показываются пусто', function () {
+    $contact = Contact::factory()->create();
+
+    ChannelMessage::factory()->for($contact)->create([
+        'type' => 'interactive',
+        'text' => null,
+        'payload' => ['errors' => [['title' => ['nested' => 'junk']], 'not-an-array']],
+    ]);
+    ChannelMessage::factory()->for($contact)->outbound()->create([
+        'type' => 'interactive',
+        'text' => 'Мусор в кнопках',
+        'payload' => ['type' => 'button', 'action' => ['buttons' => ['garbage', ['reply' => 'тоже мусор'], ['reply' => ['title' => ['вложенный' => 'мусор']]]]]],
+    ]);
+    ChannelMessage::factory()->for($contact)->template()->create([
+        'payload' => ['name' => 'x', 'components' => ['junk', ['type' => 'button', 'parameters' => 'junk'], ['type' => 'body', 'parameters' => ['junk', ['text' => ['мусор']]]]]],
+    ]);
+
+    Livewire::test(WhatsAppChat::class)
+        ->call('selectContact', $contact->id)
+        ->assertOk()
+        ->assertSee('Мусор в кнопках');
 });
 
 test('AI-панель раскрывает операции и попытки входящего сообщения', function () {

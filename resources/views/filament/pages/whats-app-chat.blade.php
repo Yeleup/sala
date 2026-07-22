@@ -8,7 +8,7 @@
 
         .wa { display: flex; height: calc(100vh - 13rem); min-height: 28rem; border: 1px solid var(--wa-border); border-radius: .75rem; overflow: hidden; background: var(--wa-in); color: var(--wa-text); font-size: .875rem; }
 
-        .wa-side { display: flex; flex-direction: column; width: 23rem; min-width: 17rem; flex-shrink: 0; border-right: 1px solid var(--wa-border); background: var(--wa-in); }
+        .wa-side { display: flex; flex-direction: column; width: clamp(14rem, 38%, 23rem); flex-shrink: 0; border-right: 1px solid var(--wa-border); background: var(--wa-in); }
         .wa-search { padding: .55rem .75rem; border-bottom: 1px solid var(--wa-border); }
         .wa-search input { width: 100%; border: none; outline: none; box-shadow: none; background: var(--wa-panel); color: var(--wa-text); border-radius: .5rem; padding: .45rem .9rem; font-size: .8125rem; }
         .wa-search input::placeholder { color: var(--wa-muted); }
@@ -39,7 +39,10 @@
         .wa-chip-center { align-self: center; margin: .55rem 0 .3rem; background: var(--wa-in); color: var(--wa-muted); font-size: .75rem; border: none; border-radius: .5rem; padding: .3rem .8rem; box-shadow: 0 1px .5px rgb(11 20 26 / .13); }
         button.wa-chip-center { cursor: pointer; }
 
-        .wa-bubble { position: relative; align-self: flex-start; max-width: 65%; min-width: 6.5rem; background: var(--wa-in); border-radius: 7.5px; border-top-left-radius: 0; padding: .375rem .55rem .45rem .6rem; margin-top: .4rem; box-shadow: 0 1px .5px rgb(11 20 26 / .13); overflow-wrap: anywhere; }
+        {{-- flex-shrink: 0 обязателен: overflow:hidden обнуляет автоматическую
+             минимальную высоту flex-элемента, и колонка треда иначе сжимает
+             пузыри до нечитаемых полосок. --}}
+        .wa-bubble { position: relative; align-self: flex-start; flex-shrink: 0; max-width: 65%; min-width: 6.5rem; background: var(--wa-in); border-radius: 7.5px; border-top-left-radius: 0; padding: .375rem .55rem .45rem .6rem; margin-top: .4rem; box-shadow: 0 1px .5px rgb(11 20 26 / .13); overflow-wrap: anywhere; overflow: hidden; }
         .wa-bubble.is-out { align-self: flex-end; background: var(--wa-out); border-top-left-radius: 7.5px; border-top-right-radius: 0; }
         .wa-text { white-space: pre-wrap; line-height: 1.35; }
         .wa-kind { font-size: .75rem; color: var(--wa-muted); margin-bottom: .1rem; }
@@ -47,6 +50,16 @@
         .wa-ticks { letter-spacing: -.12em; font-size: .75rem; }
         .wa-ticks.is-read { color: var(--wa-read); }
         .wa-fail { color: #dc2626; font-size: .75rem; margin-top: .2rem; }
+
+        .wa-reply { font-size: .6875rem; color: var(--wa-muted); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; margin-top: .15rem; }
+        .wa-actions { margin: .4rem -.55rem -.45rem -.6rem; border-top: 1px solid rgb(134 150 160 / .28); font-size: .8125rem; }
+        .wa-actions > * + * { border-top: 1px solid rgb(134 150 160 / .28); }
+        .wa-action { display: flex; align-items: center; justify-content: center; gap: .4rem; padding: .5rem .6rem; color: #0086c3; font-weight: 500; }
+        .dark .wa-action { color: var(--wa-read); }
+        .wa-list-row { padding: .4rem .6rem .45rem; }
+        .wa-list-desc { font-size: .75rem; color: var(--wa-muted); margin-top: .05rem; }
+        .wa-url { padding: .35rem .6rem .45rem; font-size: .6875rem; color: var(--wa-muted); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; user-select: all; }
+        .dark .wa-list-desc, .dark .wa-url { color: rgb(233 237 239 / .65); }
 
         .wa-ai { margin-top: .45rem; border-top: 1px dashed rgb(11 20 26 / .16); padding-top: .35rem; font-size: .75rem; color: var(--wa-muted); }
         .dark .wa-ai { border-color: rgb(233 237 239 / .18); }
@@ -160,7 +173,8 @@
                             class="wa-bubble {{ $message->direction === \App\Enums\ChannelDirection::Outbound ? 'is-out' : '' }}"
                         >
                             @php
-                                $chip = match ($message->type) {
+                                $extras = $this->messageExtras($message);
+                                $chip = $extras['chip'] ?? match ($message->type) {
                                     'text' => null,
                                     'image' => '📷 Фото',
                                     'audio' => '🎤 Голосовое',
@@ -179,9 +193,19 @@
                                 <div class="wa-kind">{{ $chip }}</div>
                             @endif
 
-                            @if (filled($message->text))
+                            @if ($extras['body'] !== null)
+                                <div class="wa-text">{{ $extras['body'] }}</div>
+                            @elseif (filled($message->text))
                                 <div class="wa-text">{{ $message->text }}</div>
                             @endif
+
+                            @if ($extras['reply_id'] !== null)
+                                <div class="wa-reply">id: {{ $extras['reply_id'] }}</div>
+                            @endif
+
+                            @foreach ($extras['errors'] as $error)
+                                <div class="wa-fail">{{ $error }}</div>
+                            @endforeach
 
                             @if ($message->status === \App\Enums\ChannelMessageStatus::Failed && filled($message->failure_reason))
                                 <div class="wa-fail">Не доставлено: {{ $message->failure_reason }}</div>
@@ -210,6 +234,38 @@
                                     </span>
                                 @endif
                             </div>
+
+                            @if ($extras['list_button'] !== null || $extras['buttons'] !== [] || $extras['rows'] !== [])
+                                <div class="wa-actions">
+                                    @if ($extras['list_button'] !== null)
+                                        <div class="wa-action">☰ {{ $extras['list_button'] }}</div>
+                                    @endif
+
+                                    {{-- URL-кнопки — персональные подписанные ссылки контакта
+                                         (кабинет, каталог): адрес показывается текстом, живого
+                                         перехода из админки от имени контакта нет намеренно. --}}
+                                    @foreach ($extras['buttons'] as $button)
+                                        @if ($button['url'] !== null)
+                                            <div class="wa-action">🔗 {{ $button['title'] ?? 'Ссылка' }}</div>
+                                            <div class="wa-url">{{ $button['url'] }}</div>
+                                        @else
+                                            <div
+                                                class="wa-action {{ $button['title'] === null ? 'wa-mono' : '' }}"
+                                                @if ($button['id'] !== null) title="id: {{ $button['id'] }}" @endif
+                                            >↩ {{ $button['title'] ?? $button['id'] }}</div>
+                                        @endif
+                                    @endforeach
+
+                                    @foreach ($extras['rows'] as $row)
+                                        <div class="wa-list-row" @if ($row['id'] !== null) title="id: {{ $row['id'] }}" @endif>
+                                            <div>{{ $row['title'] }}</div>
+                                            @if (filled($row['description']))
+                                                <div class="wa-list-desc">{{ $row['description'] }}</div>
+                                            @endif
+                                        </div>
+                                    @endforeach
+                                </div>
+                            @endif
 
                             @if ($message->aiOperations->isNotEmpty())
                                 {{-- Состояние раскрытия живёт в Alpine: wire:poll морфит DOM и

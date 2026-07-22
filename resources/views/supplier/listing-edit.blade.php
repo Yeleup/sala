@@ -1,19 +1,28 @@
 <x-supplier.layout :title="$editable ? 'Редактирование объявления' : 'Ваше объявление'">
     <a class="back" href="{{ $indexUrl }}">&larr; Мои объявления</a>
 
-    <div class="card">
+    <header class="page-header">
         <div class="meta">
-            <h1 style="margin: 0;">{{ $editable ? 'Редактирование объявления' : 'Ваше объявление' }}</h1>
+            <h1>{{ $editable ? 'Редактирование объявления' : 'Ваше объявление' }}</h1>
             <x-supplier.status-badge :status="$listing->status" />
         </div>
+        @if ($editable)
+            <p>Проверьте данные и заполните недостающее — после сохранения объявление уйдёт на проверку модератору.</p>
+        @elseif ($listing->status === \App\Enums\ListingStatus::PendingModeration)
+            <p>Объявление на проверке у модератора — редактирование недоступно, ожидайте результата.</p>
+        @elseif ($listing->status === \App\Enums\ListingStatus::Published && $listing->expires_at)
+            <p>Опубликовано до {{ $listing->expires_at->format('d.m.Y') }}.</p>
+        @elseif ($listing->status === \App\Enums\ListingStatus::Archived)
+            <p>Объявление в архиве и не участвует в поиске. Чтобы разместить его снова, создайте новое объявление в WhatsApp.</p>
+        @endif
+    </header>
 
+    <div class="card">
         @if ($listing->status === \App\Enums\ListingStatus::Rejected && $listing->rejection_reason)
-            <p class="reason">Причина отклонения: {{ $listing->rejection_reason }}</p>
+            <p class="reason" style="margin: 0 0 1rem;">Причина отклонения: {{ $listing->rejection_reason }}</p>
         @endif
 
         @if ($editable)
-            <p class="muted" style="margin: 0.75rem 0 1rem;">Проверьте данные и заполните недостающее — после сохранения объявление уйдёт на проверку модератору.</p>
-
             <form method="POST" action="{{ $updateUrl }}" enctype="multipart/form-data">
                 @csrf
 
@@ -141,15 +150,7 @@
                 })();
             </script>
         @else
-            @if ($listing->status === \App\Enums\ListingStatus::PendingModeration)
-                <p class="muted" style="margin: 0.75rem 0 0;">Объявление на проверке у модератора — редактирование недоступно, ожидайте результата.</p>
-            @elseif ($listing->status === \App\Enums\ListingStatus::Published && $listing->expires_at)
-                <p class="muted" style="margin: 0.75rem 0 0;">Опубликовано до {{ $listing->expires_at->format('d.m.Y') }}.</p>
-            @elseif ($listing->status === \App\Enums\ListingStatus::Archived)
-                <p class="muted" style="margin: 0.75rem 0 0;">Объявление в архиве и не участвует в поиске. Чтобы разместить его снова, создайте новое объявление в WhatsApp.</p>
-            @endif
-
-            <dl style="margin: 1rem 0 0;">
+            <dl style="margin: 0;">
                 <dt>Тип</dt>
                 <dd>{{ $listing->type->getLabel() }}</dd>
                 <dt>Название</dt>

@@ -1,5 +1,8 @@
 <x-supplier.layout title="Мои объявления">
-    <h1>Мои объявления</h1>
+    <header class="page-header">
+        <h1>Мои объявления</h1>
+        <p>Все ваши объявления и их статусы.</p>
+    </header>
 
     <article class="card">
         <div class="meta">
@@ -63,8 +66,8 @@
             </div>
         </article>
     @empty
-        <div class="card">
-            <p class="muted" style="margin: 0;">У вас пока нет объявлений. Напишите нашему боту в WhatsApp, чтобы создать первое.</p>
+        <div class="card empty-state">
+            <p style="margin: 0;">У вас пока нет объявлений. Напишите нашему боту в WhatsApp, чтобы создать первое.</p>
         </div>
     @endforelse
 </x-supplier.layout>

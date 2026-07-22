@@ -3,11 +3,17 @@
     страниц. Правило проекта: любое изменение витринного UI отражается
     здесь визуально близко к продакшену.
 
-    Сейчас витрина — веб-каталог заказчика (resources/views/customer/
+    Витрина — веб-каталог заказчика (resources/views/customer/
     catalog.blade.php + components/customer/layout.blade.php): состояния
     desktop и mobile, панель фильтров, карточки с «Выбрать» и бейджем
     отправленной заявки, баннеры успеха/дубликата/ошибки, пустая выдача.
     Тема — синяя (градиентная шапка, синие кнопки и акценты).
+
+    Портал поставщика (resources/views/supplier/* +
+    components/supplier/layout.blade.php) использует тот же язык дизайна:
+    «Мои объявления» с карточкой имени и статусами, редактирование
+    отклонённого объявления (причина, форма, фото), просмотр
+    опубликованного (шапка со статусом, данные списком, снятие с публикации).
 --}}
 <!DOCTYPE html>
 <html lang="ru">
@@ -49,8 +55,8 @@
         .actions { margin-top: 1rem; display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center; }
         .field { margin-bottom: 0.875rem; }
         .field label { display: block; font-size: 0.75rem; color: #64748b; font-weight: 600; letter-spacing: 0.03em; text-transform: uppercase; margin-bottom: 0.25rem; }
-        .field input, .field select { width: 100%; border: 1px solid #cbd5e1; border-radius: 0.625rem; padding: 0.625rem 0.75rem; font: inherit; background: #fff; transition: border-color 0.15s ease, box-shadow 0.15s ease; }
-        .field input:focus, .field select:focus { outline: none; border-color: #2563eb; box-shadow: 0 0 0 3px rgb(37 99 235 / 0.15); }
+        .field input, .field select, .field textarea { width: 100%; border: 1px solid #cbd5e1; border-radius: 0.625rem; padding: 0.625rem 0.75rem; font: inherit; background: #fff; transition: border-color 0.15s ease, box-shadow 0.15s ease; }
+        .field input:not([type="checkbox"]):focus, .field select:focus, .field textarea:focus { outline: none; border-color: #2563eb; box-shadow: 0 0 0 3px rgb(37 99 235 / 0.15); }
         .filter-row { display: grid; grid-template-columns: 1fr; gap: 0 1rem; }
         .viewport-desktop .filter-row { grid-template-columns: 1fr 1fr 1fr; }
         .listing-card { display: flex; gap: 1rem; transition: border-color 0.15s ease, box-shadow 0.15s ease; }
@@ -66,8 +72,32 @@
         .pager-link:hover { background: #bfdbfe; }
         .pager-link.disabled { color: #94a3b8; background: #e9edf3; }
 
-        /* Фото-плейсхолдер только для превью (в продакшене — <img> из хранилища) */
+        /* Копия стилей components/supplier/layout.blade.php (портал поставщика) */
+        .viewport-supplier main { max-width: 32rem; }
+        .page-header .meta h1 { margin: 0; }
+        .page-header .meta + p { margin-top: 0.25rem; }
+        .meta { display: flex; justify-content: space-between; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
+        .badge-gray { background: #f1f5f9; color: #334155; }
+        .badge-amber { background: #fef3c7; color: #92400e; }
+        .badge-red { background: #fee2e2; color: #991b1b; }
+        .reason { background: #fef2f2; border: 1px solid #fecaca; color: #991b1b; border-radius: 0.625rem; padding: 0.75rem 1rem; margin: 0.75rem 0 0; font-size: 0.875rem; }
+        .btn-danger { background: #fee2e2; color: #991b1b; border-color: #fecaca; }
+        .btn-danger:hover { background: #fecaca; }
+        .btn-danger:focus-visible { outline: 2px solid #fca5a5; outline-offset: 2px; }
+        .back { display: inline-block; margin-bottom: 0.75rem; color: #64748b; font-size: 0.875rem; font-weight: 600; text-decoration: none; }
+        .back:hover { color: #1e293b; }
+        .field .error { color: #b91c1c; font-size: 0.8125rem; margin-top: 0.25rem; }
+        dt { font-size: 0.75rem; color: #64748b; font-weight: 600; letter-spacing: 0.03em; text-transform: uppercase; margin-top: 0.75rem; }
+        dt:first-child { margin-top: 0; }
+        dd { margin: 0.125rem 0 0; }
+        .photos { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.5rem; }
+        .photos img { width: 5rem; height: 5rem; object-fit: cover; border-radius: 0.625rem; border: 1px solid #e2e8f0; }
+        .field .photo-tile { display: flex; flex-direction: column; align-items: center; gap: 0.25rem; margin: 0; font-size: 0.8125rem; color: #64748b; text-transform: none; }
+        .field .photo-tile input { width: auto; }
+
+        /* Фото-плейсхолдеры только для превью (в продакшене — <img> из хранилища) */
         .thumb-placeholder { width: 6rem; height: 6rem; border-radius: 0.625rem; border: 1px solid #e2e8f0; background: repeating-linear-gradient(45deg, #f3f4f6, #f3f4f6 8px, #e5e7eb 8px, #e5e7eb 16px); flex-shrink: 0; display: flex; align-items: center; justify-content: center; color: #9ca3af; font-size: 0.6875rem; }
+        .photo-placeholder { width: 5rem; height: 5rem; border-radius: 0.625rem; border: 1px solid #e2e8f0; background: repeating-linear-gradient(45deg, #f3f4f6, #f3f4f6 8px, #e5e7eb 8px, #e5e7eb 16px); display: flex; align-items: center; justify-content: center; color: #9ca3af; font-size: 0.6875rem; }
 
         /* Копия стилей components/location-picker.blade.php */
         .location-picker { position: relative; }
@@ -248,6 +278,211 @@
             <p class="muted result-count">Найдено объявлений: 0</p>
             <div class="card empty-state">
                 <p style="margin: 0;">Ничего не нашлось. Измените запрос или сбросьте фильтры.</p>
+            </div>
+        </main>
+    </div>
+</div>
+
+<div class="preview-section">
+    <h2>Портал поставщика — «Мои объявления», mobile 375px (карточка имени, статусы, действия)</h2>
+    <div class="viewport viewport-mobile">
+        <main>
+            <div class="flash">Имя сохранено.</div>
+
+            <header class="page-header">
+                <h1>Мои объявления</h1>
+                <p>Все ваши объявления и их статусы.</p>
+            </header>
+
+            <article class="card">
+                <div class="meta">
+                    <strong>Ваше имя</strong>
+                    <span class="muted">Асхат</span>
+                </div>
+                <div style="margin-top: 0.75rem;">
+                    <div class="field" style="margin-bottom: 0.75rem;">
+                        <label>Имя</label>
+                        <input value="Асхат" placeholder="Как к вам обращаться">
+                        <p class="muted" style="margin: 0.375rem 0 0;">Имя видно во всех ваших объявлениях. Оставьте поле пустым, чтобы использовать имя из WhatsApp.</p>
+                    </div>
+                    <button class="btn btn-primary">Сохранить имя</button>
+                </div>
+            </article>
+
+            <article class="card">
+                <div class="meta">
+                    <strong>Аренда автокрана 25 т</strong>
+                    <span class="badge badge-green">Опубликовано</span>
+                </div>
+                <p class="muted" style="margin: 0.25rem 0 0;">Техника · Автокран XCMG</p>
+                <p style="margin: 0.5rem 0 0;">Кран 25 тонн со стрелой 40 м, работаем по городу и области.</p>
+                <p class="muted" style="margin: 0.5rem 0 0;">г.Шымкент, центр · 20000 тг/ч</p>
+                <p class="muted" style="margin: 0.5rem 0 0;">Опубликовано до 21.08.2026</p>
+                <div class="actions">
+                    <button class="btn btn-danger">Снять с публикации</button>
+                </div>
+            </article>
+
+            <article class="card">
+                <div class="meta">
+                    <strong>Экскаватор Hitachi</strong>
+                    <span class="badge badge-amber">На модерации</span>
+                </div>
+                <p class="muted" style="margin: 0.25rem 0 0;">Техника</p>
+                <p class="muted" style="margin: 0.5rem 0 0;">Каратауский район, г.Шымкент · 25000 тг/ч</p>
+            </article>
+
+            <article class="card">
+                <div class="meta">
+                    <strong>Без категории</strong>
+                    <span class="badge badge-gray">Черновик</span>
+                </div>
+                <p class="muted" style="margin: 0.25rem 0 0;">Техника</p>
+                <p class="muted" style="margin: 0.5rem 0 0;">Локация и цена не указаны</p>
+                <div class="actions">
+                    <a class="btn btn-primary" href="#">Редактировать</a>
+                </div>
+            </article>
+
+            <article class="card">
+                <div class="meta">
+                    <strong>Услуги манипулятора</strong>
+                    <span class="badge badge-red">Отклонено</span>
+                </div>
+                <p class="muted" style="margin: 0.25rem 0 0;">Услуги</p>
+                <p class="muted" style="margin: 0.5rem 0 0;">Локация и цена не указаны</p>
+                <p class="reason">Причина отклонения: Не указана цена — добавьте тариф.</p>
+                <div class="actions">
+                    <a class="btn btn-primary" href="#">Исправить и отправить снова</a>
+                </div>
+            </article>
+        </main>
+    </div>
+</div>
+
+<div class="preview-section">
+    <h2>Портал поставщика — редактирование отклонённого объявления (шапка со статусом, причина, форма)</h2>
+    <div class="viewport viewport-desktop viewport-supplier">
+        <main>
+            <a class="back" href="#">&larr; Мои объявления</a>
+
+            <header class="page-header">
+                <div class="meta">
+                    <h1>Редактирование объявления</h1>
+                    <span class="badge badge-red">Отклонено</span>
+                </div>
+                <p>Проверьте данные и заполните недостающее — после сохранения объявление уйдёт на проверку модератору.</p>
+            </header>
+
+            <div class="card">
+                <p class="reason" style="margin: 0 0 1rem;">Причина отклонения: Не указана цена — добавьте тариф.</p>
+
+                <div class="field">
+                    <label>Тип</label>
+                    <select><option selected>Техника</option><option>Услуги</option></select>
+                </div>
+                <div class="field">
+                    <label>Название</label>
+                    <input value="Кран-манипулятор 5 т" placeholder="Например: Аренда автокрана 25 т">
+                </div>
+                <div class="field">
+                    <label>Категория</label>
+                    <select><option>— выберите категорию —</option><option selected>Краны-манипуляторы (КМУ)</option></select>
+                    <p class="muted" style="margin: 0.25rem 0 0;">Категория должна соответствовать выбранному типу.</p>
+                </div>
+                <div class="field">
+                    <label>Марка (необязательно)</label>
+                    <select><option selected>— без марки —</option><option>КАМАЗ</option></select>
+                    <p class="muted" style="margin: 0.25rem 0 0;">Производитель техники; у услуг марки нет.</p>
+                </div>
+                <div class="field">
+                    <label>Описание</label>
+                    <textarea rows="4" placeholder="Что предлагаете, характеристики, условия">Борт 6 метров, перевозка и разгрузка в одной машине.</textarea>
+                </div>
+                <div class="field">
+                    <label>Локация</label>
+                    <div class="location-picker">
+                        <input class="lp-input" value="Каратауский район, г.Шымкент" placeholder="Начните вводить: город, район или село">
+                        <button type="button" class="lp-clear">&times;</button>
+                    </div>
+                    <p class="muted" style="margin: 0.25rem 0 0;">Выберите вариант из подсказок.</p>
+                </div>
+                <div class="field">
+                    <label>Уточнение адреса (необязательно)</label>
+                    <input placeholder="Например: центр, мкр Нурсат">
+                </div>
+                <div class="field">
+                    <label>Цена / тариф</label>
+                    <input value="" placeholder="Например: 10000 тг/ч">
+                    <p class="error">Укажите цену или тариф.</p>
+                </div>
+                <div class="field">
+                    <label>Фотографии</label>
+                    <div class="photos">
+                        <label class="photo-tile">
+                            <div class="photo-placeholder">фото</div>
+                            <span><input type="checkbox"> удалить</span>
+                        </label>
+                        <label class="photo-tile">
+                            <div class="photo-placeholder">фото</div>
+                            <span><input type="checkbox"> удалить</span>
+                        </label>
+                    </div>
+                </div>
+                <div class="field">
+                    <label>Добавить фотографии</label>
+                    <input type="file">
+                    <p class="muted" style="margin: 0.25rem 0 0;">До 10 фото на объявление: JPG, PNG или WebP, каждое до 5 МБ.</p>
+                </div>
+                <div class="actions">
+                    <button class="btn btn-primary">Сохранить и отправить на проверку</button>
+                </div>
+            </div>
+        </main>
+    </div>
+</div>
+
+<div class="preview-section">
+    <h2>Портал поставщика — просмотр опубликованного объявления (данные списком, снятие с публикации)</h2>
+    <div class="viewport viewport-desktop viewport-supplier">
+        <main>
+            <a class="back" href="#">&larr; Мои объявления</a>
+
+            <header class="page-header">
+                <div class="meta">
+                    <h1>Ваше объявление</h1>
+                    <span class="badge badge-green">Опубликовано</span>
+                </div>
+                <p>Опубликовано до 21.08.2026.</p>
+            </header>
+
+            <div class="card">
+                <dl style="margin: 0;">
+                    <dt>Тип</dt>
+                    <dd>Техника</dd>
+                    <dt>Название</dt>
+                    <dd>Аренда автокрана 25 т</dd>
+                    <dt>Категория</dt>
+                    <dd>Автокран</dd>
+                    <dt>Марка</dt>
+                    <dd>XCMG</dd>
+                    <dt>Описание</dt>
+                    <dd>Кран 25 тонн со стрелой 40 м, работаем по городу и области.</dd>
+                    <dt>Локация</dt>
+                    <dd>г.Шымкент, центр</dd>
+                    <dt>Цена / тариф</dt>
+                    <dd>20000 тг/ч</dd>
+                </dl>
+
+                <div class="actions">
+                    <button class="btn btn-danger">Снять с публикации</button>
+                </div>
+
+                <dl style="margin: 1rem 0 0;"><dt>Фотографии</dt></dl>
+                <div class="photos">
+                    <div class="photo-placeholder">фото</div>
+                    <div class="photo-placeholder">фото</div>
+                </div>
             </div>
         </main>
     </div>

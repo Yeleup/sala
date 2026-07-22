@@ -107,7 +107,7 @@
                             @foreach ($listing->photos as $photo)
                                 <label class="photo-tile">
                                     <img src="{{ $photo->url() }}" alt="Фото объявления">
-                                    <span><input type="checkbox" name="remove_photos[]" value="{{ $photo->id }}" @checked(in_array($photo->id, old('remove_photos', [])))> удалить</span>
+                                    <span class="photo-remove"><input type="checkbox" name="remove_photos[]" value="{{ $photo->id }}" @checked(in_array($photo->id, old('remove_photos', [])))> удалить</span>
                                 </label>
                             @endforeach
                         </div>
@@ -116,8 +116,15 @@
 
                 <div class="field">
                     <label for="photos">Добавить фотографии</label>
-                    <input type="file" id="photos" name="photos[]" multiple accept="image/jpeg,image/png,image/webp">
-                    <p class="muted" style="margin: 0.25rem 0 0;">До {{ \App\Models\Listing::MAX_PHOTOS }} фото на объявление: JPG, PNG или WebP, каждое до 5 МБ.</p>
+                    <div class="upload-zone">
+                        <input type="file" id="photos" name="photos[]" multiple accept="image/jpeg,image/png,image/webp" aria-describedby="upload-warning">
+                        <span class="upload-icon" aria-hidden="true">+</span>
+                        <span class="upload-title">Выбрать фото</span>
+                        <span class="upload-hint">или перетащите файлы сюда</span>
+                        <span class="upload-count" id="upload-count" role="status" hidden></span>
+                    </div>
+                    <p class="muted" style="margin: 0.25rem 0 0;">До {{ \App\Models\Listing::MAX_PHOTOS }} фото на объявление: JPG, PNG или WebP, каждое до {{ \App\Models\ListingMedia::MAX_PHOTO_KILOBYTES / 1024 }} МБ.</p>
+                    <p class="error" id="upload-warning" role="alert" hidden></p>
                     @error('photos') <p class="error">{{ $message }}</p> @enderror
                     @error('photos.*') <p class="error">{{ $message }}</p> @enderror
                 </div>
@@ -147,6 +154,41 @@
 
                     typeSelect.addEventListener('change', toggleBrandField);
                     toggleBrandField();
+                })();
+
+                (function () {
+                    const input = document.getElementById('photos');
+                    const count = document.getElementById('upload-count');
+                    const warning = document.getElementById('upload-warning');
+                    const maxBytes = @json(\App\Models\ListingMedia::MAX_PHOTO_KILOBYTES * 1024);
+                    const maxMegabytes = @json(\App\Models\ListingMedia::MAX_PHOTO_KILOBYTES / 1024);
+
+                    function fileNoun(n) {
+                        const mod100 = n % 100;
+                        const mod10 = n % 10;
+
+                        if (mod10 === 1 && mod100 !== 11) {
+                            return 'файл';
+                        }
+
+                        return mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14) ? 'файла' : 'файлов';
+                    }
+
+                    input.addEventListener('change', function () {
+                        const files = Array.from(input.files);
+
+                        count.hidden = files.length === 0;
+                        count.textContent = 'Выбрано: ' + files.length + ' ' + fileNoun(files.length);
+
+                        // Подсказка до отправки формы; решает всё равно серверная валидация.
+                        // Один файл сверх лимита отклоняет сохранение целиком — формулировка не должна обещать частичный приём.
+                        const oversize = files.filter(function (file) { return file.size > maxBytes; });
+                        const names = oversize.map(function (file) { return '«' + file.name + '»'; }).join(', ');
+                        warning.hidden = oversize.length === 0;
+                        warning.textContent = oversize.length === 0 ? '' : (oversize.length === 1
+                            ? 'Файл ' + names + ' больше ' + maxMegabytes + ' МБ — выберите фото заново без него, иначе сохранение не пройдёт.'
+                            : 'Файлы ' + names + ' больше ' + maxMegabytes + ' МБ — выберите фото заново без них, иначе сохранение не пройдёт.');
+                    });
                 })();
             </script>
         @else

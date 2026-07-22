@@ -420,6 +420,27 @@ describe('фотографии', function () {
             ->and(ListingMedia::count())->toBe(0);
     });
 
+    test('фото крупнее лимита в 10 МБ не принимается', function () {
+        $listing = Listing::factory()->create();
+
+        $response = $this->post(portalLinks()->updateUrl($listing), supplierListingPayload($listing, [
+            'photos' => [UploadedFile::fake()->image('big.jpg')->size(ListingMedia::MAX_PHOTO_KILOBYTES + 1)],
+        ]));
+
+        $response->assertSessionHasErrors(['photos.0' => 'Фото слишком большое — не более 10 МБ.']);
+        expect(ListingMedia::count())->toBe(0);
+    });
+
+    test('фото в пределах 10 МБ принимается', function () {
+        $listing = Listing::factory()->create();
+
+        $this->post(portalLinks()->updateUrl($listing), supplierListingPayload($listing, [
+            'photos' => [UploadedFile::fake()->image('large.jpg')->size(8 * 1024)],
+        ]))->assertRedirect()->assertSessionHasNoErrors();
+
+        expect($listing->photos()->count())->toBe(1);
+    });
+
     test('больше 10 фотографий у объявления быть не может', function () {
         $listing = Listing::factory()->create();
         ListingMedia::factory()->count(Listing::MAX_PHOTOS)->for($listing)->create();

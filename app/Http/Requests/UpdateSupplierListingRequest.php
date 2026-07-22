@@ -119,7 +119,7 @@ class UpdateSupplierListingRequest extends FormRequest
             'location_id.exists' => 'Выберите локацию из подсказок.',
             'photos.*.image' => 'Файл «:attribute» не является изображением.',
             'photos.*.mimes' => 'Фото принимаются в форматах JPG, PNG или WebP.',
-            'photos.*.max' => 'Фото слишком большое — не более 5 МБ.',
+            'photos.*.max' => 'Фото слишком большое — не более '.(ListingMedia::MAX_PHOTO_KILOBYTES / 1024).' МБ.',
         ];
     }
 

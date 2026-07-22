@@ -90,10 +90,22 @@
         dt { font-size: 0.75rem; color: #64748b; font-weight: 600; letter-spacing: 0.03em; text-transform: uppercase; margin-top: 0.75rem; }
         dt:first-child { margin-top: 0; }
         dd { margin: 0.125rem 0 0; }
-        .photos { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.5rem; }
-        .photos img { width: 5rem; height: 5rem; object-fit: cover; border-radius: 0.625rem; border: 1px solid #e2e8f0; }
-        .field .photo-tile { display: flex; flex-direction: column; align-items: center; gap: 0.25rem; margin: 0; font-size: 0.8125rem; color: #64748b; text-transform: none; }
-        .field .photo-tile input { width: auto; }
+        .photos { display: flex; flex-wrap: wrap; gap: 0.625rem; margin-top: 0.5rem; }
+        .photos img { width: 6rem; height: 6rem; object-fit: cover; border-radius: 0.625rem; border: 1px solid #e2e8f0; }
+        .field .photo-tile { display: flex; flex-direction: column; align-items: center; gap: 0.375rem; margin: 0; font-size: 0.8125rem; font-weight: 400; letter-spacing: normal; color: #64748b; text-transform: none; cursor: pointer; }
+        .field .photo-tile input { width: auto; accent-color: #dc2626; }
+        .photo-tile img { transition: opacity 0.15s ease, border-color 0.15s ease; }
+        .photo-remove { display: inline-flex; align-items: center; gap: 0.25rem; }
+        .field .photo-tile:has(input:checked) img, .field .photo-tile:has(input:checked) .photo-placeholder { opacity: 0.4; border-color: #fca5a5; }
+        .field .photo-tile:has(input:checked) .photo-remove { color: #b91c1c; font-weight: 600; }
+        .upload-zone { position: relative; display: flex; flex-direction: column; align-items: center; gap: 0.25rem; padding: 1.375rem 1rem; border: 2px dashed #cbd5e1; border-radius: 0.625rem; background: #f8fafc; text-align: center; transition: border-color 0.15s ease, background-color 0.15s ease; }
+        .upload-zone:hover { border-color: #93c5fd; background: #eff6ff; }
+        .upload-zone:focus-within { border-color: #2563eb; box-shadow: 0 0 0 3px rgb(37 99 235 / 0.15); }
+        .upload-zone input[type="file"] { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; border: 0; padding: 0; cursor: pointer; }
+        .upload-icon { width: 2.25rem; height: 2.25rem; border-radius: 9999px; background: #dbeafe; color: #1d4ed8; font-size: 1.375rem; line-height: 2.25rem; font-weight: 600; }
+        .upload-title { font-weight: 600; color: #1d4ed8; font-size: 0.9375rem; }
+        .upload-hint { color: #64748b; font-size: 0.8125rem; }
+        .upload-count { color: #1e293b; font-size: 0.875rem; font-weight: 600; margin-top: 0.25rem; }
 
         /* Фото-плейсхолдеры только для превью (в продакшене — <img> из хранилища) */
         .thumb-placeholder { width: 6rem; height: 6rem; border-radius: 0.625rem; border: 1px solid #e2e8f0; background: repeating-linear-gradient(45deg, #f3f4f6, #f3f4f6 8px, #e5e7eb 8px, #e5e7eb 16px); flex-shrink: 0; display: flex; align-items: center; justify-content: center; color: #9ca3af; font-size: 0.6875rem; }
@@ -421,18 +433,26 @@
                     <div class="photos">
                         <label class="photo-tile">
                             <div class="photo-placeholder">фото</div>
-                            <span><input type="checkbox"> удалить</span>
+                            <span class="photo-remove"><input type="checkbox"> удалить</span>
                         </label>
+                        {{-- Отмеченное к удалению фото: гаснет и краснеет --}}
                         <label class="photo-tile">
                             <div class="photo-placeholder">фото</div>
-                            <span><input type="checkbox"> удалить</span>
+                            <span class="photo-remove"><input type="checkbox" checked> удалить</span>
                         </label>
                     </div>
                 </div>
                 <div class="field">
                     <label>Добавить фотографии</label>
-                    <input type="file">
-                    <p class="muted" style="margin: 0.25rem 0 0;">До 10 фото на объявление: JPG, PNG или WebP, каждое до 5 МБ.</p>
+                    <div class="upload-zone">
+                        <input type="file" multiple>
+                        <span class="upload-icon" aria-hidden="true">+</span>
+                        <span class="upload-title">Выбрать фото</span>
+                        <span class="upload-hint">или перетащите файлы сюда</span>
+                        <span class="upload-count">Выбрано: 3 файла</span>
+                    </div>
+                    <p class="muted" style="margin: 0.25rem 0 0;">До 10 фото на объявление: JPG, PNG или WebP, каждое до 10 МБ.</p>
+                    <p class="error">Больше 10 МБ: «IMG_0117.jpg» — эти файлы не будут приняты.</p>
                 </div>
                 <div class="actions">
                     <button class="btn btn-primary">Сохранить и отправить на проверку</button>

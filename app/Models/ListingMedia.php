@@ -25,7 +25,7 @@ class ListingMedia extends Model
      * Upload size cap for a single photo, in kilobytes (supplier cabinet
      * and admin form).
      */
-    public const int MAX_PHOTO_KILOBYTES = 5120;
+    public const int MAX_PHOTO_KILOBYTES = 10240;
 
     protected $attributes = [
         'disk' => 'public',

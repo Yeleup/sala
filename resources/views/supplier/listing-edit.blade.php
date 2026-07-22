@@ -173,6 +173,9 @@
                     const warning = document.getElementById('upload-warning');
                     const maxBytes = @json(\App\Models\ListingMedia::MAX_PHOTO_KILOBYTES * 1024);
                     const maxMegabytes = @json(\App\Models\ListingMedia::MAX_PHOTO_KILOBYTES / 1024);
+                    const maxPhotos = @json(\App\Models\Listing::MAX_PHOTOS);
+                    const acceptedTypes = ['image/jpeg', 'image/png', 'image/webp'];
+                    const removeBoxes = Array.from(document.querySelectorAll('.photo-tile input[type="checkbox"]'));
 
                     // Общий выбор: галерея и камера складываются сюда, чтобы можно
                     // было снять несколько кадров подряд — file-input сам по себе
@@ -198,15 +201,34 @@
                         warning.textContent = warningText;
                     }
 
+                    // Сколько новых фото ещё поместится: лимит минус существующие,
+                    // не отмеченные к удалению.
+                    function capacity() {
+                        const kept = removeBoxes.filter(function (box) { return !box.checked; }).length;
+
+                        return Math.max(0, maxPhotos - kept);
+                    }
+
                     function merge(files) {
-                        // Файл сверх лимита в выбор не попадает: иначе один такой файл
-                        // отклонил бы всё сохранение серверной валидацией — после впустую
-                        // загруженных мегабайт с телефона. Сервер остаётся страховкой.
-                        const rejected = [];
+                        // Файл, который сервер всё равно отклонит (сверх лимита размера,
+                        // не изображение, сверх потолка в 10 фото), в выбор не попадает:
+                        // иначе один такой файл отклонил бы всё сохранение серверной
+                        // валидацией — после впустую загруженных мегабайт с телефона.
+                        // Сервер остаётся страховкой.
+                        const tooBig = [];
+                        const wrongType = [];
+                        const overLimit = [];
 
                         Array.from(files).forEach(function (file) {
+                            // Пустой type не бракуем: содержимое проверит сервер.
+                            if (file.type !== '' && acceptedTypes.indexOf(file.type) === -1) {
+                                wrongType.push('«' + file.name + '»');
+
+                                return;
+                            }
+
                             if (file.size > maxBytes) {
-                                rejected.push('«' + file.name + '»');
+                                tooBig.push('«' + file.name + '»');
 
                                 return;
                             }
@@ -215,14 +237,40 @@
                                 return item.name === file.name && item.size === file.size && item.lastModified === file.lastModified;
                             });
 
-                            if (!known) {
-                                selected.push(file);
+                            if (known) {
+                                return;
                             }
+
+                            if (selected.length >= capacity()) {
+                                overLimit.push('«' + file.name + '»');
+
+                                return;
+                            }
+
+                            selected.push(file);
                         });
 
-                        let warningText = rejected.length === 0 ? '' : (rejected.length === 1
-                            ? 'Файл ' + rejected[0] + ' больше ' + maxMegabytes + ' МБ и не добавлен — уменьшите его или выберите другой.'
-                            : 'Файлы ' + rejected.join(', ') + ' больше ' + maxMegabytes + ' МБ и не добавлены — уменьшите их или выберите другие.');
+                        const parts = [];
+
+                        if (tooBig.length > 0) {
+                            parts.push(tooBig.length === 1
+                                ? 'Файл ' + tooBig[0] + ' больше ' + maxMegabytes + ' МБ и не добавлен — уменьшите его или выберите другой.'
+                                : 'Файлы ' + tooBig.join(', ') + ' больше ' + maxMegabytes + ' МБ и не добавлены — уменьшите их или выберите другие.');
+                        }
+
+                        if (wrongType.length > 0) {
+                            parts.push((wrongType.length === 1
+                                ? 'Файл ' + wrongType[0] + ' не добавлен'
+                                : 'Файлы ' + wrongType.join(', ') + ' не добавлены') + ' — подходят только JPG, PNG и WebP.');
+                        }
+
+                        if (overLimit.length > 0) {
+                            parts.push('У объявления может быть не более ' + maxPhotos + ' фотографий — ' + (overLimit.length === 1
+                                ? 'файл ' + overLimit[0] + ' не добавлен.'
+                                : 'файлы ' + overLimit.join(', ') + ' не добавлены.'));
+                        }
+
+                        let warningText = parts.join(' ');
 
                         try {
                             const transfer = new DataTransfer();
@@ -247,6 +295,25 @@
 
                     input.addEventListener('change', function () { merge(input.files); });
                     camera.addEventListener('change', function () { merge(camera.files); });
+
+                    // Кнопки поверх невидимого инпута перехватывают и перетаскивание —
+                    // без обработчиков дроп на них открыл бы файл вместо страницы формы.
+                    const zone = document.querySelector('.upload-zone');
+                    zone.addEventListener('dragover', function (event) { event.preventDefault(); });
+                    zone.addEventListener('drop', function (event) {
+                        event.preventDefault();
+                        merge(event.dataTransfer.files);
+                    });
+
+                    // Снятая отметка «удалить» сжимает свободное место — набранный
+                    // выбор может перестать помещаться в лимит.
+                    removeBoxes.forEach(function (box) {
+                        box.addEventListener('change', function () {
+                            render(selected.length > capacity()
+                                ? 'Выбрано больше, чем допускает лимит в ' + maxPhotos + ' фотографий — очистите выбор или отметьте лишние фото к удалению.'
+                                : '');
+                        });
+                    });
 
                     clear.addEventListener('click', function () {
                         selected = [];

@@ -595,6 +595,88 @@ test('picking a location from the list resolves it and continues to confirmation
         ->and(Listing::sole()->location_id)->toBe($picked->id);
 });
 
+test('a picked location survives later messages without re-asking the list', function () {
+    locationNamed('Абайский район', locationNamed('область Абай'));
+    $picked = locationNamed('Абайский район', locationNamed('г.Шымкент'));
+
+    // Оба извлечения возвращают всё то же одноимённое место: поля
+    // пересобираются с нуля на каждом сообщении, и без удержания выбора
+    // ответ про цену снова получил бы список одноимённых мест.
+    ListingExtractionAgent::fake([
+        fullExtraction(['location' => 'Абайский район', 'price' => null, 'clarifying_question' => 'Какая цена?']),
+        fullExtraction(['location' => 'Абайский район']),
+    ]);
+    $session = collectorSession();
+
+    $messenger = fakeCollectorMessenger();
+    $messenger->shouldReceive('sendList')->once();
+    $messenger->shouldReceive('sendText')->once()
+        ->withArgs(fn (Contact $to, string $text) => $text === 'Какая цена?');
+    $messenger->shouldReceive('sendButtons')->once()
+        ->withArgs(fn (Contact $to, string $text) => str_contains($text, 'Всё верно?'));
+
+    $collector = app(SupplierListingCollector::class);
+    $collector->resume($session, supplierAiNode(), new InboundMessage(text: 'Трактор, Абайский район'));
+    $collector->resume($session->fresh(), supplierAiNode(), new InboundMessage(replyId: 'listing_location:'.$picked->id));
+    $outcome = $collector->resume($session->fresh(), supplierAiNode(), new InboundMessage(text: '10000 тг/час'));
+
+    expect($outcome)->toBe(AiOutcome::InProgress)
+        ->and($session->fresh()->state['phase'])->toBe('confirming')
+        ->and(Listing::sole()->location_id)->toBe($picked->id);
+});
+
+test('naming a different place after a pick rebinds instead of keeping the pick', function () {
+    locationNamed('Абайский район', locationNamed('область Абай'));
+    $picked = locationNamed('Абайский район', locationNamed('г.Шымкент'));
+    $karaganda = locationNamed('г.Караганда');
+
+    ListingExtractionAgent::fake([
+        fullExtraction(['location' => 'Абайский район', 'price' => null, 'clarifying_question' => 'Какая цена?']),
+        fullExtraction(['location' => 'Караганда']),
+    ]);
+    $session = collectorSession();
+
+    $messenger = fakeCollectorMessenger();
+    $messenger->shouldReceive('sendList')->once();
+    $messenger->shouldReceive('sendText')->once();
+    $messenger->shouldReceive('sendButtons')->once();
+
+    $collector = app(SupplierListingCollector::class);
+    $collector->resume($session, supplierAiNode(), new InboundMessage(text: 'Трактор, Абайский район'));
+    $collector->resume($session->fresh(), supplierAiNode(), new InboundMessage(replyId: 'listing_location:'.$picked->id));
+    $outcome = $collector->resume($session->fresh(), supplierAiNode(), new InboundMessage(text: 'Вообще-то в Караганде, 10000 тг/час'));
+
+    expect($outcome)->toBe(AiOutcome::InProgress)
+        ->and($session->fresh()->state['phase'])->toBe('confirming')
+        ->and(Listing::sole()->location_id)->toBe($karaganda->id);
+});
+
+test('correcting to a same-named place after a pick reopens the list', function () {
+    locationNamed('Абайский район', locationNamed('область Абай'));
+    $picked = locationNamed('Абайский район', locationNamed('г.Шымкент'));
+
+    // «Абайская г.а.» после выбора «Абайского района» — одноимённое место
+    // с тем же поисковым ключом: правка названия должна заново открыть
+    // список, а не молча удержать прежний выбор.
+    ListingExtractionAgent::fake([
+        fullExtraction(['location' => 'Абайский район', 'price' => null, 'clarifying_question' => 'Какая цена?']),
+        fullExtraction(['location' => 'Абайская г.а.']),
+    ]);
+    $session = collectorSession();
+
+    $messenger = fakeCollectorMessenger();
+    $messenger->shouldReceive('sendList')->twice();
+    $messenger->shouldReceive('sendText')->once();
+
+    $collector = app(SupplierListingCollector::class);
+    $collector->resume($session, supplierAiNode(), new InboundMessage(text: 'Трактор, Абайский район'));
+    $collector->resume($session->fresh(), supplierAiNode(), new InboundMessage(replyId: 'listing_location:'.$picked->id));
+    $outcome = $collector->resume($session->fresh(), supplierAiNode(), new InboundMessage(text: 'Точнее — Абайская г.а., 10000 тг/час'));
+
+    expect($outcome)->toBe(AiOutcome::InProgress)
+        ->and($session->fresh()->state['phase'])->toBe('locating');
+});
+
 test('too many namesakes for a list are cut to their biggest disputed level', function () {
     // Продакшен-форма «Абайского района»: 3 района (у одного внутри
     // одноимённая г.а.) и 9 одноимённых с.о. — всего больше лимита

@@ -81,6 +81,8 @@ class SupplierListingCollector
             'fields' => [],
             'draft_id' => null,
             'listing_type' => $node['listing_type'] ?? null,
+            'picked_location_id' => null,
+            'picked_location_wording' => null,
         ];
         $session->save();
 
@@ -200,6 +202,12 @@ class SupplierListingCollector
         $picked = $this->matchLocationChoice($candidates, $message);
 
         if ($picked !== null) {
+            // The wording that produced this list is captured before the
+            // node name overwrites it: the pick holds on later turns only
+            // while the extractor keeps naming the place the same way.
+            $state['picked_location_id'] = $picked->id;
+            $state['picked_location_wording'] = $this->locationWording((string) ($state['fields']['location'] ?? ''));
+
             $state['fields']['location_id'] = $picked->id;
             $state['fields']['location'] = $picked->name;
             $state['fields']['location_candidates'] = [];
@@ -434,19 +442,27 @@ class SupplierListingCollector
             ? null
             : $this->canonicalBrand($fields['brand'] ?? null, $brands)?->name;
 
-        return $this->resolveLocation($fields);
+        return $this->resolveLocation($fields, $state);
     }
 
     /**
      * The KATO dictionary is the only source of truth for the location:
      * the extracted wording either resolves to exactly one node, or keeps
      * a short candidate list for the supplier to pick from, or stays
-     * unresolved and gets asked again.
+     * unresolved and gets asked again. A place the supplier already picked
+     * from that list holds across re-extractions (the fields are rebuilt
+     * from scratch each turn) — the same list is never asked twice,
+     * mirroring the customer search. The pick holds only while the
+     * extractor keeps naming the place the same way: same-named places
+     * share a search key («Абайская г.а.» resolves into the same candidate
+     * set as «Абайский район»), so a changed wording is a correction and
+     * reopens the list instead of silently keeping the old pick.
      *
      * @param  array<string, mixed>  $fields
+     * @param  array<string, mixed>  $state
      * @return array<string, mixed>
      */
-    private function resolveLocation(array $fields): array
+    private function resolveLocation(array $fields, array $state): array
     {
         $fields['location_id'] = null;
         $fields['location_candidates'] = [];
@@ -466,9 +482,20 @@ class SupplierListingCollector
             $fields['location_overflow'] = $candidates->count() > LocationResolver::MAX_CANDIDATES;
         }
 
+        // The supplier already picked one of these same-named places from
+        // the list earlier in the dialog: the pick wins over the ambiguity.
+        $picked = $candidates->count() > 1
+                && $this->locationWording((string) $fields['location']) === ($state['picked_location_wording'] ?? null)
+            ? $candidates->firstWhere('id', $state['picked_location_id'] ?? null)
+            : null;
+
         if ($candidates->count() === 1) {
             $fields['location_id'] = $candidates->first()->id;
             $fields['location'] = $candidates->first()->name;
+        } elseif ($picked !== null) {
+            $fields['location_id'] = $picked->id;
+            $fields['location'] = $picked->name;
+            $fields['location_overflow'] = false;
         } elseif ($candidates->count() > 1 && $candidates->count() <= LocationResolver::MAX_CANDIDATES) {
             $fields['location_candidates'] = $candidates->pluck('id')->all();
         }
@@ -701,6 +728,16 @@ class SupplierListingCollector
     }
 
     /**
+     * The extracted location wording normalized for comparing turns: the
+     * pick from the candidates list holds only while the extractor keeps
+     * naming the place this same way.
+     */
+    private function locationWording(string $location): string
+    {
+        return mb_strtolower(trim($location));
+    }
+
+    /**
      * Restore state defaults so a mid-dialog code change or a missing row
      * cannot crash the collector.
      *
@@ -716,6 +753,8 @@ class SupplierListingCollector
             'fields' => [],
             'draft_id' => null,
             'listing_type' => $node['listing_type'] ?? null,
+            'picked_location_id' => null,
+            'picked_location_wording' => null,
         ], $session->state ?? []);
     }
 

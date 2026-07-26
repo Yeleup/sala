@@ -36,7 +36,6 @@ return [
         'connect' => [
             'url' => env('DEREU_CONNECT_URL', 'https://connect.dereu.io/connect'),
             'signing_secret' => env('DEREU_CONNECT_SECRET'),
-            'key_prefix' => env('DEREU_CONNECT_PREFIX'),
         ],
     ],
 

@@ -26,7 +26,7 @@ class AppServiceProvider extends ServiceProvider
         $this->app->singleton(DereuConnect::class, function (): DereuConnect {
             return new DereuConnect(
                 signingSecret: (string) config('services.dereu.connect.signing_secret'),
-                keyPrefix: (string) config('services.dereu.connect.key_prefix'),
+                keyPrefix: DereuConnect::keyPrefixFromPlatformKey(config('services.dereu.platform_key')),
                 connectUrl: (string) config('services.dereu.connect.url'),
             );
         });

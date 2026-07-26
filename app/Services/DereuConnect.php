@@ -27,6 +27,28 @@ class DereuConnect
     }
 
     /**
+     * Derive the key prefix from a platform key of the form `plat_<prefix>.<secret>`.
+     *
+     * Dereu resolves the partner's connect secret by this prefix, so it is not
+     * stored separately. Returns an empty string for a blank or malformed key,
+     * which keeps isConfigured() honest.
+     */
+    public static function keyPrefixFromPlatformKey(?string $platformKey): string
+    {
+        if (blank($platformKey) || ! str_starts_with($platformKey, 'plat_')) {
+            return '';
+        }
+
+        $rest = substr($platformKey, strlen('plat_'));
+
+        if (! str_contains($rest, '.')) {
+            return '';
+        }
+
+        return explode('.', $rest, 2)[0];
+    }
+
+    /**
      * Build the signed URL of the hosted connect page for a browser redirect.
      *
      * The nonce must be stored by the caller and consumed as one-time when
@@ -74,7 +96,7 @@ class DereuConnect
      * Returns null when the signature or payload is invalid — treat as a
      * refusal. The caller must additionally consume the nonce as one-time.
      *
-     * @return array{dereu_company_id: string, phone_number_id: string, waba_id: string, status: string, nonce: string}|null
+     * @return array{dereu_company_id: string, phone_number_id: string, waba_id: string, status: string, nonce: string, transferred?: bool}|null
      */
     public function verifyResult(string $result, string $signature): ?array
     {
@@ -102,7 +124,7 @@ class DereuConnect
             }
         }
 
-        /** @var array{dereu_company_id: string, phone_number_id: string, waba_id: string, status: string, nonce: string} $data */
+        /** @var array{dereu_company_id: string, phone_number_id: string, waba_id: string, status: string, nonce: string, transferred?: bool} $data */
         return $data;
     }
 
@@ -134,7 +156,7 @@ class DereuConnect
     {
         if (! $this->isConfigured()) {
             throw new RuntimeException(
-                'Dereu Hosted Embedded Signup is not configured (DEREU_CONNECT_SECRET, DEREU_CONNECT_PREFIX).',
+                'Dereu Hosted Embedded Signup is not configured (DEREU_CONNECT_SECRET, DEREU_PLATFORM_KEY).',
             );
         }
     }

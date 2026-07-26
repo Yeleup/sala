@@ -11,7 +11,7 @@ function dereuConnectService(): DereuConnect
 {
     return new DereuConnect(
         signingSecret: 'consec_test_secret',
-        keyPrefix: 'plat_ab12cd',
+        keyPrefix: 'ab12cd',
         connectUrl: 'https://connect.dereu.test/connect',
     );
 }
@@ -31,7 +31,7 @@ test('connectUrl builds a payload the connect page can verify', function () {
     parse_str($query, $params);
 
     expect($base)->toBe('https://connect.dereu.test/connect')
-        ->and($params['p'])->toBe('plat_ab12cd')
+        ->and($params['p'])->toBe('ab12cd')
         ->and($params['sig'])->toBe(DereuConnect::sign($params['d'], 'consec_test_secret'));
 
     $payload = json_decode((string) DereuConnect::base64UrlDecode($params['d']), true);
@@ -137,6 +137,19 @@ test('verifyResult rejects results with missing or non-string fields', function 
 })->with([
     'missing nonce' => [['dereu_company_id' => 'co_1', 'phone_number_id' => '1', 'waba_id' => '2', 'status' => 'connected']],
     'non-string field' => [['dereu_company_id' => 'co_1', 'phone_number_id' => 1, 'waba_id' => '2', 'status' => 'connected', 'nonce' => 'n']],
+]);
+
+test('keyPrefixFromPlatformKey derives the prefix from a platform key', function () {
+    expect(DereuConnect::keyPrefixFromPlatformKey('plat_uHshll27nJQt.NMQ8secret'))->toBe('uHshll27nJQt');
+});
+
+test('keyPrefixFromPlatformKey returns an empty string for malformed keys', function (?string $key) {
+    expect(DereuConnect::keyPrefixFromPlatformKey($key))->toBe('');
+})->with([
+    'null' => [null],
+    'blank' => [''],
+    'no plat_ prefix' => ['dereu_abc.def'],
+    'no dot separator' => ['plat_abcdef'],
 ]);
 
 test('an unconfigured service reports itself and refuses to sign', function () {

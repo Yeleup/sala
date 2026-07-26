@@ -26,7 +26,6 @@ beforeEach(function () {
         'connect' => [
             'url' => 'https://connect.dereu.test/connect',
             'signing_secret' => 'consec_test_secret',
-            'key_prefix' => 'plat_ab12cd',
         ],
     ]);
 
@@ -161,6 +160,24 @@ test('a valid OUT redirect stores the company and re-issues its api key', functi
     });
 
     expect(collect(session('filament.notifications'))->pluck('title'))->toContain('WhatsApp подключён');
+});
+
+test('an OUT redirect marked as transferred connects and reports the number move', function () {
+    Http::fake([
+        'dereu.test/api/v1/platform/companies/org_test/api-key/reissue' => Http::response(['api_key' => 'dereu_new_key']),
+    ]);
+    Cache::put('dereu:connect-nonce:test-nonce', true, 600);
+    [$result, $signature] = signedDereuConnectResult(['transferred' => true]);
+
+    $this->get(WhatsAppSettings::getUrl(['result' => $result, 'sig' => $signature]))
+        ->assertRedirect(WhatsAppSettings::getUrl());
+
+    expect(DereuCompany::sole()->status)->toBe(DereuCompanyStatus::Connected);
+
+    $notifications = collect(session('filament.notifications'));
+    expect($notifications->pluck('title'))->toContain('WhatsApp подключён')
+        ->and($notifications->pluck('body'))
+        ->toContain('Номер перенесён от прежнего партнёра — у него отправка и приём отключены.');
 });
 
 test('a repeated signup for the same external id updates the existing company', function () {

@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Jobs\ApplyDereuDeliveryStatus;
 use App\Jobs\ApplyDereuTemplateStatus;
+use App\Jobs\ApplyDereuWabaDisconnect;
 use App\Jobs\ProcessDereuWebhookEvent;
 use App\Models\DereuWebhookEvent;
 use Illuminate\Http\Request;
@@ -58,6 +59,10 @@ class DereuWebhookController extends Controller
         if ($storedEvent->wasRecentlyCreated
             && in_array($event, ['message_sent', 'message_delivered', 'message_read', 'message_failed'], true)) {
             ApplyDereuDeliveryStatus::dispatch($storedEvent);
+        }
+
+        if ($storedEvent->wasRecentlyCreated && $event === 'waba_disconnected') {
+            ApplyDereuWabaDisconnect::dispatch($storedEvent);
         }
 
         return response()->noContent();

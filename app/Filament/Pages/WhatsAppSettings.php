@@ -19,6 +19,7 @@ use Filament\Schemas\Schema;
 use Filament\Support\Icons\Heroicon;
 use Illuminate\Http\Client\RequestException;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 use Livewire\Attributes\Computed;
 use Throwable;
@@ -77,7 +78,6 @@ class WhatsAppSettings extends Page
             'DEREU_WEBHOOK_SECRET' => blank(config('services.dereu.webhook_secret')),
             'DEREU_EXTERNAL_ID' => blank(config('services.dereu.external_id')),
             'DEREU_CONNECT_SECRET' => blank(config('services.dereu.connect.signing_secret')),
-            'DEREU_CONNECT_PREFIX' => blank(config('services.dereu.connect.key_prefix')),
         ]));
     }
 
@@ -285,11 +285,21 @@ class WhatsAppSettings extends Page
             ],
         );
 
+        $transferred = ($data['transferred'] ?? false) === true;
+
+        if ($transferred) {
+            Log::info('WhatsApp number arrived as an owner-consented transfer from another Dereu partner.', [
+                'dereu_company_id' => $data['dereu_company_id'],
+                'phone_number_id' => $data['phone_number_id'],
+            ]);
+        }
+
         try {
             $company->update(['api_key' => app(DereuPlatformClient::class)->reissueApiKey($company->external_id)]);
 
             Notification::make()
                 ->title('WhatsApp подключён')
+                ->body($transferred ? 'Номер перенесён от прежнего партнёра — у него отправка и приём отключены.' : null)
                 ->success()
                 ->send();
         } catch (Throwable $exception) {

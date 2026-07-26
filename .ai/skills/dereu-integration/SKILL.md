@@ -36,6 +36,19 @@ Meta и форвардит его партнёру. Партнёрский пр�
 При выпуске/перевыпуске platform key в ЛК настраивается **общий webhook URL и secret на весь проект** —
 все компании, провижиненные под этим ключом, автоматически используют этот форвард.
 
+## Минимальный набор env
+
+| Переменная | Формат | Откуда | Обязательна |
+|---|---|---|---|
+| `DEREU_PLATFORM_KEY` | `plat_<prefix>.<secret>` | Оператор Dereu (`dereu:issue-platform-key`) | да — базовый M2M |
+| `DEREU_WEBHOOK_SECRET` | случайная строка | вместе с platform key | да, если принимаете форвард входящих |
+| `DEREU_API_BASE_URL` | `https://api.dereu.noderail.io/api/v1` | константа окружения | да |
+| `DEREU_CONNECT_SIGNING_SECRET` | `consec_...` | оператор при настройке Hosted ES | только для Hosted ES |
+
+`key_prefix` (параметр `p`) отдельно хранить не нужно — выводится кодом из `DEREU_PLATFORM_KEY` (сегмент
+между `plat_` и `.`). Компанийский `api_key` (`dereu_...`) — не глобальный env, а значение на компанию,
+храните в своей БД.
+
 ## 1. Провижининг компании
 
 ```
@@ -55,7 +68,8 @@ Content-Type: application/json
   — сохраните `dereu_company_id` и `api_key` немедленно, `api_key` больше не будет показан.
 - **200** (повтор с тем же `external_id`): `{ "dereu_company_id": "co_abc123", "already_provisioned": true }`
   — `api_key` не возвращается.
-- `409` — `phone_number_id` уже занят другой компанией. `422` — валидация.
+- `409` — `phone_number_id` уже занят другой компанией (этот путь номер не переклеивает; перенос занятого
+  номера возможен только через Embedded Signup владельца — §2). `422` — валидация.
 
 ## 2. Подключение номера (Embedded Signup, Model B)
 
@@ -82,11 +96,21 @@ Content-Type: application/json
   значения `cloud_api`/`smb_coexistence` как есть — приводить вручную не нужно.
   ⚠️ Для hosted-connect (§2b, redirect/widget) поле `account_mode` нужно класть в payload `d` ЯВНО — без
   него сервер дефолтит `business_only`, и coexistence-режим не активируется.
-- **201**: `{ "dereu_company_id": "...", "phone_number_id": "...", "status": "connected", "catalogs": { "owned": [...], "waba": [...] } }`
+- **201**: `{ "dereu_company_id": "...", "phone_number_id": "...", "status": "connected", "transferred": false, "catalogs": { "owned": [...], "waba": [...] } }`
   — каталоги Meta Commerce приходят сразу в этом ответе при подключении через `code`, отдельный
   `GET .../catalogs` обычно не нужен. Для coexistence/SMB-номеров `waba` в каталогах будет пустым
   (ограничение Meta) — используйте `owned`.
-- `409` — `external_id` чужой или `phone_number_id` занят другой компанией (не ретраить тем же запросом).
+- `transferred` присутствует всегда: `false` — обычное подключение; `true` — номер был подключён у другого
+  партнёра и переехал к вам — перенос номера (owner-consented move): проход Embedded Signup владельцем =
+  его явное согласие, подтверждённое Meta. У кого номер был раньше — не раскрывается.
+- `409` — `external_id` чужой, либо номер занят другой компанией при подключении через `system_user_token`
+  (token-import не несёт ES-согласия владельца; не ретраить тем же запросом). ES-путь (`code`) на номер,
+  занятый компанией другого партнёра, — НЕ 409, а перенос номера (см. `transferred` выше): вы получаете
+  201 с `transferred: true`, а компании прежнего партнёра отключаются от номера (отправка и приём входящих
+  для них прекращаются сразу) и получают вебхук `waba_disconnected` (§3) — обезличенно, без идентификаторов
+  нового владельца. Согласие при переносе подтверждается фактом доступа: токен свежего ES-обмена обязан
+  видеть переносимый `phone_number_id` в Graph — подстановка чужого `phone_number_id` к валидному `code`
+  от другого номера даёт `409`.
 - `422` "код невалиден/использован" — `code` одноразовый, нужен свежий проход Embedded Signup, не повтор
   того же `code`.
 - `422` "PIN Mismatch" (`#133005`) — возникает, только если у номера в Meta Business Manager включена
@@ -116,7 +140,7 @@ $payload = ['external_id' => 'org_123', 'return_url' => 'https://app.partner.kz/
             'account_mode' => 'coexistence'];  // опц.; без него — business_only, см. предупреждение выше
 $d   = b64url(json_encode($payload, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE));
 $sig = b64url(hash_hmac('sha256', $d, $connectSigningSecret, true));   // подписываем строку $d
-$p   = $keyPrefix;   // напр. plat_ab12cd
+$p   = explode('.', substr($platformKey, strlen('plat_')), 2)[0];   // key_prefix, напр. uHshll27nJQt
 ```
 
 ```html
@@ -127,7 +151,7 @@ $p   = $keyPrefix;   // напр. plat_ab12cd
 ```
 
 **2. Верификация OUT-редиректа** `return_url?result=<b64>&sig=<hmac>` (`result` =
-`{dereu_company_id, phone_number_id, waba_id, status, nonce}`):
+`{dereu_company_id, phone_number_id, waba_id, status, nonce, transferred}`):
 
 ```php
 $expected = b64url(hash_hmac('sha256', $_GET['result'], $connectSigningSecret, true));
@@ -141,6 +165,13 @@ if ($data['status'] !== 'connected') { abort(409); }   // pending=ждать, su
 `status` — `WabaStatus` подключённой WABA: `connected` (успех, единственный статус happy-path) \|
 `pending` (заведена, ещё не подтверждена Meta — не declined, дозреет до `connected`) \| `suspended` \|
 `deleted` (отказ). **Литерала `success` НЕТ** — проверяйте `status === 'connected'`.
+
+`transferred` (boolean, входит в подписанный `result`-blob) — `true`, если подключение стало переносом
+номера от другого партнёра (owner-consented move, см. §2). Успешный чужой номер на hosted-пути — всегда
+перенос (он идёт через ES владельца), но `/connect/finish` может вернуть `409` с
+`error: number_access_unconfirmed` — токен свежего ES-обмена не смог прочитать переносимый номер в Graph
+(транзиентный сбой Meta или подмена `phone_number_id`); это ретраябельно — сессия жива, клиенту нужно
+повторить ES-проход. Второй код `409` — `company_partner_mismatch` (чужой `external_id`), терминален.
 
 **3. Забрать `api_key`** (наружу в OUT не отдаётся) — S2S своим `plat_`-ключом:
 
@@ -191,7 +222,7 @@ if (! hash_equals($expected, (string) $signature)) {
 - Дедуп: входящие сообщения — по `wamid` (одно сообщение может дать несколько статусных событий);
   доставки статусов — по `event_id`.
 - `event`: `message_received`, `message_sent`, `message_delivered`, `message_read`, `message_failed`,
-  `template_status_update`.
+  `template_status_update`, `waba_disconnected`.
 - `type` известные значения: `text`, `image`, `video`, `audio`, `document`, `sticker`, `location`,
   `interactive`, `button`, `order`, `contacts`, `reaction`, `system`, `unsupported` — список не закрыт,
   не падайте на неизвестном `type`.
@@ -215,6 +246,25 @@ if (! hash_equals($expected, (string) $signature)) {
 
   `payload.status`: `pending` / `approved` / `rejected`. `payload.reason` заполнен только при `rejected`
   (текст причины от Meta), иначе `null`.
+- `waba_disconnected` — владелец номера перенёс его в другую интеграцию (перенос номера, owner-consented
+  move — см. §2): после этого события отправка с номера и приём входящих для этой `company_id` прекращены.
+  Первое lifecycle-событие не из Meta, но доставляется тем же форвард-каналом (подпись `X-Dereu-Signature`,
+  ретраи, dead-letter). У события нет `from`/`wamid`/`type`/`payload`, форма другая:
+
+  ```json
+  {
+    "event": "waba_disconnected",
+    "event_id": "01J9...",
+    "company_id": "co_abc123",
+    "phone_number_id": "1234567890",
+    "waba_id": "9876543210",
+    "reason": "owner_transfer"
+  }
+  ```
+
+  `company_id` — отключённый тенант (ваша компания), `waba_id` — WABA прежней регистрации. Идентификаторов
+  нового владельца в событии нет — вы узнаёте только факт отключения. Единственный `reason` сегодня —
+  `owner_transfer`. Дедуп — по `event_id` (уникален на доставку).
 - Отвечайте `2xx` быстро (обработку — в очередь). Ретраи с backoff, при исчерпании — dead-letter у Dereu.
 
 ## 4. Отправка сообщений

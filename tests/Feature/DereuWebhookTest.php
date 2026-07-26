@@ -1,5 +1,6 @@
 <?php
 
+use App\Jobs\ApplyDereuWabaDisconnect;
 use App\Jobs\ProcessDereuWebhookEvent;
 use App\Models\DereuWebhookEvent;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -133,4 +134,39 @@ test('a duplicate delivery of the same status event_id is deduplicated', functio
     postSignedDereuWebhook($payload)->assertNoContent();
 
     expect(DereuWebhookEvent::count())->toBe(1);
+});
+
+/**
+ * Событие waba_disconnected: без from/wamid/type/payload — форма другая.
+ */
+function dereuWabaDisconnectedPayload(array $overrides = []): array
+{
+    return array_merge([
+        'event' => 'waba_disconnected',
+        'event_id' => (string) Str::ulid(),
+        'company_id' => 'co_abc123',
+        'phone_number_id' => '1234567890',
+        'waba_id' => '9876543210',
+        'reason' => 'owner_transfer',
+    ], $overrides);
+}
+
+test('a waba_disconnected event dispatches the disconnect job', function () {
+    Queue::fake();
+
+    postSignedDereuWebhook(dereuWabaDisconnectedPayload())->assertNoContent();
+
+    expect(DereuWebhookEvent::sole()->event)->toBe('waba_disconnected');
+    Queue::assertPushed(ApplyDereuWabaDisconnect::class, 1);
+});
+
+test('a duplicate waba_disconnected delivery does not dispatch a second job', function () {
+    Queue::fake();
+    $payload = dereuWabaDisconnectedPayload();
+
+    postSignedDereuWebhook($payload)->assertNoContent();
+    postSignedDereuWebhook($payload)->assertNoContent();
+
+    expect(DereuWebhookEvent::count())->toBe(1);
+    Queue::assertPushed(ApplyDereuWabaDisconnect::class, 1);
 });

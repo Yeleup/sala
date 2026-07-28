@@ -1,13 +1,14 @@
 <?php
 
 use App\Enums\ListingStatus;
+use App\Exceptions\SessionWindowClosed;
 use App\Filament\Resources\Contacts\ContactResource;
 use App\Filament\Resources\Contacts\Pages\ListContacts;
 use App\Filament\Resources\CustomerRequests\CustomerRequestResource;
 use App\Filament\Resources\CustomerRequests\Pages\ListCustomerRequests;
 use App\Filament\Resources\Listings\ListingResource;
+use App\Filament\Resources\Listings\Pages\EditListing;
 use App\Filament\Resources\Listings\Pages\ListListings;
-use App\Filament\Resources\Listings\Pages\ViewListing;
 use App\Models\Contact;
 use App\Models\CustomerRequest;
 use App\Models\Listing;
@@ -97,14 +98,14 @@ test('rejecting from the table stores the reason', function () {
         ->and($listing->rejection_reason)->toBe('Нет цены');
 });
 
-test('the view page shows media and offers moderation actions for a pending listing', function () {
+test('the edit page shows media and offers moderation actions for a pending listing', function () {
     $listing = Listing::factory()
         ->pendingModeration()
         ->has(ListingMedia::factory(), 'media')
         ->has(ListingMedia::factory()->audio(), 'media')
         ->create();
 
-    Livewire::test(ViewListing::class, ['record' => $listing->getRouteKey()])
+    Livewire::test(EditListing::class, ['record' => $listing->getRouteKey()])
         ->assertSee('Сдаю в аренду автокран 25 тонн, нахожусь в Шымкенте, цена договорная.')
         ->assertActionVisible('approve')
         ->assertActionVisible('reject')
@@ -116,9 +117,91 @@ test('the view page shows media and offers moderation actions for a pending list
 test('moderation actions are hidden for an already published listing', function () {
     $listing = Listing::factory()->published()->create();
 
-    Livewire::test(ViewListing::class, ['record' => $listing->getRouteKey()])
+    Livewire::test(EditListing::class, ['record' => $listing->getRouteKey()])
         ->assertActionHidden('approve')
         ->assertActionHidden('reject');
+});
+
+test('одобрение из очереди записывает, кто вынес вердикт', function () {
+    $moderator = User::factory()->create();
+    $this->actingAs($moderator);
+    $listing = Listing::factory()->pendingModeration()->create();
+
+    Livewire::test(ListListings::class)
+        ->callAction(TestAction::make('approve')->table($listing));
+
+    expect($listing->refresh())
+        ->moderated_by_user_id->toBe($moderator->id)
+        ->and($listing->moderated_at)->not->toBeNull();
+});
+
+test('оператор снимает объявление с публикации в архив, не удаляя его', function () {
+    $listing = Listing::factory()->published()->create();
+    $request = CustomerRequest::factory()->create(['listing_id' => $listing->id]);
+
+    Livewire::test(ListListings::class)
+        ->filterTable('status', ListingStatus::Published->value)
+        ->callAction(TestAction::make('archive')->table($listing))
+        ->assertNotified('Объявление в архиве');
+
+    // В отличие от удаления архив сохраняет и объявление, и заявки по нему.
+    expect($listing->refresh()->status)->toBe(ListingStatus::Archived)
+        ->and(CustomerRequest::whereKey($request->id)->exists())->toBeTrue();
+});
+
+test('оператор продлевает объявление после звонка поставщику', function () {
+    $this->freezeTime();
+    $listing = Listing::factory()->published()->create([
+        'expires_at' => now()->addDay(),
+        'renewal_requested_at' => now(),
+    ]);
+
+    Livewire::test(ListListings::class)
+        ->filterTable('status', ListingStatus::Published->value)
+        ->callAction(TestAction::make('renew')->table($listing));
+
+    $listing->refresh();
+    expect($listing->expires_at->toDateTimeString())->toBe(now()->addDays(30)->toDateTimeString())
+        ->and($listing->status)->toBe(ListingStatus::Published)
+        // Следующий цикл должен спросить снова.
+        ->and($listing->renewal_requested_at)->toBeNull();
+});
+
+test('фильтр «истекает в сутки» собирает объявления, которые пора продлевать', function () {
+    $expiringSoon = Listing::factory()->published()->create(['expires_at' => now()->addHours(6)]);
+    $freshlyPublished = Listing::factory()->published()->create(['expires_at' => now()->addDays(30)]);
+    $alreadyExpired = Listing::factory()->expired()->create();
+
+    // Все три опубликованы — отбор делает именно фильтр срока, а не статус
+    // (по умолчанию список показывает очередь модерации).
+    Livewire::test(ListListings::class)
+        ->filterTable('status', ListingStatus::Published->value)
+        ->filterTable('expiring')
+        ->assertCanSeeTableRecords([$expiringSoon])
+        ->assertCanNotSeeTableRecords([$freshlyPublished, $alreadyExpired]);
+});
+
+test('в списке видно, писал ли поставщик боту', function () {
+    $silent = Listing::factory()
+        ->for(Contact::factory()->create(['last_inbound_at' => null]), 'supplier')
+        ->create();
+    $wrote = Listing::factory()
+        ->for(Contact::factory()->create(['last_inbound_at' => now()->subWeek()]), 'supplier')
+        ->create();
+
+    Livewire::test(ListListings::class)
+        ->filterTable('status', ListingStatus::Draft->value)
+        ->assertTableColumnStateSet('supplier_wrote', false, $silent)
+        // Окно 24 ч уже закрыто, но писал он всё же — колонка про это, а не про окно.
+        ->assertTableColumnStateSet('supplier_wrote', true, $wrote);
+});
+
+test('архив и продление недоступны, пока объявление не опубликовано', function () {
+    $listing = Listing::factory()->pendingModeration()->create();
+
+    Livewire::test(EditListing::class, ['record' => $listing->getRouteKey()])
+        ->assertActionHidden('archive')
+        ->assertActionHidden('renew');
 });
 
 describe('уведомление поставщика о вердикте модерации', function () {
@@ -257,7 +340,7 @@ describe('уведомление поставщика о вердикте мод
 
         $messenger = fakeModerationMessenger();
         $messenger->shouldReceive('sendCtaUrl')->once()->andThrow(
-            new App\Exceptions\SessionWindowClosed($listing->supplier),
+            new SessionWindowClosed($listing->supplier),
         );
         $messenger->shouldReceive('sendTemplate')->once()->withArgs(
             fn (Contact $contact, WhatsappTemplate $sent): bool => $sent->is($template),

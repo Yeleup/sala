@@ -48,7 +48,9 @@ class LocationResolver
      * The dictionary nodes the given wording may mean — exactly, or (when
      * nothing matches exactly) by close-distortion correction: the fuzzy
      * candidates become the pick list, same as same-named places. A city of
-     * republican significance among the namesakes takes the name outright.
+     * republican significance among true namesakes takes the name outright;
+     * corrections keep their own ranking, so a name that is a closer match
+     * than the city is never dropped in its favour.
      *
      * @return Collection<int, Location>
      */
@@ -64,9 +66,9 @@ class LocationResolver
             Location::query()->where('search_name', $key)->orderBy('depth')->orderBy('id')->get(),
         );
 
-        return $this->republicanCityWins(
-            $matches->isNotEmpty() ? $matches : $this->fuzzyMatches($key),
-        );
+        return $matches->isNotEmpty()
+            ? $this->republicanCityWins($matches)
+            : $this->fuzzyMatches($key);
     }
 
     /**
@@ -396,6 +398,11 @@ class LocationResolver
      * instead of asked about. Oblasts share that level but are containers,
      * not places: they never take the name from the settlements inside
      * them.
+     *
+     * Only true namesakes are arbitrated this way. A distorted wording is
+     * already a guess, and its candidates are ranked by how close they are
+     * — letting the city win there would discard a name that matches the
+     * supplier's wording better than the city does.
      *
      * @param  Collection<int, Location>  $candidates
      * @return Collection<int, Location>

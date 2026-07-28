@@ -4,6 +4,7 @@ use App\Models\Location;
 use App\Services\Locations\KatoTreeImporter;
 use App\Services\Locations\LocationResolver;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
 
 uses(RefreshDatabase::class);
 
@@ -63,6 +64,19 @@ test('город республиканского значения забира�
         ->and($resolver->resolve('в Алматы')->sole()->id)->toBe($almaty->id)
         ->and($resolver->resolve('Абай')->pluck('id')->all())->toBe([$abaiRegion->id, $abaiVillage->id]);
 });
+
+test('город республиканского значения не выигрывает у более близкого исправления', function () {
+    // Искажённое написание разбирается по близости, и село, написанное
+    // ближе к сказанному, город не вытесняет — иначе «Алматыбак» молча
+    // становился бы Алматы вместо соседнего Алмалыбака.
+    locationNamed('г.Алматы');
+    $village = locationNamed('с.Алмалыбак', locationNamed('Алматинская область'));
+
+    $candidates = app(LocationResolver::class)->resolve('Алматыбак');
+
+    expect($candidates->pluck('name')->all())->toContain('с.Алмалыбак')
+        ->and($candidates->firstWhere('id', $village->id))->not->toBeNull();
+})->skip(fn (): bool => DB::getDriverName() !== 'pgsql', 'нечёткое сопоставление только для Postgres');
 
 test('детект локации в запросе: однозначно, крупнейший уровень, неоднозначно', function () {
     importSampleKatoTree();

@@ -4,25 +4,35 @@ namespace App\Filament\Resources\Listings\Schemas;
 
 use App\Enums\ListingMediaType;
 use App\Enums\ListingType;
+use App\Filament\Resources\Brands\Schemas\BrandForm;
+use App\Filament\Resources\Categories\Schemas\CategoryForm;
+use App\Filament\Resources\Contacts\Schemas\ContactForm;
+use App\Filament\Resources\Locations\Schemas\LocationForm;
+use App\Models\Category;
 use App\Models\Contact;
 use App\Models\Listing;
 use App\Models\ListingMedia;
 use App\Models\Location;
 use App\Services\Locations\LocationResolver;
+use App\Support\PhoneNumber;
 use Filament\Forms\Components\FileUpload;
 use Filament\Forms\Components\Repeater;
 use Filament\Forms\Components\Select;
 use Filament\Forms\Components\Textarea;
 use Filament\Forms\Components\TextInput;
+use Filament\Infolists\Components\TextEntry;
 use Filament\Schemas\Components\Utilities\Get;
 use Filament\Schemas\Components\Utilities\Set;
 use Filament\Schemas\Schema;
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Database\Eloquent\Collection;
 
 /**
- * Operator form for a listing's business fields. The status is not part of
- * the form: lifecycle transitions go through the dedicated actions
- * (submit for moderation, approve, reject) so the domain invariants hold.
+ * Operator form for a listing's business fields — also the moderation
+ * screen, so it shows the lifecycle state and the collected media as
+ * read-only next to the editable fields. The status itself is not an
+ * editable field: transitions go through the dedicated actions (submit
+ * for moderation, approve, reject) so the domain invariants hold.
  */
 class ListingForm
 {
@@ -30,15 +40,49 @@ class ListingForm
     {
         return $schema
             ->components([
+                // The publication rule as a live prompt. On a call this
+                // doubles as the script of what is left to ask the
+                // client. Saving an incomplete listing stays allowed —
+                // only publication is gated.
+                TextEntry::make('publication_readiness')
+                    ->label('Готовность к публикации')
+                    ->state(function (Get $get): string {
+                        $missing = self::missingPublicationFields($get);
+
+                        return $missing === []
+                            ? 'Все поля заполнены — объявление можно публиковать.'
+                            : 'Не хватает для публикации: '.implode(', ', $missing).'.';
+                    })
+                    ->color(fn (Get $get): string => self::missingPublicationFields($get) === [] ? 'success' : 'warning')
+                    ->columnSpanFull(),
+                TextEntry::make('status')
+                    ->label('Статус')
+                    ->badge()
+                    ->hiddenOn('create'),
+                TextEntry::make('expires_at')
+                    ->label('Актуально до')
+                    ->dateTime('d.m.Y H:i')
+                    ->placeholder('—')
+                    ->hiddenOn('create'),
+                TextEntry::make('rejection_reason')
+                    ->label('Причина отклонения')
+                    ->color('danger')
+                    ->visible(fn (?Listing $record): bool => filled($record?->rejection_reason))
+                    ->columnSpanFull(),
                 Select::make('contact_id')
                     ->label('Поставщик')
                     ->relationship('supplier', 'phone')
-                    ->getOptionLabelFromRecordUsing(fn (Contact $record): string => filled($record->displayName())
-                        ? "{$record->phone} ({$record->displayName()})"
-                        : $record->phone)
-                    ->searchable(['phone', 'profile_name', 'display_name'])
+                    ->getOptionLabelFromRecordUsing(fn (Contact $record): string => self::supplierLabel($record))
+                    ->searchable()
+                    ->getSearchResultsUsing(fn (string $search): array => self::supplierOptions($search))
                     ->preload()
                     ->required()
+                    // A client calling in for the first time must not cost
+                    // the operator the form he has already typed: the
+                    // contact is created in place, by the same fields and
+                    // the same validation as the contacts page.
+                    ->createOptionForm(fn (Schema $form): Schema => ContactForm::configure($form))
+                    ->createOptionModalHeading('Новый поставщик')
                     ->validationMessages(['required' => 'Выберите поставщика.']),
                 Select::make('type')
                     ->label('Тип')
@@ -57,7 +101,10 @@ class ListingForm
                 TextInput::make('title')
                     ->label('Название')
                     ->placeholder('Например: Аренда автокрана 25 т')
-                    ->maxLength(255),
+                    ->maxLength(255)
+                    // Text fields refresh the readiness hint on blur, not
+                    // on every keystroke — one round trip per field.
+                    ->live(onBlur: true),
                 Select::make('category_id')
                     ->label('Категория')
                     ->relationship(
@@ -68,8 +115,43 @@ class ListingForm
                     )
                     ->searchable()
                     ->preload()
+                    ->live()
                     ->placeholder('Без категории')
-                    ->helperText('Список зависит от выбранного типа.'),
+                    ->helperText('Список зависит от выбранного типа.')
+                    // The client names a trade the dictionary does not have
+                    // yet: adding it here beats abandoning the form. The
+                    // type is offered from the listing, but stays visible —
+                    // it is the category that types the listing, not the
+                    // other way round, so a correction here corrects both.
+                    // ignoreRecord stays off in all three dictionary modals
+                    // below: the record around them is the listing, not the
+                    // dictionary row being created.
+                    ->createOptionForm(fn (Get $get): array => [
+                        CategoryForm::nameField(ignoreRecord: false),
+                        Select::make('type')
+                            ->label('Тип')
+                            ->options(ListingType::class)
+                            ->default($get('type'))
+                            ->required()
+                            ->helperText('Тип категории задаёт и тип объявления.')
+                            ->validationMessages(['required' => 'Выберите тип категории.']),
+                    ])
+                    ->createOptionModalHeading('Новая категория')
+                    ->createOptionUsing(function (array $data, Set $set): int {
+                        $category = Category::create($data);
+
+                        // The dictionary types the category and the category
+                        // types the listing — the same rule the AI collection
+                        // follows. Without this the listing could keep a type
+                        // its own category contradicts.
+                        $set('type', $category->type->value);
+
+                        if ($category->type === ListingType::Service) {
+                            $set('brand_id', null);
+                        }
+
+                        return $category->getKey();
+                    }),
                 Select::make('brand_id')
                     ->label('Марка')
                     ->relationship('brand', 'name')
@@ -77,21 +159,41 @@ class ListingForm
                     ->preload()
                     ->placeholder('Без марки')
                     ->helperText('Марка есть только у техники.')
+                    ->createOptionForm(fn (): array => [BrandForm::nameField(ignoreRecord: false)])
+                    ->createOptionModalHeading('Новая марка')
                     ->visible(fn (Get $get): bool => self::isEquipment($get('type'))),
                 Textarea::make('description')
                     ->label('Описание')
                     ->rows(4)
                     ->maxLength(2000)
+                    ->live(onBlur: true)
                     ->columnSpanFull(),
                 Select::make('location_id')
                     ->label('Локация')
                     ->searchable()
+                    ->live()
                     ->placeholder('Поиск: город, район или село')
-                    ->getSearchResultsUsing(fn (string $search): array => app(LocationResolver::class)
-                        ->suggest($search, 20)
-                        ->mapWithKeys(fn (Location $location): array => [$location->id => $location->label()])
-                        ->all())
-                    ->getOptionLabelUsing(fn (mixed $value): ?string => Location::find($value)?->label()),
+                    // An empty field opens the top of the KATO tree — the
+                    // cities of republican significance and the oblasts —
+                    // so a place can be picked without typing, exactly as
+                    // the public form already does (LocationSearchController).
+                    ->options(fn (): array => self::locationOptions(app(LocationResolver::class)->topLevel()))
+                    ->getSearchResultsUsing(fn (string $search): array => self::locationOptions(
+                        app(LocationResolver::class)->suggest($search, 20),
+                    ))
+                    ->getOptionLabelUsing(fn (mixed $value): ?string => Location::find($value)?->label())
+                    // A new microdistrict or a settlement KATO skipped: the
+                    // place is added inside an existing node, so the subtree
+                    // search the customer relies on keeps working.
+                    ->createOptionForm(fn (): array => [
+                        LocationForm::nameField(ignoreRecord: false),
+                        LocationForm::parentField()
+                            ->required()
+                            ->helperText('Место заводится внутрь существующего узла справочника.')
+                            ->validationMessages(['required' => 'Выберите, внутри какого места оно находится.']),
+                    ])
+                    ->createOptionModalHeading('Новое место')
+                    ->createOptionUsing(fn (array $data): int => Location::create($data)->getKey()),
                 TextInput::make('location_detail')
                     ->label('Уточнение адреса')
                     ->placeholder('Например: центр, мкр Нурсат')
@@ -99,7 +201,8 @@ class ListingForm
                 TextInput::make('price')
                     ->label('Цена/Тариф')
                     ->placeholder('Например: 10000 тг/ч')
-                    ->maxLength(255),
+                    ->maxLength(255)
+                    ->live(onBlur: true),
                 Repeater::make('photos')
                     ->label('Фотографии')
                     ->relationship()
@@ -126,7 +229,92 @@ class ListingForm
                     ->addActionLabel('Добавить фото')
                     ->reorderable(false)
                     ->columnSpanFull(),
+                // Audio the supplier sent is not editable, but its
+                // transcription is what the operator moderates by.
+                TextEntry::make('audioMessages.transcription')
+                    ->label('Транскрипции аудио')
+                    ->listWithLineBreaks()
+                    ->placeholder('Нет аудио')
+                    ->columnSpanFull()
+                    ->hiddenOn('create'),
             ]);
+    }
+
+    private static function supplierLabel(Contact $contact): string
+    {
+        return filled($contact->displayName())
+            ? "{$contact->phone} ({$contact->displayName()})"
+            : $contact->phone;
+    }
+
+    /**
+     * Supplier lookup by name or by a number in any spelling: a number
+     * dictated on a call as «8 701…» has to find the contact WhatsApp
+     * stored as «7701…», otherwise the operator creates a duplicate and
+     * the listing ends up on a number nothing can reach.
+     *
+     * @return array<int, string>
+     */
+    private static function supplierOptions(string $search): array
+    {
+        $prefixes = PhoneNumber::searchPrefixes($search);
+
+        return Contact::query()
+            ->where(function (Builder $query) use ($search, $prefixes): void {
+                $query
+                    ->where('profile_name', 'ilike', '%'.$search.'%')
+                    ->orWhere('display_name', 'ilike', '%'.$search.'%');
+
+                foreach ($prefixes as $prefix) {
+                    $query->orWhere('phone', 'like', $prefix.'%');
+                }
+            })
+            ->orderBy('phone')
+            ->limit(20)
+            ->get()
+            ->mapWithKeys(fn (Contact $contact): array => [$contact->id => self::supplierLabel($contact)])
+            ->all();
+    }
+
+    /**
+     * Place options labelled by their full KATO chain («место, район,
+     * область») — namesakes are told apart by their parents. The chains
+     * are built for the whole list in one query rather than per row.
+     *
+     * @param  Collection<int, Location>  $locations
+     * @return array<int, string>
+     */
+    private static function locationOptions(Collection $locations): array
+    {
+        // chainsFor() gives the ancestors only, and an empty string for
+        // top-level nodes — the node's own name goes in front of it.
+        $chains = Location::chainsFor($locations);
+
+        return $locations
+            ->mapWithKeys(fn (Location $location): array => [
+                $location->id => $chains[$location->id] === ''
+                    ? $location->name
+                    : $location->name.', '.$chains[$location->id],
+            ])
+            ->all();
+    }
+
+    /**
+     * The publication fields still blank in the form as it stands right
+     * now — the same rule Listing::publish() enforces, read off the live
+     * form state instead of the saved record.
+     *
+     * @return list<string>
+     */
+    private static function missingPublicationFields(Get $get): array
+    {
+        $values = [];
+
+        foreach (array_keys(Listing::PUBLICATION_FIELDS) as $field) {
+            $values[$field] = $get($field);
+        }
+
+        return Listing::missingPublicationFields($values);
     }
 
     /**

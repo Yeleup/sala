@@ -4,9 +4,12 @@ namespace App\Filament\Resources\Listings\Pages;
 
 use App\Filament\Resources\Listings\ListingResource;
 use Filament\Actions\DeleteAction;
-use Filament\Actions\ViewAction;
 use Filament\Resources\Pages\EditRecord;
 
+/**
+ * The only record page: it replaces the read-only view, so the moderation
+ * verdict is given from here.
+ */
 class EditListing extends EditRecord
 {
     protected static string $resource = ListingResource::class;
@@ -23,7 +26,12 @@ class EditListing extends EditRecord
     protected function getHeaderActions(): array
     {
         return [
-            ViewAction::make()->label('Просмотр'),
+            ListingResource::publishAction(),
+            ListingResource::submitForModerationAction(),
+            ListingResource::approveAction(),
+            ListingResource::rejectAction(),
+            ListingResource::renewAction(),
+            ListingResource::archiveAction(),
             DeleteAction::make()
                 ->label('Удалить')
                 ->modalHeading('Удалить объявление?')

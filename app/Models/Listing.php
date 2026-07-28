@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use App\Enums\ListingMediaType;
+use App\Enums\ListingOrigin;
 use App\Enums\ListingStatus;
 use App\Enums\ListingType;
 use App\Jobs\GenerateListingEmbedding;
@@ -24,7 +25,7 @@ use LogicException;
  * free-form supplier input; every business field except the type may stay
  * empty until the supplier completes it via the web interface.
  */
-#[Fillable(['contact_id', 'type', 'title', 'category_id', 'brand_id', 'description', 'location_id', 'location_detail', 'price', 'status', 'rejection_reason', 'expires_at', 'renewal_requested_at'])]
+#[Fillable(['contact_id', 'origin', 'created_by_user_id', 'type', 'title', 'category_id', 'brand_id', 'description', 'location_id', 'location_detail', 'price', 'status', 'rejection_reason', 'moderated_by_user_id', 'moderated_at', 'expires_at', 'renewal_requested_at'])]
 class Listing extends Model
 {
     /** @use HasFactory<ListingFactory> */
@@ -40,6 +41,24 @@ class Listing extends Model
      * the admin form. Photos arriving from the bot are not capped.
      */
     public const int MAX_PHOTOS = 10;
+
+    /**
+     * The business fields a listing must carry to go live, mapped to the
+     * label the operator sees in the «чего не хватает» hint. This is the
+     * same set the supplier web form demands before submitting (see
+     * UpdateSupplierListingRequest), so a listing published straight from
+     * the admin is never thinner than one its supplier completed himself.
+     *
+     * @var array<string, string>
+     */
+    public const array PUBLICATION_FIELDS = [
+        'type' => 'тип',
+        'title' => 'название',
+        'category_id' => 'категория',
+        'description' => 'описание',
+        'location_id' => 'локация',
+        'price' => 'цена',
+    ];
 
     protected $attributes = [
         'status' => ListingStatus::Draft->value,
@@ -79,6 +98,28 @@ class Listing extends Model
     public function supplier(): BelongsTo
     {
         return $this->belongsTo(Contact::class, 'contact_id');
+    }
+
+    /**
+     * The operator who typed the listing in the admin. Empty means the
+     * listing came from the chat with the bot — or predates the trail.
+     *
+     * @return BelongsTo<User, $this>
+     */
+    public function author(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'created_by_user_id');
+    }
+
+    /**
+     * The operator behind the last verdict — approval, rejection or a
+     * publication straight from the admin.
+     *
+     * @return BelongsTo<User, $this>
+     */
+    public function moderator(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'moderated_by_user_id');
     }
 
     /** @return BelongsTo<Category, $this> */
@@ -182,7 +223,64 @@ class Listing extends Model
         $this->update(['status' => ListingStatus::PendingModeration]);
     }
 
-    public function approve(): void
+    /**
+     * The labels of the publication fields left blank in the given set of
+     * values, in the order the operator asks about them on a call. Takes
+     * raw values rather than a record so the admin form can hint at what
+     * is still missing while the operator is typing, by the same rule the
+     * publication itself enforces.
+     *
+     * @param  array<string, mixed>  $values
+     * @return list<string>
+     */
+    public static function missingPublicationFields(array $values): array
+    {
+        return array_values(array_filter(
+            self::PUBLICATION_FIELDS,
+            fn (string $label, string $field): bool => blank($values[$field] ?? null),
+            ARRAY_FILTER_USE_BOTH,
+        ));
+    }
+
+    /**
+     * @return list<string>
+     */
+    public function missingForPublication(): array
+    {
+        return self::missingPublicationFields($this->only(array_keys(self::PUBLICATION_FIELDS)));
+    }
+
+    public function isReadyForPublication(): bool
+    {
+        return $this->missingForPublication() === [];
+    }
+
+    /**
+     * Publication by the operator who typed the listing himself: the
+     * moderation queue would only add clicks to his own text. The
+     * completeness of the business fields replaces the second pair of
+     * eyes — an incomplete listing would not reach customer search
+     * anyway, and the operator would learn that only afterwards.
+     */
+    public function publish(?User $author = null): void
+    {
+        $this->assertStatusIn([ListingStatus::Draft, ListingStatus::Rejected], 'publish');
+
+        throw_unless(
+            $this->isReadyForPublication(),
+            InvalidArgumentException::class,
+            'A listing cannot be published while '.implode(', ', $this->missingForPublication()).' is missing.',
+        );
+
+        $this->update([
+            'status' => ListingStatus::Published,
+            'expires_at' => now()->addDays(self::LIFETIME_DAYS),
+            'rejection_reason' => null,
+            ...self::verdict($author),
+        ]);
+    }
+
+    public function approve(?User $author = null): void
     {
         $this->assertStatusIn([ListingStatus::PendingModeration], 'approve');
 
@@ -190,10 +288,11 @@ class Listing extends Model
             'status' => ListingStatus::Published,
             'expires_at' => now()->addDays(self::LIFETIME_DAYS),
             'rejection_reason' => null,
+            ...self::verdict($author),
         ]);
     }
 
-    public function reject(string $reason): void
+    public function reject(string $reason, ?User $author = null): void
     {
         $this->assertStatusIn([ListingStatus::PendingModeration], 'reject');
 
@@ -202,7 +301,23 @@ class Listing extends Model
         $this->update([
             'status' => ListingStatus::Rejected,
             'rejection_reason' => $reason,
+            ...self::verdict($author),
         ]);
+    }
+
+    /**
+     * The trail every verdict leaves. The author is optional: a verdict
+     * can also come from a console command, and an unknown author must
+     * not stop the transition — it only leaves the trail thinner.
+     *
+     * @return array{moderated_by_user_id: ?int, moderated_at: \Illuminate\Support\Carbon}
+     */
+    private static function verdict(?User $author): array
+    {
+        return [
+            'moderated_by_user_id' => $author?->getKey(),
+            'moderated_at' => now(),
+        ];
     }
 
     public function archive(): void
@@ -266,15 +381,17 @@ class Listing extends Model
     }
 
     /**
-     * @return array{type: class-string<ListingType>, status: class-string<ListingStatus>, expires_at: 'datetime', renewal_requested_at: 'datetime'}
+     * @return array{type: class-string<ListingType>, status: class-string<ListingStatus>, origin: class-string<ListingOrigin>, expires_at: 'datetime', renewal_requested_at: 'datetime', moderated_at: 'datetime'}
      */
     protected function casts(): array
     {
         return [
             'type' => ListingType::class,
             'status' => ListingStatus::class,
+            'origin' => ListingOrigin::class,
             'expires_at' => 'datetime',
             'renewal_requested_at' => 'datetime',
+            'moderated_at' => 'datetime',
         ];
     }
 }

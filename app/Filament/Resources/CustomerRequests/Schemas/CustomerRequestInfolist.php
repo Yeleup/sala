@@ -39,7 +39,7 @@ class CustomerRequestInfolist
                             ->label('Название')
                             ->state(fn (CustomerRequest $record): ?string => $record->listing?->displayName())
                             ->placeholder('—')
-                            ->url(fn (CustomerRequest $record): string => ListingResource::getUrl('view', ['record' => $record->listing_id])),
+                            ->url(fn (CustomerRequest $record): string => ListingResource::getUrl('edit', ['record' => $record->listing_id])),
                         TextEntry::make('listing.category.name')
                             ->label('Категория')
                             ->placeholder('—'),

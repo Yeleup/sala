@@ -2,16 +2,20 @@
 
 namespace App\Filament\Resources\Listings\Tables;
 
+use App\Enums\ListingOrigin;
 use App\Enums\ListingStatus;
 use App\Enums\ListingType;
 use App\Filament\Resources\Listings\ListingResource;
+use App\Models\Listing;
 use Filament\Actions\DeleteAction;
 use Filament\Actions\DeleteBulkAction;
 use Filament\Actions\EditAction;
-use Filament\Actions\ViewAction;
+use Filament\Tables\Columns\IconColumn;
 use Filament\Tables\Columns\TextColumn;
+use Filament\Tables\Filters\Filter;
 use Filament\Tables\Filters\SelectFilter;
 use Filament\Tables\Table;
+use Illuminate\Database\Eloquent\Builder;
 
 class ListingsTable
 {
@@ -25,6 +29,13 @@ class ListingsTable
                 TextColumn::make('supplier.phone')
                     ->label('Поставщик')
                     ->searchable(),
+                // A supplier who never wrote to the bot cannot be reached
+                // for free and will not answer the renewal poll — the
+                // operator has to spot such listings before they expire.
+                IconColumn::make('supplier_wrote')
+                    ->label('Писал боту')
+                    ->boolean()
+                    ->state(fn (Listing $record): bool => (bool) $record->supplier?->hasEverWritten()),
                 TextColumn::make('type')
                     ->label('Тип')
                     ->badge(),
@@ -51,6 +62,11 @@ class ListingsTable
                 TextColumn::make('status')
                     ->label('Статус')
                     ->badge(),
+                TextColumn::make('origin')
+                    ->label('Источник')
+                    ->badge()
+                    ->tooltip(fn (Listing $record): ?string => $record->author?->name)
+                    ->placeholder('неизвестно'),
                 TextColumn::make('expires_at')
                     ->label('Актуально до')
                     ->dateTime('d.m.Y H:i')
@@ -72,13 +88,25 @@ class ListingsTable
                 SelectFilter::make('category_id')
                     ->label('Категория')
                     ->relationship('category', 'name'),
+                SelectFilter::make('origin')
+                    ->label('Источник')
+                    ->options(ListingOrigin::class),
+                // The operator's window to call a supplier the renewal
+                // poll cannot reach and prolong the listing by hand.
+                Filter::make('expiring')
+                    ->label('Истекает в сутки')
+                    ->query(fn (Builder $query): Builder => $query
+                        ->where('status', ListingStatus::Published)
+                        ->whereBetween('expires_at', [now(), now()->addDay()])),
             ])
             ->recordActions([
-                ViewAction::make(),
                 EditAction::make(),
+                ListingResource::publishAction(),
                 ListingResource::submitForModerationAction(),
                 ListingResource::approveAction(),
                 ListingResource::rejectAction(),
+                ListingResource::renewAction(),
+                ListingResource::archiveAction(),
                 DeleteAction::make()
                     ->label('Удалить')
                     ->modalHeading('Удалить объявление?')

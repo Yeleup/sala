@@ -50,6 +50,17 @@ class Contact extends Model
         return $this->last_inbound_at?->isAfter(now()->subDay()) ?? false;
     }
 
+    /**
+     * Whether the contact ever wrote to the bot at all. A contact created
+     * by the operator has no inbound messages, so proactive notifications
+     * — including the 30-day renewal poll — can only reach them as paid
+     * templates until they write in themselves.
+     */
+    public function hasEverWritten(): bool
+    {
+        return $this->last_inbound_at !== null;
+    }
+
     /** @return HasMany<Listing, $this> */
     public function listings(): HasMany
     {

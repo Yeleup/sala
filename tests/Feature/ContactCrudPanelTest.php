@@ -38,25 +38,60 @@ test('оператор создаёт контакт заранее — до п�
         ->and($contact->hasOpenSessionWindow())->toBeFalse();
 });
 
-test('телефон обязателен, только из цифр и уникален', function () {
-    Contact::factory()->create(['phone' => '77011234567']);
-
+test('телефон обязателен', function () {
     Livewire::test(CreateContact::class)
         ->fillForm(['phone' => ''])
         ->call('create')
         ->assertHasFormErrors(['phone']);
 
+    expect(Contact::count())->toBe(0);
+});
+
+test('номер записывается как угодно и приводится к виду, в котором его знает WhatsApp', function (string $typed) {
     Livewire::test(CreateContact::class)
-        ->fillForm(['phone' => '+7 701 123-45-67'])
+        ->fillForm(['phone' => $typed])
         ->call('create')
-        ->assertHasFormErrors(['phone']);
+        ->assertHasNoFormErrors();
+
+    expect(Contact::sole()->phone)->toBe('77011234567');
+})->with([
+    'как диктуют по телефону' => ['8 701 123 45 67'],
+    'с плюсом и скобками' => ['+7 (701) 123-45-67'],
+    'через дефисы' => ['7701-123-45-67'],
+    'уже канонический' => ['77011234567'],
+]);
+
+test('любое написание уже заведённого номера упирается в тот же контакт — и он назван', function () {
+    Contact::factory()->create(['phone' => '77011234567', 'display_name' => 'ТОО «СтройКран»']);
 
     Livewire::test(CreateContact::class)
-        ->fillForm(['phone' => '77011234567'])
+        ->fillForm(['phone' => '8 701 123 45 67'])
         ->call('create')
-        ->assertHasFormErrors(['phone']);
+        ->assertHasFormErrors(['phone' => 'Контакт с таким номером уже есть — «ТОО «СтройКран»».']);
 
     expect(Contact::count())->toBe(1);
+});
+
+test('редактирование контакта не спотыкается о его собственный номер', function () {
+    $contact = Contact::factory()->create(['phone' => '77011234567']);
+
+    Livewire::test(EditContact::class, ['record' => $contact->id])
+        ->fillForm(['phone' => '8 701 123 45 67', 'profile_name' => 'Асхат'])
+        ->call('save')
+        ->assertHasNoFormErrors();
+
+    expect($contact->refresh())
+        ->phone->toBe('77011234567')
+        ->profile_name->toBe('Асхат');
+});
+
+test('текст без номера телефоном не считается', function () {
+    Livewire::test(CreateContact::class)
+        ->fillForm(['phone' => '12'])
+        ->call('create')
+        ->assertHasFormErrors(['phone']);
+
+    expect(Contact::count())->toBe(0);
 });
 
 test('оператор редактирует телефон, имя профиля и отображаемое имя', function () {

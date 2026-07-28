@@ -4,8 +4,10 @@ namespace App\Services\Ai;
 
 use App\Ai\Agents\ListingExtractionAgent;
 use App\Ai\Agents\LocationChoiceAgent;
+use App\Enums\AiOperationType;
 use App\Enums\AiOutcome;
 use App\Enums\ListingMediaType;
+use App\Enums\ListingOrigin;
 use App\Enums\ListingType;
 use App\Models\BotSession;
 use App\Models\Brand;
@@ -13,9 +15,8 @@ use App\Models\Category;
 use App\Models\Listing;
 use App\Models\ListingMedia;
 use App\Models\Location;
-use App\Services\Bot\InboundMessage;
-use App\Enums\AiOperationType;
 use App\Services\Ai\Audit\AiAudit;
+use App\Services\Bot\InboundMessage;
 use App\Services\DereuMediaDownloader;
 use App\Services\DereuMessenger;
 use App\Services\Locations\LocationResolver;
@@ -86,6 +87,7 @@ class SupplierListingCollector
             'listing_type' => $node['listing_type'] ?? null,
             'picked_location_id' => null,
             'picked_location_wording' => null,
+            'declined_location_wording' => null,
         ];
         $session->save();
 
@@ -257,7 +259,7 @@ class SupplierListingCollector
      * @param  array<string, mixed>  $state
      * @param  list<int>  $candidates
      */
-    private function chooseLocation(BotSession $session, array $state, array $candidates): ?Location
+    private function chooseLocation(BotSession $session, array &$state, array $candidates): ?Location
     {
         // Nothing was said in words (photos only): there is no evidence to
         // choose by, and a guess would bind a foreign region silently.
@@ -265,21 +267,31 @@ class SupplierListingCollector
             return null;
         }
 
-        $places = Location::query()->whereIn('id', $candidates)->orderBy('depth')->orderBy('id')->get();
+        // The same wording was already put to the model and it did not
+        // settle it. The supplier now owns the choice through the list, and
+        // re-asking on every further message would just repeat a refusal at
+        // full price.
+        $wording = $this->locationWording((string) ($state['fields']['location'] ?? ''));
 
-        if ($places->count() < 2) {
+        if ($wording === ($state['declined_location_wording'] ?? null)) {
             return null;
         }
 
-        $chains = Location::chainsFor($places);
-
-        $labels = $places
-            ->mapWithKeys(fn (Location $place): array => [
-                $place->id => trim($place->name.', '.($chains[$place->id] ?? ''), ', '),
-            ])
-            ->all();
-
         try {
+            $places = Location::query()->whereIn('id', $candidates)->orderBy('depth')->orderBy('id')->get();
+
+            if ($places->count() < 2) {
+                return null;
+            }
+
+            $chains = Location::chainsFor($places);
+
+            $labels = $places
+                ->mapWithKeys(fn (Location $place): array => [
+                    $place->id => trim($place->name.', '.($chains[$place->id] ?? ''), ', '),
+                ])
+                ->all();
+
             $choice = $this->audit->run(
                 AiOperationType::LocationDisambiguation,
                 fn (): array => (new LocationChoiceAgent($labels))
@@ -300,7 +312,13 @@ class SupplierListingCollector
             return null;
         }
 
-        return $places->firstWhere('id', (int) ($choice['location_id'] ?? 0));
+        $chosen = $places->firstWhere('id', (int) ($choice['location_id'] ?? 0));
+
+        if ($chosen === null) {
+            $state['declined_location_wording'] = $wording;
+        }
+
+        return $chosen;
     }
 
     /**
@@ -682,6 +700,7 @@ class SupplierListingCollector
 
         $draft = Listing::create([
             'contact_id' => $session->contact_id,
+            'origin' => ListingOrigin::Chat,
             'type' => $this->resolveType($state),
         ]);
 
@@ -735,12 +754,22 @@ class SupplierListingCollector
     {
         $summary = filled($fields['summary'] ?? null) ? $fields['summary'] : $this->buildSummary($fields);
 
+        // The summary repeats the supplier's own wording of the place, and
+        // that wording is exactly what several dictionary places can share.
+        // The bound node is shown with its parent chain, so a place the
+        // collector settled without asking («Абайский район» — which of the
+        // three?) is confirmed knowingly, not accepted blind.
+        $place = filled($fields['location_id'] ?? null)
+            ? Location::find($fields['location_id'])
+            : null;
+
         // The composed title is the listing's future public name (search
         // rows, notifications, cabinets) — the supplier must see it before
         // submitting, not first meet it in a notification days later.
         $text = implode("\n", array_filter([
             filled($fields['title'] ?? null) ? 'Название: '.$fields['title'] : null,
             $summary,
+            $place !== null ? 'Место: '.$place->label() : null,
         ]));
 
         $this->messenger->sendButtons($session->contact, $text."\nВсё верно? Нажмите «".self::BUTTON_SUBMIT_TITLE.'», чтобы отправить объявление на проверку.', [
@@ -837,6 +866,7 @@ class SupplierListingCollector
             'listing_type' => $node['listing_type'] ?? null,
             'picked_location_id' => null,
             'picked_location_wording' => null,
+            'declined_location_wording' => null,
         ], $session->state ?? []);
     }
 

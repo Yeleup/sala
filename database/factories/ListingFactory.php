@@ -53,6 +53,15 @@ class ListingFactory extends Factory
         ]);
     }
 
+    /**
+     * Every field the publication requires is filled — the state an
+     * operator's draft reaches before he may put it live himself.
+     */
+    public function publishable(): static
+    {
+        return $this->state(fn (): array => ['title' => 'Аренда автокрана 25 т']);
+    }
+
     public function pendingModeration(): static
     {
         return $this->state(fn (): array => ['status' => ListingStatus::PendingModeration]);

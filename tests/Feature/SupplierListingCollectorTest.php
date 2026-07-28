@@ -2,10 +2,12 @@
 
 use App\Ai\Agents\ListingExtractionAgent;
 use App\Ai\Agents\LocationChoiceAgent;
+use App\Enums\AiOperationType;
 use App\Enums\AiOutcome;
 use App\Enums\ListingMediaType;
 use App\Enums\ListingStatus;
 use App\Enums\ListingType;
+use App\Models\AiOperation;
 use App\Models\BotSession;
 use App\Models\Contact;
 use App\Models\Listing;
@@ -16,6 +18,7 @@ use App\Services\Bot\InboundMessage;
 use App\Services\DereuMediaDownloader;
 use App\Services\DereuMessenger;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\JsonSchema\JsonSchemaTypeFactory;
 use Illuminate\Support\Facades\Storage;
 use Laravel\Ai\Prompts\TranscriptionPrompt;
 use Laravel\Ai\Transcription;
@@ -323,7 +326,7 @@ test('an unreadable follow-up does not spend a clarification attempt', function 
         ->withArgs(fn (Contact $to, string $text) => str_contains($text, 'Не удалось разобрать'));
 
     $outcome = app(SupplierListingCollector::class)
-        ->resume($session, supplierAiNode(), new InboundMessage());
+        ->resume($session, supplierAiNode(), new InboundMessage);
 
     expect($outcome)->toBe(AiOutcome::InProgress)
         ->and($session->fresh()->state['attempts'])->toBe(1);
@@ -362,10 +365,26 @@ test('the extractor category is normalized to the dictionary spelling', function
 test('the extraction schema and prompt hard-limit the category to the dictionary', function () {
     $agent = new ListingExtractionAgent(null, ['Автокран', 'Сварщик']);
 
-    $categorySchema = $agent->schema(new Illuminate\JsonSchema\JsonSchemaTypeFactory)['category']->toArray();
+    $categorySchema = $agent->schema(new JsonSchemaTypeFactory)['category']->toArray();
 
     expect($categorySchema['enum'])->toContain('Автокран')->toContain('Сварщик')
         ->and((string) $agent->instructions())->toContain('- Автокран')->toContain('- Сварщик');
+});
+
+test('the location choice schema and prompt hard-limit the answer to the offered places', function () {
+    $agent = new LocationChoiceAgent([
+        18385 => 'Абайский район, область Абай',
+        26158 => 'Абайский район, Карагандинская область',
+    ]);
+
+    $schema = $agent->schema(new JsonSchemaTypeFactory)['location_id']->toArray();
+
+    expect($schema['enum'])->toBe(['18385', '26158'])
+        ->and((string) $agent->instructions())
+        ->toContain('- 18385: Абайский район, область Абай')
+        ->toContain('- 26158: Абайский район, Карагандинская область')
+        // Модель обязана отказаться, а не угадать.
+        ->toContain('верни null');
 });
 
 test('a named brand from the dictionary lands on the draft and in the summary', function () {
@@ -434,7 +453,7 @@ test('a service listing never carries a brand even when the extractor returned o
 test('the extraction schema and prompt hard-limit the brand to the dictionary', function () {
     $agent = new ListingExtractionAgent(null, ['Автокран'], ['Hitachi', 'CAT']);
 
-    $brandSchema = $agent->schema(new Illuminate\JsonSchema\JsonSchemaTypeFactory)['brand']->toArray();
+    $brandSchema = $agent->schema(new JsonSchemaTypeFactory)['brand']->toArray();
 
     expect($brandSchema['enum'])->toContain('Hitachi')->toContain('CAT')
         ->and((string) $agent->instructions())->toContain('- Hitachi')->toContain('- CAT');
@@ -443,7 +462,7 @@ test('the extraction schema and prompt hard-limit the brand to the dictionary', 
 test('an empty brand dictionary degrades the schema and tells the model to keep null', function () {
     $agent = new ListingExtractionAgent(null, ['Автокран']);
 
-    $brandSchema = $agent->schema(new Illuminate\JsonSchema\JsonSchemaTypeFactory)['brand']->toArray();
+    $brandSchema = $agent->schema(new JsonSchemaTypeFactory)['brand']->toArray();
 
     expect($brandSchema)->not->toHaveKey('enum')
         ->and((string) $agent->instructions())->toContain('справочник марок пуст');
@@ -495,7 +514,7 @@ test('an overlong extracted title is clipped to the column limit before saving',
 test('the extraction schema carries a nullable title the model composes itself', function () {
     $agent = new ListingExtractionAgent(null, ['Автокран']);
 
-    $titleSchema = $agent->schema(new Illuminate\JsonSchema\JsonSchemaTypeFactory)['title']->toArray();
+    $titleSchema = $agent->schema(new JsonSchemaTypeFactory)['title']->toArray();
 
     expect($titleSchema)->not->toHaveKey('enum')
         ->and((string) $agent->instructions())->toContain('короткое название объявления')
@@ -592,8 +611,11 @@ test('a confident AI pick resolves same-named places without asking', function (
 
     $messenger = fakeCollectorMessenger();
     $messenger->shouldReceive('sendList')->never();
+    // Привязанное место названо с цепочкой родителей: выбор сделан без
+    // вопроса, и поставщик должен видеть, какой именно из тёзок это был.
     $messenger->shouldReceive('sendButtons')->once()
-        ->withArgs(fn (Contact $to, string $text) => str_contains($text, 'Всё верно?'));
+        ->withArgs(fn (Contact $to, string $text) => str_contains($text, 'Всё верно?')
+            && str_contains($text, 'Место: Абайский район, Карагандинская область'));
 
     $outcome = app(SupplierListingCollector::class)->resume(
         $session,
@@ -606,26 +628,61 @@ test('a confident AI pick resolves same-named places without asking', function (
         // Выбор запоминается как ручной: на следующих сообщениях модель
         // об этом месте больше не спрашивают.
         ->and($session->fresh()->state['picked_location_id'])->toBe($picked->id)
+        ->and(Listing::sole()->location_id)->toBe($picked->id)
+        // Вызов виден в отчёте по расходам AI.
+        ->and(AiOperation::query()->where('operation', AiOperationType::LocationDisambiguation)->count())->toBe(1);
+});
+
+test('a remembered AI pick is not put to the model again on later messages', function () {
+    locationNamed('Абайский район', locationNamed('область Абай'));
+    $picked = locationNamed('Абайский район', locationNamed('Карагандинская область'));
+
+    ListingExtractionAgent::fake([
+        fullExtraction(['location' => 'Абайский район', 'price' => null, 'clarifying_question' => 'Какая цена?']),
+        fullExtraction(['location' => 'Абайский район']),
+    ]);
+    fakeLocationChoice($picked->id);
+    $session = collectorSession();
+
+    $messenger = fakeCollectorMessenger();
+    $messenger->shouldReceive('sendList')->never();
+    $messenger->shouldReceive('sendText')->once();
+    $messenger->shouldReceive('sendButtons')->once();
+
+    $collector = app(SupplierListingCollector::class);
+    $collector->resume($session, supplierAiNode(), new InboundMessage(text: 'Трактор, Абайский район Карагандинской области'));
+    $collector->resume($session->fresh(), supplierAiNode(), new InboundMessage(text: '10000 тг/час'));
+
+    // Второе сообщение переиспользует запомненный выбор — второго платного
+    // вызова разрешителя не было.
+    expect(AiOperation::query()->where('operation', AiOperationType::LocationDisambiguation)->count())->toBe(1)
         ->and(Listing::sole()->location_id)->toBe($picked->id);
 });
 
-test('an AI answer outside the candidates falls back to the list', function () {
+test('an AI answer outside the candidates falls back to the list and is not repeated', function () {
     locationNamed('Абайский район', locationNamed('область Абай'));
     locationNamed('Абайский район', locationNamed('г.Шымкент'));
     $foreign = locationNamed('г.Караганда');
 
-    ListingExtractionAgent::fake([fullExtraction(['location' => 'Абайский район'])]);
+    ListingExtractionAgent::fake([
+        fullExtraction(['location' => 'Абайский район']),
+        fullExtraction(['location' => 'Абайский район']),
+    ]);
     fakeLocationChoice($foreign->id);
     $session = collectorSession();
 
-    fakeCollectorMessenger()->shouldReceive('sendList')->once();
+    fakeCollectorMessenger()->shouldReceive('sendList')->twice();
 
-    $outcome = app(SupplierListingCollector::class)
-        ->resume($session, supplierAiNode(), new InboundMessage(text: 'Трактор, Абайский район, 10000 тг/час'));
+    $collector = app(SupplierListingCollector::class);
+    $collector->resume($session, supplierAiNode(), new InboundMessage(text: 'Трактор, Абайский район, 10000 тг/час'));
+    $outcome = $collector->resume($session->fresh(), supplierAiNode(), new InboundMessage(text: 'ну этот же район'));
 
     expect($outcome)->toBe(AiOutcome::InProgress)
         ->and($session->fresh()->state['phase'])->toBe('locating')
-        ->and($session->fresh()->state['picked_location_id'])->toBeNull();
+        ->and($session->fresh()->state['picked_location_id'])->toBeNull()
+        // Модель уже отказалась разбирать ровно эту формулировку — второй
+        // раз её об этом не спрашивают.
+        ->and(AiOperation::query()->where('operation', AiOperationType::LocationDisambiguation)->count())->toBe(1);
 });
 
 test('an unavailable model for the location choice still shows the list', function () {
@@ -855,7 +912,7 @@ test('an unusable message asks the supplier to describe the offer without spendi
         ->withArgs(fn (Contact $to, string $text) => str_contains($text, 'Не удалось разобрать'));
 
     $outcome = app(SupplierListingCollector::class)
-        ->resume($session, supplierAiNode(), new InboundMessage());
+        ->resume($session, supplierAiNode(), new InboundMessage);
 
     expect($outcome)->toBe(AiOutcome::InProgress)
         ->and($session->fresh()->state['attempts'])->toBe(0)

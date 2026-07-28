@@ -2,8 +2,14 @@
 
 namespace App\Filament\Resources\Contacts\Schemas;
 
+use App\Models\Contact;
+use App\Support\PhoneNumber;
+use Closure;
 use Filament\Forms\Components\TextInput;
+use Filament\Schemas\Components\Utilities\Set;
 use Filament\Schemas\Schema;
+use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Database\Eloquent\Model;
 
 /**
  * Operator form for a contact. Only the identity fields are editable:
@@ -19,14 +25,38 @@ class ContactForm
                 TextInput::make('phone')
                     ->label('Телефон')
                     ->placeholder('77011234567')
-                    ->helperText('Только цифры, в международном формате без «+».')
+                    ->helperText('Записывайте как удобно — «8 701…», «+7 701…»; номер сам приводится к виду 77011234567.')
                     ->required()
+                    // The operator writes the number down as it is
+                    // dictated on a call; it is canonicalized in place so
+                    // both the duplicate check below and the saved value
+                    // work off the one form WhatsApp names the contact by.
+                    ->live(onBlur: true)
+                    ->afterStateUpdated(fn (Set $set, ?string $state): mixed => $set('phone', PhoneNumber::normalize($state)))
                     ->rule('regex:/^\d{6,15}$/')
-                    ->unique(ignoreRecord: true)
+                    ->rule(static fn (?Model $record): Closure => static function (string $attribute, mixed $value, Closure $fail) use ($record): void {
+                        $duplicate = Contact::query()
+                            ->where('phone', $value)
+                            ->when(
+                                $record instanceof Contact,
+                                fn (Builder $query): Builder => $query->whereKeyNot($record->getKey()),
+                            )
+                            ->first();
+
+                        if ($duplicate === null) {
+                            return;
+                        }
+
+                        // Naming the existing contact turns a dead end
+                        // into an answer: on a call the operator learns
+                        // whose number the client just dictated.
+                        $fail(filled($duplicate->displayName())
+                            ? 'Контакт с таким номером уже есть — «'.$duplicate->displayName().'».'
+                            : 'Контакт с таким номером уже есть.');
+                    })
                     ->validationMessages([
                         'required' => 'Укажите номер телефона.',
-                        'regex' => 'Только цифры, в международном формате без «+».',
-                        'unique' => 'Контакт с таким номером уже есть.',
+                        'regex' => 'Похоже, это не номер телефона — укажите номер в международном формате.',
                     ]),
                 TextInput::make('display_name')
                     ->label('Отображаемое имя')

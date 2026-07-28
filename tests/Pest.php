@@ -72,6 +72,27 @@ function brandNamed(string $name): \App\Models\Brand
 }
 
 /**
+ * Текст подсказки под полем формы. Модалку Filament в тестах не рендерит
+ * в HTML компонента, поэтому подсказку читаем прямо со схемы:
+ * `->assertSchemaComponentExists('name', checkComponentUsing: fn ($c) =>
+ * str_contains(helperTextOf($c), '…'))`.
+ */
+function helperTextOf(\Filament\Schemas\Components\Component $component): string
+{
+    $texts = [];
+
+    foreach ($component->getChildSchemas() as $schema) {
+        foreach ($schema->getFlatComponents(withHidden: true) as $child) {
+            if ($child instanceof \Filament\Schemas\Components\Text) {
+                $texts[] = (string) $child->getContent();
+            }
+        }
+    }
+
+    return implode(' ', $texts);
+}
+
+/**
  * Узел справочника локаций КАТО (создаётся при первом обращении) — для
  * объявлений в тестах: `'location_id' => locationNamed('г.Шымкент')->id`.
  */

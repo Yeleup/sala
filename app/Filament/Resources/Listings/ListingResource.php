@@ -132,6 +132,23 @@ class ListingResource extends Resource
     }
 
     /**
+     * The listing as the customer sees it, rendered by the customer's own
+     * page: moderating by the form fields alone hides what actually
+     * reaches the catalog — how the photos crop, where the description
+     * breaks, whether the title reads like an offer. Opens in a new tab so
+     * the form the operator is filling in is not lost.
+     */
+    public static function previewAction(): Action
+    {
+        return Action::make('preview')
+            ->label('Посмотреть объявление')
+            ->icon(Heroicon::OutlinedEye)
+            ->color('gray')
+            ->url(fn (Listing $record): string => route('moderation.listings.preview', $record))
+            ->openUrlInNewTab();
+    }
+
+    /**
      * Publication of a listing the operator typed himself: he is both its
      * author and the verdict on it, so routing his own text through the
      * moderation queue would only add clicks. Two things replace that

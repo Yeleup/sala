@@ -14,6 +14,11 @@ return Application::configure(basePath: dirname(__DIR__))
     )
     ->withMiddleware(function (Middleware $middleware): void {
         $middleware->trustProxies(at: '*');
+
+        // The only authenticated web routes outside the panel are operator
+        // tools (the listing preview), so a guest belongs at the panel's
+        // login — the app has no other login page.
+        $middleware->redirectGuestsTo(fn (): string => route('filament.admin.auth.login'));
     })
     ->withExceptions(function (Exceptions $exceptions): void {
         $exceptions->shouldRenderJsonWhen(

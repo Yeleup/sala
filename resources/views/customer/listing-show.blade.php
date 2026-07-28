@@ -1,5 +1,7 @@
 <x-customer.layout :title="$listing->displayName() ?: 'Объявление №'.$listing->id">
-    <a class="back" href="{{ $backUrl }}">&larr; Назад к каталогу</a>
+    {{-- Подпись ссылки задаётся вызывающим: из каталога это возврат к нему,
+         из админки — возврат к объявлению. --}}
+    <a class="back" href="{{ $backUrl }}">&larr; {{ $backLabel ?? 'Назад к каталогу' }}</a>
 
     <header class="page-header">
         <h1>{{ $listing->displayName() ?: 'Объявление №'.$listing->id }}</h1>
@@ -68,7 +70,11 @@
             <p class="listing-line muted">Поставщик: {{ $listing->supplier->displayName() }}</p>
         @endif
 
-        @if ($alreadyRequested)
+        @if ($preview ?? false)
+            {{-- Предпросмотр для модератора: страница та же, но заявку от лица
+                 заказчика оператор не оформляет, поэтому «Выбрать» здесь нет. --}}
+            <p class="listing-line muted">{{ $previewNote }}</p>
+        @elseif ($alreadyRequested)
             <div class="actions"><span class="badge badge-green">Заявка отправлена — ждём ответа поставщика</span></div>
         @else
             <form method="POST" action="{{ $selectUrl }}" class="actions">

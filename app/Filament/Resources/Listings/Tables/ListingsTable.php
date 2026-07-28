@@ -101,6 +101,7 @@ class ListingsTable
             ])
             ->recordActions([
                 EditAction::make(),
+                ListingResource::previewAction(),
                 ListingResource::publishAction(),
                 ListingResource::submitForModerationAction(),
                 ListingResource::approveAction(),

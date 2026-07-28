@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Controllers\CustomerCatalogController;
+use App\Http\Controllers\ListingPreviewController;
 use App\Http\Controllers\LocationSearchController;
 use App\Http\Controllers\SupplierListingController;
 use App\Http\Middleware\ValidateSignatureExceptQuery;
@@ -42,6 +43,16 @@ Route::middleware('signed')->name('supplier.listings.')->group(function (): void
     Route::post('/supplier/listings/{listing}/archive', [SupplierListingController::class, 'archive'])
         ->whereNumber('listing')->name('archive');
 });
+
+/**
+ * Moderator preview of a listing, rendered by the customer's own listing
+ * page. Guarded by the admin panel's session, not by a signed link: it is
+ * an operator's tool, and it opens a listing in any status.
+ */
+Route::middleware('auth')
+    ->get('/moderation/listings/{listing}/preview', ListingPreviewController::class)
+    ->whereNumber('listing')
+    ->name('moderation.listings.preview');
 
 /**
  * Customer web catalog (Modules 2–3): every published listing with search

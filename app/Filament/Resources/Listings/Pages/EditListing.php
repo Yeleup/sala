@@ -26,6 +26,7 @@ class EditListing extends EditRecord
     protected function getHeaderActions(): array
     {
         return [
+            ListingResource::previewAction(),
             ListingResource::publishAction(),
             ListingResource::submitForModerationAction(),
             ListingResource::approveAction(),

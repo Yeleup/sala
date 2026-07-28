@@ -11,6 +11,7 @@ use Filament\Support\Contracts\HasLabel;
 enum AiOperationType: string implements HasLabel
 {
     case ListingExtraction = 'listing_extraction';
+    case LocationDisambiguation = 'location_disambiguation';
     case SearchQueryExtraction = 'search_query_extraction';
     case Transcription = 'transcription';
     case Embedding = 'embedding';
@@ -19,6 +20,7 @@ enum AiOperationType: string implements HasLabel
     {
         return match ($this) {
             self::ListingExtraction => 'Извлечение объявления',
+            self::LocationDisambiguation => 'Выбор места из одноимённых',
             self::SearchQueryExtraction => 'Разбор поискового запроса',
             self::Transcription => 'Транскрибация аудио',
             self::Embedding => 'Векторизация для поиска',

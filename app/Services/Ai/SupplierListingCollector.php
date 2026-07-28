@@ -3,6 +3,7 @@
 namespace App\Services\Ai;
 
 use App\Ai\Agents\ListingExtractionAgent;
+use App\Ai\Agents\LocationChoiceAgent;
 use App\Enums\AiOutcome;
 use App\Enums\ListingMediaType;
 use App\Enums\ListingType;
@@ -20,9 +21,11 @@ use App\Services\DereuMessenger;
 use App\Services\Locations\LocationResolver;
 use App\Support\WhatsappText;
 use Illuminate\Database\Eloquent\Collection;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use Laravel\Ai\Files\Image;
+use Throwable;
 
 /**
  * Collects a supplier's listing over a WhatsApp sub-dialog: extracts
@@ -160,6 +163,26 @@ class SupplierListingCollector
         $candidates = array_map(intval(...), (array) ($state['fields']['location_candidates'] ?? []));
 
         if (in_array('location_id', $missing, true) && $candidates !== []) {
+            // The supplier's own messages may already say which of the
+            // namesakes it is («Абайский район» plus «Карагандинская
+            // область» earlier in the dialog): asking then is a wasted
+            // round trip. The pick is recorded exactly as a manual one, so
+            // later turns reuse it instead of calling the model again.
+            $chosen = $this->chooseLocation($session, $state, $candidates);
+
+            if ($chosen !== null) {
+                $state['picked_location_id'] = $chosen->id;
+                $state['picked_location_wording'] = $this->locationWording((string) ($state['fields']['location'] ?? ''));
+
+                $state['fields']['location_id'] = $chosen->id;
+                $state['fields']['location'] = $chosen->name;
+                $state['fields']['location_candidates'] = [];
+
+                // The place is settled, so this branch cannot be taken
+                // again — the re-entry is bounded to one level.
+                return $this->advance($session, $state);
+            }
+
             $state['phase'] = 'locating';
             $this->persist($session, $state);
             $this->sendLocationChoices($session, $candidates);
@@ -219,6 +242,65 @@ class SupplierListingCollector
         $state['phase'] = 'collecting';
 
         return $this->handleCollecting($session, $state, $message);
+    }
+
+    /**
+     * The one of the same-named dictionary places the supplier's messages
+     * point at, or null when the accumulated input does not settle it —
+     * then the pick list goes out as before. Candidates carry their full
+     * ancestor chains, so «Абайский район» in Karaganda is told from the
+     * one in Shymkent by what the supplier said around the name.
+     *
+     * An unavailable model, or an answer that is not one of the offered
+     * ids, costs nothing: the dialog just falls back to asking.
+     *
+     * @param  array<string, mixed>  $state
+     * @param  list<int>  $candidates
+     */
+    private function chooseLocation(BotSession $session, array $state, array $candidates): ?Location
+    {
+        // Nothing was said in words (photos only): there is no evidence to
+        // choose by, and a guess would bind a foreign region silently.
+        if ($state['transcript'] === [] || count($candidates) < 2) {
+            return null;
+        }
+
+        $places = Location::query()->whereIn('id', $candidates)->orderBy('depth')->orderBy('id')->get();
+
+        if ($places->count() < 2) {
+            return null;
+        }
+
+        $chains = Location::chainsFor($places);
+
+        $labels = $places
+            ->mapWithKeys(fn (Location $place): array => [
+                $place->id => trim($place->name.', '.($chains[$place->id] ?? ''), ', '),
+            ])
+            ->all();
+
+        try {
+            $choice = $this->audit->run(
+                AiOperationType::LocationDisambiguation,
+                fn (): array => (new LocationChoiceAgent($labels))
+                    ->prompt(implode("\n", $state['transcript']))
+                    ->toArray(),
+                [
+                    'contact_id' => $session->contact_id,
+                    'bot_session_id' => $session->id,
+                    'listing_id' => $state['draft_id'],
+                ],
+            );
+        } catch (Throwable $e) {
+            Log::warning('Location disambiguation failed; falling back to the pick list.', [
+                'bot_session_id' => $session->id,
+                'error' => $e->getMessage(),
+            ]);
+
+            return null;
+        }
+
+        return $places->firstWhere('id', (int) ($choice['location_id'] ?? 0));
     }
 
     /**

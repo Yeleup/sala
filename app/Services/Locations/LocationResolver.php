@@ -45,9 +45,10 @@ class LocationResolver
     private const int FUZZY_MIN_KEY_LENGTH = 5;
 
     /**
-     * All dictionary nodes matching the given wording — exactly, or (when
+     * The dictionary nodes the given wording may mean — exactly, or (when
      * nothing matches exactly) by close-distortion correction: the fuzzy
-     * candidates become the pick list, same as same-named places.
+     * candidates become the pick list, same as same-named places. A city of
+     * republican significance among the namesakes takes the name outright.
      *
      * @return Collection<int, Location>
      */
@@ -63,7 +64,9 @@ class LocationResolver
             Location::query()->where('search_name', $key)->orderBy('depth')->orderBy('id')->get(),
         );
 
-        return $matches->isNotEmpty() ? $matches : $this->fuzzyMatches($key);
+        return $this->republicanCityWins(
+            $matches->isNotEmpty() ? $matches : $this->fuzzyMatches($key),
+        );
     }
 
     /**
@@ -383,6 +386,31 @@ class LocationResolver
             ->filter(fn (Location $candidate): bool => (float) $candidate->sim >= $best - self::FUZZY_SIMILARITY_WINDOW)
             ->pluck('search_name')
             ->all();
+    }
+
+    /**
+     * Cities of republican significance («г.Алматы», «г.Астана») are the
+     * only settlements standing at the top of the KATO tree, and their
+     * namesakes are always deeper — a district of another city, a village.
+     * Nobody naming such a city means the namesake, so the tie is decided
+     * instead of asked about. Oblasts share that level but are containers,
+     * not places: they never take the name from the settlements inside
+     * them.
+     *
+     * @param  Collection<int, Location>  $candidates
+     * @return Collection<int, Location>
+     */
+    protected function republicanCityWins(Collection $candidates): Collection
+    {
+        if ($candidates->count() < 2) {
+            return $candidates;
+        }
+
+        $topLevel = $candidates->where('depth', 0);
+
+        return $topLevel->count() === 1 && str_starts_with(mb_strtolower($topLevel->first()->name), 'г.')
+            ? $topLevel->values()
+            : $candidates;
     }
 
     /**

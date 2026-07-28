@@ -45,6 +45,25 @@ test('резолвер понимает падежи, казахские бук�
         ->and($resolver->resolve('Нарния'))->toHaveCount(0);
 });
 
+test('город республиканского значения забирает имя у одноимённых, а область — нет', function () {
+    // Продакшен-форма: ключ «алмат» делят город республиканского значения
+    // и два района с тем же названием в других городах.
+    $almaty = locationNamed('г.Алматы');
+    locationNamed('район Алматы', locationNamed('г.Астана'));
+    locationNamed('район Алматы', locationNamed('Актобе Г.А.', locationNamed('Актюбинская область')));
+
+    // Область стоит на том же верхнем уровне, но она — вместилище, а не
+    // место: имя у одноимённого села она не забирает.
+    $abaiRegion = locationNamed('область Абай');
+    $abaiVillage = locationNamed('с.Абай', locationNamed('Карагандинская область'));
+
+    $resolver = app(LocationResolver::class);
+
+    expect($resolver->resolve('г.Алматы')->sole()->id)->toBe($almaty->id)
+        ->and($resolver->resolve('в Алматы')->sole()->id)->toBe($almaty->id)
+        ->and($resolver->resolve('Абай')->pluck('id')->all())->toBe([$abaiRegion->id, $abaiVillage->id]);
+});
+
 test('детект локации в запросе: однозначно, крупнейший уровень, неоднозначно', function () {
     importSampleKatoTree();
     $resolver = app(LocationResolver::class);

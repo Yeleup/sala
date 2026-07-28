@@ -1,6 +1,7 @@
 <?php
 
 use App\Ai\Agents\ListingExtractionAgent;
+use App\Ai\Agents\LocationChoiceAgent;
 use App\Enums\AiOutcome;
 use App\Enums\ListingMediaType;
 use App\Enums\ListingStatus;
@@ -50,6 +51,15 @@ function collectorSession(array $state = []): BotSession
 function fakeCollectorMessenger(): MockInterface
 {
     return test()->mock(DereuMessenger::class);
+}
+
+/**
+ * Ответ агента, разбирающего одноимённые места. По умолчанию — «не уверен»,
+ * и поставщику уходит список; замыкание отвечает на любое число вызовов.
+ */
+function fakeLocationChoice(?int $id = null): void
+{
+    LocationChoiceAgent::fake(fn (): array => ['location_id' => $id === null ? null : (string) $id]);
 }
 
 /**
@@ -554,6 +564,7 @@ test('an ambiguous location sends a pick list without spending an attempt', func
     $shymkentDistrict = locationNamed('Абайский район', locationNamed('г.Шымкент'));
 
     ListingExtractionAgent::fake([fullExtraction(['location' => 'Абайский район'])]);
+    fakeLocationChoice();
     $session = collectorSession();
 
     fakeCollectorMessenger()->shouldReceive('sendList')->once()
@@ -570,11 +581,77 @@ test('an ambiguous location sends a pick list without spending an attempt', func
         ->and($session->fresh()->state['attempts'])->toBe(0);
 });
 
+test('a confident AI pick resolves same-named places without asking', function () {
+    locationNamed('Абайский район', locationNamed('область Абай'));
+    $picked = locationNamed('Абайский район', locationNamed('Карагандинская область'));
+
+    // Поставщик сам назвал область — переспрашивать нечего.
+    ListingExtractionAgent::fake([fullExtraction(['location' => 'Абайский район'])]);
+    fakeLocationChoice($picked->id);
+    $session = collectorSession();
+
+    $messenger = fakeCollectorMessenger();
+    $messenger->shouldReceive('sendList')->never();
+    $messenger->shouldReceive('sendButtons')->once()
+        ->withArgs(fn (Contact $to, string $text) => str_contains($text, 'Всё верно?'));
+
+    $outcome = app(SupplierListingCollector::class)->resume(
+        $session,
+        supplierAiNode(),
+        new InboundMessage(text: 'Трактор, Абайский район Карагандинской области, 10000 тг/час'),
+    );
+
+    expect($outcome)->toBe(AiOutcome::InProgress)
+        ->and($session->fresh()->state['phase'])->toBe('confirming')
+        // Выбор запоминается как ручной: на следующих сообщениях модель
+        // об этом месте больше не спрашивают.
+        ->and($session->fresh()->state['picked_location_id'])->toBe($picked->id)
+        ->and(Listing::sole()->location_id)->toBe($picked->id);
+});
+
+test('an AI answer outside the candidates falls back to the list', function () {
+    locationNamed('Абайский район', locationNamed('область Абай'));
+    locationNamed('Абайский район', locationNamed('г.Шымкент'));
+    $foreign = locationNamed('г.Караганда');
+
+    ListingExtractionAgent::fake([fullExtraction(['location' => 'Абайский район'])]);
+    fakeLocationChoice($foreign->id);
+    $session = collectorSession();
+
+    fakeCollectorMessenger()->shouldReceive('sendList')->once();
+
+    $outcome = app(SupplierListingCollector::class)
+        ->resume($session, supplierAiNode(), new InboundMessage(text: 'Трактор, Абайский район, 10000 тг/час'));
+
+    expect($outcome)->toBe(AiOutcome::InProgress)
+        ->and($session->fresh()->state['phase'])->toBe('locating')
+        ->and($session->fresh()->state['picked_location_id'])->toBeNull();
+});
+
+test('an unavailable model for the location choice still shows the list', function () {
+    locationNamed('Абайский район', locationNamed('область Абай'));
+    locationNamed('Абайский район', locationNamed('г.Шымкент'));
+
+    ListingExtractionAgent::fake([fullExtraction(['location' => 'Абайский район'])]);
+    LocationChoiceAgent::fake(fn () => throw new RuntimeException('провайдер недоступен'));
+    $session = collectorSession();
+
+    fakeCollectorMessenger()->shouldReceive('sendList')->once();
+
+    $outcome = app(SupplierListingCollector::class)
+        ->resume($session, supplierAiNode(), new InboundMessage(text: 'Трактор, Абайский район, 10000 тг/час'));
+
+    expect($outcome)->toBe(AiOutcome::InProgress)
+        ->and($session->fresh()->state['phase'])->toBe('locating')
+        ->and($session->fresh()->state['attempts'])->toBe(0);
+});
+
 test('picking a location from the list resolves it and continues to confirmation', function () {
     locationNamed('Абайский район', locationNamed('область Абай'));
     $picked = locationNamed('Абайский район', locationNamed('г.Шымкент'));
 
     ListingExtractionAgent::fake([fullExtraction(['location' => 'Абайский район'])]);
+    fakeLocationChoice();
     $session = collectorSession();
 
     $messenger = fakeCollectorMessenger();
@@ -606,6 +683,7 @@ test('a picked location survives later messages without re-asking the list', fun
         fullExtraction(['location' => 'Абайский район', 'price' => null, 'clarifying_question' => 'Какая цена?']),
         fullExtraction(['location' => 'Абайский район']),
     ]);
+    fakeLocationChoice();
     $session = collectorSession();
 
     $messenger = fakeCollectorMessenger();
@@ -634,6 +712,7 @@ test('naming a different place after a pick rebinds instead of keeping the pick'
         fullExtraction(['location' => 'Абайский район', 'price' => null, 'clarifying_question' => 'Какая цена?']),
         fullExtraction(['location' => 'Караганда']),
     ]);
+    fakeLocationChoice();
     $session = collectorSession();
 
     $messenger = fakeCollectorMessenger();
@@ -662,6 +741,7 @@ test('correcting to a same-named place after a pick reopens the list', function 
         fullExtraction(['location' => 'Абайский район', 'price' => null, 'clarifying_question' => 'Какая цена?']),
         fullExtraction(['location' => 'Абайская г.а.']),
     ]);
+    fakeLocationChoice();
     $session = collectorSession();
 
     $messenger = fakeCollectorMessenger();
@@ -690,6 +770,7 @@ test('too many namesakes for a list are cut to their biggest disputed level', fu
     }
 
     ListingExtractionAgent::fake([fullExtraction(['location' => 'Абайский район'])]);
+    fakeLocationChoice();
     $session = collectorSession();
 
     fakeCollectorMessenger()->shouldReceive('sendList')->once()

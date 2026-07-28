@@ -22,7 +22,11 @@ class PhoneNumber
 
     private const string COUNTRY_PREFIX = '77';
 
-    private const int NUMBER_LENGTH = 11;
+    /**
+     * Every Kazakh number is eleven digits long: the country code 7, the
+     * area code starting with 7, and seven digits.
+     */
+    public const int KAZAKH_LENGTH = 11;
 
     /**
      * The canonical form to store and compare by. Returns null when the
@@ -37,11 +41,39 @@ class PhoneNumber
             return null;
         }
 
-        if (strlen($digits) === self::NUMBER_LENGTH && str_starts_with($digits, self::DOMESTIC_PREFIX)) {
+        if (strlen($digits) === self::KAZAKH_LENGTH && str_starts_with($digits, self::DOMESTIC_PREFIX)) {
             $digits = self::COUNTRY_PREFIX.substr($digits, strlen(self::DOMESTIC_PREFIX));
         }
 
         return $digits;
+    }
+
+    public static function isKazakh(?string $phone): bool
+    {
+        $digits = self::normalize($phone);
+
+        return $digits !== null
+            && strlen($digits) === self::KAZAKH_LENGTH
+            && str_starts_with($digits, self::COUNTRY_PREFIX);
+    }
+
+    /**
+     * Whether the field should type this value under the Kazakh mask.
+     * Empty and half-typed values do — the mask is what guides the typing.
+     * A value that is already a full number but not a Kazakh one does not:
+     * such a number reaches us from WhatsApp on its own, and forcing it
+     * through the mask while the operator edits the contact would silently
+     * rewrite it into a different subscriber.
+     */
+    public static function fitsKazakhMask(?string $phone): bool
+    {
+        $digits = self::normalize($phone);
+
+        if ($digits === null || strlen($digits) < self::KAZAKH_LENGTH) {
+            return true;
+        }
+
+        return str_starts_with($digits, self::COUNTRY_PREFIX);
     }
 
     /**

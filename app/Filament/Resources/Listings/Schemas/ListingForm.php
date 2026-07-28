@@ -15,17 +15,21 @@ use App\Models\ListingMedia;
 use App\Models\Location;
 use App\Services\Locations\LocationResolver;
 use App\Support\PhoneNumber;
+use Filament\Actions\Action;
 use Filament\Forms\Components\FileUpload;
 use Filament\Forms\Components\Repeater;
 use Filament\Forms\Components\Select;
 use Filament\Forms\Components\Textarea;
 use Filament\Forms\Components\TextInput;
 use Filament\Infolists\Components\TextEntry;
+use Filament\Notifications\Notification;
+use Filament\Schemas\Components\Group;
 use Filament\Schemas\Components\Utilities\Get;
 use Filament\Schemas\Components\Utilities\Set;
 use Filament\Schemas\Schema;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Collection;
+use Illuminate\Support\Arr;
 
 /**
  * Operator form for a listing's business fields — also the moderation
@@ -75,14 +79,61 @@ class ListingForm
                     ->getOptionLabelFromRecordUsing(fn (Contact $record): string => self::supplierLabel($record))
                     ->searchable()
                     ->getSearchResultsUsing(fn (string $search): array => self::supplierOptions($search))
+                    ->noSearchResultsMessage('Такого поставщика ещё нет — нажмите + справа, чтобы завести.')
                     ->preload()
                     ->required()
                     // A client calling in for the first time must not cost
-                    // the operator the form he has already typed: the
-                    // contact is created in place, by the same fields and
-                    // the same validation as the contacts page.
-                    ->createOptionForm(fn (Schema $form): Schema => ContactForm::configure($form))
-                    ->createOptionModalHeading('Новый поставщик')
+                    // the operator the form he has already typed, and on a
+                    // call he rarely remembers whether this client has
+                    // phoned before — so the same window both finds an
+                    // existing supplier and creates a new one.
+                    ->createOptionForm(fn (): array => [
+                        Select::make('existing_contact_id')
+                            ->label('Уже заведён?')
+                            ->placeholder('Начните вводить номер или имя — покажем совпадения')
+                            ->searchable()
+                            ->live()
+                            ->getSearchResultsUsing(fn (string $search): array => self::supplierOptions($search))
+                            ->getOptionLabelUsing(function (mixed $value): ?string {
+                                $contact = Contact::find($value);
+
+                                return $contact === null ? null : self::supplierLabel($contact);
+                            })
+                            ->noSearchResultsMessage('Совпадений нет — заполните поля ниже.')
+                            ->helperText('Нашли — выбирайте, и поля ниже заполнять не нужно.'),
+                        // Hidden components are neither validated nor
+                        // dehydrated, so choosing an existing supplier
+                        // lifts the «телефон обязателен» requirement by
+                        // itself and the window shows one job at a time.
+                        Group::make(ContactForm::fields(rejectDuplicatePhone: false))
+                            ->visible(fn (Get $get): bool => blank($get('existing_contact_id')))
+                            ->columnSpanFull(),
+                    ])
+                    ->createOptionModalHeading('Поставщик')
+                    ->createOptionAction(fn (Action $action): Action => $action->modalSubmitActionLabel('Готово'))
+                    ->createOptionUsing(function (array $data): int {
+                        if (filled($data['existing_contact_id'] ?? null)) {
+                            return (int) $data['existing_contact_id'];
+                        }
+
+                        // The phone is the contact's identity, so a number
+                        // already in the base means this supplier exists —
+                        // he gets selected rather than the operator hitting
+                        // a «такой номер уже есть» wall and starting over.
+                        $existing = ContactForm::duplicateOf($data['phone'] ?? null);
+
+                        if ($existing !== null) {
+                            Notification::make()
+                                ->title('Выбран существующий поставщик')
+                                ->body('Этот номер уже заведён — новый контакт не создавался.')
+                                ->warning()
+                                ->send();
+
+                            return $existing->getKey();
+                        }
+
+                        return Contact::create(Arr::except($data, 'existing_contact_id'))->getKey();
+                    })
                     ->validationMessages(['required' => 'Выберите поставщика.']),
                 Select::make('type')
                     ->label('Тип')
@@ -253,9 +304,12 @@ class ListingForm
      * stored as «7701…», otherwise the operator creates a duplicate and
      * the listing ends up on a number nothing can reach.
      *
+     * Backs both the «Поставщик» field and the picker inside its modal, so
+     * the two behave identically.
+     *
      * @return array<int, string>
      */
-    private static function supplierOptions(string $search): array
+    public static function supplierOptions(string $search): array
     {
         $prefixes = PhoneNumber::searchPrefixes($search);
 

@@ -85,6 +85,30 @@ test('редактирование контакта не спотыкается 
         ->profile_name->toBe('Асхат');
 });
 
+test('недописанный номер не сохраняется', function () {
+    // Маска позволяет отправить форму на половине набора — иначе в базу
+    // легло бы «770123» как полноценный номер.
+    Livewire::test(CreateContact::class)
+        ->fillForm(['phone' => '+7(701)23'])
+        ->call('create')
+        ->assertHasFormErrors(['phone' => 'Номер не дописан — в казахстанском номере 11 цифр, формат +7(7XX)XXXXXXX.']);
+
+    expect(Contact::count())->toBe(0);
+});
+
+test('иностранный номер, пришедший из WhatsApp, правится и сохраняется как есть', function () {
+    $contact = Contact::factory()->create(['phone' => '49151123456']);
+
+    Livewire::test(EditContact::class, ['record' => $contact->id])
+        ->fillForm(['phone' => '49151123457', 'display_name' => 'Партнёр'])
+        ->call('save')
+        ->assertHasNoFormErrors();
+
+    expect($contact->refresh())
+        ->phone->toBe('49151123457')
+        ->display_name->toBe('Партнёр');
+});
+
 test('текст без номера телефоном не считается', function () {
     Livewire::test(CreateContact::class)
         ->fillForm(['phone' => '12'])

@@ -19,6 +19,27 @@ test('номер приводится к тому виду, в котором е
     'недобранный номер' => ['8701234', '8701234'],
 ]);
 
+test('казахстанским считается номер из 11 цифр, начинающийся с 7 7', function () {
+    expect(PhoneNumber::isKazakh('+7(701)2345678'))->toBeTrue()
+        ->and(PhoneNumber::isKazakh('8 701 234 56 78'))->toBeTrue()
+        // Недобранный номер ещё не номер.
+        ->and(PhoneNumber::isKazakh('7701234'))->toBeFalse()
+        ->and(PhoneNumber::isKazakh('49151123456'))->toBeFalse()
+        ->and(PhoneNumber::isKazakh(null))->toBeFalse();
+});
+
+test('маска ведёт набор, но отступает перед готовым иностранным номером', function (?string $value, bool $masked) {
+    expect(PhoneNumber::fitsKazakhMask($value))->toBe($masked);
+})->with([
+    'пустое поле' => [null, true],
+    'номер набирается' => ['+7(701)23', true],
+    'готовый казахстанский' => ['+7(701)2345678', true],
+    'диктуемый с восьмёркой' => ['87012345678', true],
+    // Номер из WhatsApp: под маской он молча превратился бы в чужой,
+    // поэтому такой контакт правится как есть.
+    'готовый иностранный' => ['49151123456', false],
+]);
+
 test('поиск по номеру предлагает оба написания, пока оператор ещё печатает', function () {
     expect(PhoneNumber::searchPrefixes('8 701'))->toBe(['8701', '7701'])
         ->and(PhoneNumber::searchPrefixes('+7 701'))->toBe(['7701'])

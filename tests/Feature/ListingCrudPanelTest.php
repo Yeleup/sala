@@ -8,6 +8,7 @@ use App\Filament\Resources\Listings\ListingResource;
 use App\Filament\Resources\Listings\Pages\CreateListing;
 use App\Filament\Resources\Listings\Pages\EditListing;
 use App\Filament\Resources\Listings\Pages\ListListings;
+use App\Filament\Resources\Listings\Schemas\ListingForm;
 use App\Models\Brand;
 use App\Models\Category;
 use App\Models\Contact;
@@ -381,16 +382,70 @@ describe('справочники пополняются прямо из форм
         expect(Location::where('name', 'мкр Нурсат')->sole()->parent_id)->toBe($city->id);
     });
 
-    test('поставщик заводится и со страницы редактирования, дубль номера назван', function () {
-        Contact::factory()->create(['phone' => '77012345678', 'display_name' => 'ТОО «СтройКран»']);
-        $listing = Listing::factory()->create();
+    test('известный номер выбирает существующего поставщика, а не упирается в ошибку', function (bool $onEditPage) {
+        $existing = Contact::factory()->create(['phone' => '77012345678', 'display_name' => 'ТОО «СтройКран»']);
 
-        Livewire::test(EditListing::class, ['record' => $listing->id])
+        $component = $onEditPage
+            ? Livewire::test(EditListing::class, ['record' => Listing::factory()->create()->id])
+            : Livewire::test(CreateListing::class);
+
+        $contactsBefore = Contact::count();
+
+        // Номер — опознавательная запись контакта: продиктованный как
+        // «8 701…» он должен привести к тому же поставщику.
+        $component
             ->callAction(
                 TestAction::make('createOption')->schemaComponent('contact_id'),
                 ['phone' => '8 701 234 56 78'],
             )
-            ->assertHasActionErrors(['phone' => 'Контакт с таким номером уже есть — «ТОО «СтройКран»».']);
+            ->assertHasNoActionErrors()
+            ->assertNotified('Выбран существующий поставщик')
+            ->assertFormSet(['contact_id' => $existing->id]);
+
+        expect(Contact::count())->toBe($contactsBefore);
+    })->with([
+        'на создании' => [false],
+        'на редактировании' => [true],
+    ]);
+
+    test('в окне поставщика можно выбрать найденного из списка, ничего не заполняя', function () {
+        $existing = Contact::factory()->create(['phone' => '77012345678', 'display_name' => 'ТОО «СтройКран»']);
+
+        // Выбор из списка снимает требование заполнить телефон: поля
+        // создания скрыты, а скрытое Filament не валидирует.
+        Livewire::test(CreateListing::class)
+            ->callAction(
+                TestAction::make('createOption')->schemaComponent('contact_id'),
+                ['existing_contact_id' => $existing->id],
+            )
+            ->assertHasNoActionErrors()
+            ->assertFormSet(['contact_id' => $existing->id]);
+
+        expect(Contact::count())->toBe(1);
+    });
+
+    test('поиск поставщика находит по номеру в любом написании и по имени', function () {
+        $existing = Contact::factory()->create(['phone' => '77012345678', 'display_name' => 'ТОО «СтройКран»']);
+        Contact::factory()->create(['phone' => '77770001122', 'display_name' => 'Другой']);
+
+        // Один и тот же поиск питает и поле «Поставщик», и список в окне.
+        expect(ListingForm::supplierOptions('8 701'))->toBe([$existing->id => '77012345678 (ТОО «СтройКран»)'])
+            ->and(ListingForm::supplierOptions('+7 701'))->toHaveKey($existing->id)
+            ->and(ListingForm::supplierOptions('стройкран'))->toHaveKey($existing->id)
+            ->and(ListingForm::supplierOptions('8 999'))->toBe([]);
+    });
+
+    test('незнакомый номер по-прежнему заводит нового поставщика', function () {
+        Livewire::test(CreateListing::class)
+            ->callAction(
+                TestAction::make('createOption')->schemaComponent('contact_id'),
+                ['phone' => '+7 (777) 000-11-22', 'profile_name' => 'Асхат'],
+            )
+            ->assertHasNoActionErrors();
+
+        expect(Contact::sole())
+            ->phone->toBe('77770001122')
+            ->profile_name->toBe('Асхат');
     });
 
     test('дубль справочника со страницы редактирования тоже отклоняется понятной ошибкой', function () {

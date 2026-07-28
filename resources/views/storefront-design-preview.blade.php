@@ -39,7 +39,7 @@
         .page-header { background: linear-gradient(135deg, #1e40af, #3b82f6); border-radius: 1rem; padding: 1.375rem 1.5rem; margin-bottom: 1.25rem; color: #fff; box-shadow: 0 10px 25px -12px rgb(30 64 175 / 0.5); }
         .page-header h1 { font-size: 1.375rem; letter-spacing: -0.01em; overflow-wrap: anywhere; }
         .page-header p { margin: 0; color: #dbeafe; font-size: 0.875rem; overflow-wrap: anywhere; }
-        .card { background: #fff; border: 1px solid #e2e8f0; border-radius: 1rem; padding: 1.25rem; margin-bottom: 1rem; box-shadow: 0 1px 2px rgb(15 23 42 / 0.04); }
+        .card { background: #fff; border: 1px solid #e2e8f0; border-radius: 1rem; padding: 1.25rem; margin-bottom: 1rem; box-shadow: 0 1px 2px rgb(15 23 42 / 0.04); --card-pad: 1.25rem; --card-radius: 1rem; }
         .muted { color: #64748b; font-size: 0.875rem; }
         .result-count { margin: 0 0 1rem; padding-left: 0.25rem; }
         .badge { display: inline-block; white-space: nowrap; font-size: 0.75rem; font-weight: 600; padding: 0.125rem 0.625rem; border-radius: 9999px; }
@@ -70,9 +70,45 @@
         .title-link:hover { color: #1d4ed8; text-decoration: underline; }
         .listing-line { margin: 0.25rem 0; font-size: 0.875rem; overflow-wrap: anywhere; }
         .listing-price { color: #1d4ed8; font-weight: 700; font-size: 0.9375rem; }
-        .gallery { display: flex; gap: 0.5rem; overflow-x: auto; scroll-snap-type: x mandatory; margin-bottom: 0.75rem; }
-        .gallery img { display: block; width: 100%; flex-shrink: 0; aspect-ratio: 4 / 3; object-fit: cover; border-radius: 0.75rem; border: 1px solid #e2e8f0; scroll-snap-align: center; }
-        .gallery-hint { margin: 0.5rem 0 0.75rem; }
+        .gallery { --gallery-peek: 1.5rem; margin: 0 0 0.875rem; }
+        .gallery-frame { position: relative; overflow: hidden; background: #eef2f7; margin: calc(var(--card-pad) * -1) calc(var(--card-pad) * -1) 0; border-radius: calc(var(--card-radius) - 1px) calc(var(--card-radius) - 1px) 0 0; box-shadow: inset 0 -1px 0 #e2e8f0; }
+        .gallery-stage { display: flex; gap: 0.375rem; overflow-x: auto; overflow-y: hidden; scroll-snap-type: x mandatory; overscroll-behavior-x: contain; }
+        .gallery-stage:focus-visible { outline: 2px solid #93c5fd; outline-offset: -2px; }
+        .gallery-slide { position: relative; overflow: hidden; background: #eef2f7; flex: 0 0 calc(100% - var(--gallery-peek)); scroll-snap-align: start; scroll-snap-stop: always; display: flex; align-items: center; justify-content: center; }
+        .gallery-slide:last-child { margin-right: var(--gallery-peek); }
+        .gallery--single .gallery-slide { flex-basis: 100%; margin-right: 0; }
+        .gallery-slide img { position: relative; z-index: 1; display: block; width: 100%; height: 100%; object-fit: contain; }
+        .gallery-count { position: absolute; left: 0.625rem; bottom: 0.625rem; background: rgb(15 23 42 / 0.72); color: #fff; font-size: 0.75rem; font-weight: 600; font-variant-numeric: tabular-nums; padding: 0.1875rem 0.5rem; border-radius: 9999px; pointer-events: none; }
+        .gallery-dots, .gallery-rail { display: none; justify-content: center; }
+        .gallery-dots { padding: 0.625rem 0 0; }
+        .gallery-rail { padding: 0.75rem 0 0.125rem; }
+        .gallery-dot { appearance: none; -webkit-appearance: none; margin: 0; padding: 0; border: 0; background: none; width: 2rem; height: 1.75rem; display: flex; align-items: center; justify-content: center; cursor: pointer; }
+        .gallery-dot::before { content: ''; display: block; width: 0.375rem; height: 0.375rem; border-radius: 9999px; background: #cbd5e1; transition: width 0.15s ease, background-color 0.15s ease; }
+        .gallery-dot.is-active::before { width: 1.125rem; background: #2563eb; }
+        .gallery-rail-track { display: block; width: 4rem; height: 3px; border-radius: 9999px; background: #e2e8f0; overflow: hidden; }
+        .gallery-rail-fill { display: block; height: 100%; border-radius: 9999px; background: #2563eb; }
+        .gallery-hint { margin: 0.625rem 0 0; text-align: center; }
+        .gallery-arrow { display: none; }
+        .gallery.is-enhanced .gallery-stage { scrollbar-width: none; }
+        .gallery.is-enhanced .gallery-stage::-webkit-scrollbar { display: none; }
+        .gallery.is-enhanced .gallery-dots, .gallery.is-enhanced .gallery-rail { display: flex; }
+        .gallery.is-enhanced .gallery-hint { display: none; }
+
+        /* Превью-подгонка: макеты — это блоки фиксированной ширины, а не настоящие вьюпорты,
+           поэтому clamp(15rem, 76vw, 22rem) и @media (min-width: 40rem) заменены на явные
+           правила для .viewport-mobile / .viewport-desktop. Размытого гало нет — реальных
+           фотографий в превью не бывает, вместо него мягкая заливка под «фото». */
+        .viewport-mobile .gallery-stage { height: 17.8125rem; }
+        .viewport-desktop .gallery-frame { margin: 0 auto; max-width: 32rem; border: 1px solid #e2e8f0; border-radius: 0.875rem; box-shadow: none; }
+        .viewport-desktop .gallery-stage { height: 24rem; }
+        .viewport-desktop .gallery.is-enhanced .gallery-arrow { display: grid; place-items: center; position: absolute; top: 50%; transform: translateY(-50%); width: 2.25rem; height: 2.25rem; padding: 0; border-radius: 9999px; background: rgb(255 255 255 / 0.92); border: 1px solid #e2e8f0; box-shadow: 0 1px 2px rgb(15 23 42 / 0.04); cursor: pointer; transition: background-color 0.15s ease, border-color 0.15s ease, opacity 0.15s ease; }
+        .viewport-desktop .gallery-arrow-prev { left: 0.625rem; }
+        .viewport-desktop .gallery-arrow-next { right: 0.625rem; }
+        .viewport-desktop .gallery-arrow:hover { background: #fff; border-color: #bfdbfe; }
+        .viewport-desktop .gallery-arrow[disabled] { opacity: 0; pointer-events: none; }
+        .viewport .gallery-slide { background: radial-gradient(circle at 50% 40%, #dbe3ef, #eef2f7 72%); }
+        .gallery-slide .thumb-placeholder { width: 100%; height: 100%; border: 0; border-radius: 0; }
+        .gallery-slide .thumb-placeholder.is-portrait { width: 62%; }
         .prewrap { white-space: pre-line; }
         .empty-state { text-align: center; padding: 2rem 1.25rem; color: #475569; }
         .pager { display: flex; justify-content: space-between; align-items: center; gap: 0.5rem; margin: 1.5rem 0 0; }
@@ -318,7 +354,7 @@
 </div>
 
 <div class="preview-section">
-    <h2>Каталог заказчика — страница объявления, mobile 375px (свайп-галерея всех фото, полное описание)</h2>
+    <h2>Каталог заказчика — страница объявления, mobile 375px (слайдер всех фото, полное описание)</h2>
     <div class="viewport viewport-mobile">
         <main>
             <a class="back" href="#">&larr; Назад к каталогу</a>
@@ -329,14 +365,120 @@
             </header>
 
             <div class="card">
-                {{-- В продакшене фото листаются свайпом: по одному на экран --}}
-                <div class="gallery">
-                    <div class="thumb-placeholder" style="width: 100%; flex-shrink: 0; aspect-ratio: 4 / 3; height: auto; border-radius: 0.75rem; scroll-snap-align: center;">фото 1</div>
-                    <div class="thumb-placeholder" style="width: 100%; flex-shrink: 0; aspect-ratio: 4 / 3; height: auto; border-radius: 0.75rem; scroll-snap-align: center;">фото 2</div>
-                    <div class="thumb-placeholder" style="width: 100%; flex-shrink: 0; aspect-ratio: 4 / 3; height: auto; border-radius: 0.75rem; scroll-snap-align: center;">фото 3</div>
-                    <div class="thumb-placeholder" style="width: 100%; flex-shrink: 0; aspect-ratio: 4 / 3; height: auto; border-radius: 0.75rem; scroll-snap-align: center;">фото 4</div>
+                {{-- Кадр во всю ширину карточки, справа виден край следующего фото; счётчик
+                     оживает скриптом («4 фото» → «1 / 4»), точки и стрелки без него не
+                     показываются вовсе. Первый кадр — вертикальный: он вписывается целиком
+                     на размытую подложку, а не обрезается. --}}
+                <div class="gallery is-enhanced">
+                    <div class="gallery-frame">
+                        <div class="gallery-stage">
+                            <div class="gallery-slide"><div class="thumb-placeholder is-portrait">фото 1</div></div>
+                            <div class="gallery-slide"><div class="thumb-placeholder">фото 2</div></div>
+                            <div class="gallery-slide"><div class="thumb-placeholder">фото 3</div></div>
+                            <div class="gallery-slide"><div class="thumb-placeholder">фото 4</div></div>
+                        </div>
+                        <span class="gallery-count">1 / 4</span>
+                    </div>
+                    <div class="gallery-dots">
+                        <button type="button" class="gallery-dot is-active"></button>
+                        <button type="button" class="gallery-dot"></button>
+                        <button type="button" class="gallery-dot"></button>
+                        <button type="button" class="gallery-dot"></button>
+                    </div>
+                    <p class="muted gallery-hint">Фотографий: 4 — листайте вбок.</p>
                 </div>
-                <p class="muted gallery-hint">Фотографий: 4 — листайте вбок.</p>
+
+                <p class="listing-line prewrap">Кран 25 тонн со стрелой 40 м, работаем по городу и области, опытный машинист. Выезд в день обращения, помощь с расчётом нагрузки. Оплата наличными или на счёт.</p>
+                <p class="listing-line muted">г.Шымкент, центр</p>
+                <p class="listing-line listing-price">20000 тг/ч</p>
+                <p class="listing-line muted">Поставщик: Асхат</p>
+
+                <div class="actions"><button class="btn btn-primary">Выбрать</button></div>
+            </div>
+        </main>
+    </div>
+</div>
+
+<div class="preview-section">
+    <h2>Страница объявления, mobile 375px — одно фото (без хрома слайдера) и набор из 12 фото (полоса прогресса вместо точек)</h2>
+    <div class="viewport viewport-mobile">
+        <main>
+            <div class="card">
+                {{-- Одно фото — ни счётчика, ни точек, ни подсказки: просто кадр. --}}
+                <div class="gallery gallery--single">
+                    <div class="gallery-frame">
+                        <div class="gallery-stage">
+                            <div class="gallery-slide"><div class="thumb-placeholder">единственное фото</div></div>
+                        </div>
+                    </div>
+                </div>
+
+                <p class="listing-line prewrap">Борт 6 метров, перевозка и разгрузка в одной машине.</p>
+                <p class="listing-line listing-price">15000 тг/ч</p>
+
+                <div class="actions"><button class="btn btn-primary">Выбрать</button></div>
+            </div>
+
+            <div class="card">
+                {{-- Больше восьми фото: точек столько не помещается пальцем, ведёт полоса прогресса. --}}
+                <div class="gallery is-enhanced">
+                    <div class="gallery-frame">
+                        <div class="gallery-stage">
+                            <div class="gallery-slide"><div class="thumb-placeholder">фото 7</div></div>
+                            <div class="gallery-slide"><div class="thumb-placeholder is-portrait">фото 8</div></div>
+                        </div>
+                        <span class="gallery-count">7 / 12</span>
+                    </div>
+                    <div class="gallery-rail">
+                        <span class="gallery-rail-track"><span class="gallery-rail-fill" style="width: 58%;"></span></span>
+                    </div>
+                    <p class="muted gallery-hint">Фотографий: 12 — листайте вбок.</p>
+                </div>
+
+                <p class="listing-line prewrap">Экскаватор-погрузчик, ковш 1 м³, работа по области.</p>
+                <p class="listing-line listing-price">18000 тг/ч</p>
+
+                <div class="actions"><button class="btn btn-primary">Выбрать</button></div>
+            </div>
+        </main>
+    </div>
+</div>
+
+<div class="preview-section">
+    <h2>Страница объявления, desktop (кадр не уходит в край карточки, стрелки по наведению мышью)</h2>
+    <div class="viewport viewport-desktop">
+        <main>
+            <a class="back" href="#">&larr; Назад к каталогу</a>
+
+            <header class="page-header">
+                <h1>Аренда автокрана 25 т</h1>
+                <p>Техника · Автокран · XCMG</p>
+            </header>
+
+            <div class="card">
+                <div class="gallery is-enhanced">
+                    <div class="gallery-frame">
+                        <div class="gallery-stage">
+                            <div class="gallery-slide"><div class="thumb-placeholder is-portrait">фото 2</div></div>
+                            <div class="gallery-slide"><div class="thumb-placeholder">фото 3</div></div>
+                        </div>
+                        <span class="gallery-count">2 / 4</span>
+                        {{-- На первом кадре «назад» невидима, на последнем — «вперёд». --}}
+                        <button type="button" class="gallery-arrow gallery-arrow-prev" aria-label="Предыдущее фото">
+                            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" aria-hidden="true"><path d="M15 5 8 12l7 7" stroke="#1e293b" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                        </button>
+                        <button type="button" class="gallery-arrow gallery-arrow-next" aria-label="Следующее фото">
+                            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" aria-hidden="true"><path d="m9 5 7 7-7 7" stroke="#1e293b" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                        </button>
+                    </div>
+                    <div class="gallery-dots">
+                        <button type="button" class="gallery-dot"></button>
+                        <button type="button" class="gallery-dot is-active"></button>
+                        <button type="button" class="gallery-dot"></button>
+                        <button type="button" class="gallery-dot"></button>
+                    </div>
+                    <p class="muted gallery-hint">Фотографий: 4 — листайте вбок.</p>
+                </div>
 
                 <p class="listing-line prewrap">Кран 25 тонн со стрелой 40 м, работаем по городу и области, опытный машинист. Выезд в день обращения, помощь с расчётом нагрузки. Оплата наличными или на счёт.</p>
                 <p class="listing-line muted">г.Шымкент, центр</p>

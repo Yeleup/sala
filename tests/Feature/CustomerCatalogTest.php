@@ -416,12 +416,57 @@ describe('страница объявления', function () {
         $response = $this->get(catalogLinks()->listingUrl($contact, $listing))
             ->assertOk()
             ->assertSee('Аренда автокрана 25 т')
+            // Подсказка остаётся в разметке: её прячет скрипт, показавший точки вместо неё.
             ->assertSee('Фотографий: 3')
             // Каталожная карточка обрезает описание — страница показывает целиком.
             ->assertSee('Самый конец описания.')
             ->assertSee('Выбрать');
 
         $photos->each(fn (ListingMedia $photo) => $response->assertSee($photo->url(), false));
+    });
+
+    test('несколько фотографий получают слайдер: счётчик, точки по числу фото и стрелки', function () {
+        $contact = Contact::factory()->create();
+        $listing = Listing::factory()->published()->create();
+        ListingMedia::factory()->count(3)->for($listing)->create();
+
+        $response = $this->get(catalogLinks()->listingUrl($contact, $listing))
+            ->assertOk()
+            ->assertSee('3 фото')
+            ->assertSee('Предыдущее фото')
+            ->assertSee('Следующее фото')
+            ->assertSee('Фото объявления 2 из 3')
+            ->assertDontSee('class="gallery-rail"', false);
+
+        expect(substr_count($response->getContent(), 'data-index='))->toBe(3);
+    });
+
+    test('единственное фото показывается без органов управления слайдером', function () {
+        $contact = Contact::factory()->create();
+        $listing = Listing::factory()->published()->create();
+        ListingMedia::factory()->for($listing)->create();
+
+        $this->get(catalogLinks()->listingUrl($contact, $listing))
+            ->assertOk()
+            ->assertSee('gallery--single', false)
+            // Ни счётчика, ни точек, ни стрелок, ни подсказки — и «1 из 1» в подписи тоже.
+            ->assertDontSee('class="gallery-count"', false)
+            ->assertDontSee('class="gallery-dot', false)
+            ->assertDontSee('class="gallery-arrow', false)
+            ->assertDontSee('листайте вбок')
+            ->assertSee('alt="Фото объявления"', false);
+    });
+
+    test('длинный набор фотографий ведёт полоса прогресса вместо точек', function () {
+        $contact = Contact::factory()->create();
+        $listing = Listing::factory()->published()->create();
+        ListingMedia::factory()->count(9)->for($listing)->create();
+
+        $this->get(catalogLinks()->listingUrl($contact, $listing))
+            ->assertOk()
+            ->assertSee('9 фото')
+            ->assertSee('class="gallery-rail"', false)
+            ->assertDontSee('class="gallery-dot', false);
     });
 
     test('карточка каталога ведёт на страницу объявления и показывает счётчик фото', function () {

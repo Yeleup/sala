@@ -83,7 +83,6 @@ test('оператор публикует своё объявление одно
     $listing = Listing::factory()->publishable()->create();
 
     Livewire::test(ListListings::class)
-        ->filterTable('status', ListingStatus::Draft->value)
         ->callAction(TestAction::make('publish')->table($listing))
         ->assertNotified('Объявление опубликовано');
 
@@ -96,7 +95,6 @@ test('пока полей не хватает, публикация недост
     $incomplete = Listing::factory()->create(['title' => null]);
 
     Livewire::test(ListListings::class)
-        ->filterTable('status', ListingStatus::Draft->value)
         ->assertActionDisabled(TestAction::make('publish')->table($incomplete));
 
     expect($incomplete->refresh()->status)->toBe(ListingStatus::Draft);
@@ -502,7 +500,6 @@ test('у объявления нет страницы просмотра — о�
     $this->get(ListingResource::getUrl('edit', ['record' => $listing]))->assertOk();
 
     Livewire::test(ListListings::class)
-        ->filterTable('status', ListingStatus::Draft->value)
         ->assertActionDoesNotExist(TestAction::make('view')->table($listing));
 });
 
@@ -591,7 +588,6 @@ test('черновик отправляется на модерацию из т�
     $listing = Listing::factory()->create();
 
     Livewire::test(ListListings::class)
-        ->filterTable('status', ListingStatus::Draft->value)
         ->callAction(TestAction::make('submitForModeration')->table($listing))
         ->assertNotified('Объявление отправлено на модерацию');
 

@@ -21,6 +21,7 @@ use Filament\Actions\Testing\TestAction;
 use Filament\Notifications\Notification;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Laravel\Ai\Embeddings;
+use Livewire\Features\SupportTesting\Testable;
 use Livewire\Livewire;
 use Mockery\MockInterface;
 
@@ -29,6 +30,27 @@ uses(RefreshDatabase::class);
 function fakeModerationMessenger(): MockInterface
 {
     return test()->mock(DereuMessenger::class);
+}
+
+/**
+ * Счётчик читается с самой вкладки: он считает по всей таблице, а не по
+ * тому, что попало на страницу.
+ */
+function moderationTabBadge(): ?string
+{
+    return Livewire::test(ListListings::class)->instance()->getTabs()['moderation']->getBadge();
+}
+
+/**
+ * Порядок строк — по идентификаторам, а не по вхождению разметки: id одной
+ * записи бывает префиксом другой (1 и 11), и проверка «в порядке» по HTML
+ * на таком наборе может совпасть раньше времени.
+ *
+ * @return list<int>
+ */
+function listedIds(Testable $component): array
+{
+    return $component->instance()->getTableRecords()->pluck('id')->all();
 }
 
 function pendingModerationListing(string $supplierWindowState): Listing
@@ -54,13 +76,66 @@ test('guests are redirected to the panel login', function () {
     $this->get(ListingResource::getUrl('index'))->assertRedirect();
 });
 
-test('the listings table shows the moderation queue by default', function () {
-    $pending = Listing::factory()->pendingModeration()->create();
-    $published = Listing::factory()->published()->create();
+describe('вкладки списка объявлений', function () {
+    test('список открывается на «Все» — только что заведённый черновик виден сразу', function () {
+        $draft = Listing::factory()->create();
+        $pending = Listing::factory()->pendingModeration()->create();
+        $published = Listing::factory()->published()->create();
 
-    Livewire::test(ListListings::class)
-        ->assertCanSeeTableRecords([$pending])
-        ->assertCanNotSeeTableRecords([$published]);
+        Livewire::test(ListListings::class)
+            ->assertSet('activeTab', 'all')
+            ->assertCanSeeTableRecords([$draft, $pending, $published]);
+    });
+
+    test('вкладка «На модерации» оставляет только ждущие вердикта', function () {
+        $pending = Listing::factory()->pendingModeration()->create();
+        $draft = Listing::factory()->create();
+        $published = Listing::factory()->published()->create();
+
+        Livewire::test(ListListings::class)
+            ->set('activeTab', 'moderation')
+            ->assertCanSeeTableRecords([$pending])
+            ->assertCanNotSeeTableRecords([$draft, $published]);
+    });
+
+    test('вкладка «Черновики» оставляет только черновики', function () {
+        $draft = Listing::factory()->create();
+        $pending = Listing::factory()->pendingModeration()->create();
+        $rejected = Listing::factory()->rejected()->create();
+
+        Livewire::test(ListListings::class)
+            ->set('activeTab', 'drafts')
+            ->assertCanSeeTableRecords([$draft])
+            ->assertCanNotSeeTableRecords([$pending, $rejected]);
+    });
+
+    test('счётчик на вкладке «На модерации» считает только ждущие вердикта', function () {
+        Listing::factory()->count(2)->pendingModeration()->create();
+        Listing::factory()->create();
+        Listing::factory()->published()->create();
+
+        expect(moderationTabBadge())->toBe('2');
+    });
+
+    test('пустая очередь модерации счётчика не показывает', function () {
+        Listing::factory()->create();
+
+        expect(moderationTabBadge())->toBeNull();
+    });
+
+    test('на любой вкладке объявления идут новыми сверху', function () {
+        $this->freezeTime();
+        $older = Listing::factory()->pendingModeration()->create(['created_at' => now()->subDay()]);
+        // Парк техники, заведённый одним «создать ещё»: created_at совпадает
+        // до секунды, и порядок держится на номере записи.
+        $first = Listing::factory()->pendingModeration()->create();
+        $second = Listing::factory()->pendingModeration()->create();
+
+        $expected = [$second->id, $first->id, $older->id];
+
+        expect(listedIds(Livewire::test(ListListings::class)))->toBe($expected)
+            ->and(listedIds(Livewire::test(ListListings::class)->set('activeTab', 'moderation')))->toBe($expected);
+    });
 });
 
 test('approving from the table publishes the listing for 30 days', function () {
@@ -140,7 +215,6 @@ test('оператор снимает объявление с публикаци
     $request = CustomerRequest::factory()->create(['listing_id' => $listing->id]);
 
     Livewire::test(ListListings::class)
-        ->filterTable('status', ListingStatus::Published->value)
         ->callAction(TestAction::make('archive')->table($listing))
         ->assertNotified('Объявление в архиве');
 
@@ -157,7 +231,6 @@ test('оператор продлевает объявление после зв
     ]);
 
     Livewire::test(ListListings::class)
-        ->filterTable('status', ListingStatus::Published->value)
         ->callAction(TestAction::make('renew')->table($listing));
 
     $listing->refresh();
@@ -172,10 +245,8 @@ test('фильтр «истекает в сутки» собирает объя�
     $freshlyPublished = Listing::factory()->published()->create(['expires_at' => now()->addDays(30)]);
     $alreadyExpired = Listing::factory()->expired()->create();
 
-    // Все три опубликованы — отбор делает именно фильтр срока, а не статус
-    // (по умолчанию список показывает очередь модерации).
+    // Все три опубликованы — отбор делает именно фильтр срока, а не статус.
     Livewire::test(ListListings::class)
-        ->filterTable('status', ListingStatus::Published->value)
         ->filterTable('expiring')
         ->assertCanSeeTableRecords([$expiringSoon])
         ->assertCanNotSeeTableRecords([$freshlyPublished, $alreadyExpired]);
@@ -190,7 +261,6 @@ test('в списке видно, писал ли поставщик боту', 
         ->create();
 
     Livewire::test(ListListings::class)
-        ->filterTable('status', ListingStatus::Draft->value)
         ->assertTableColumnStateSet('supplier_wrote', false, $silent)
         // Окно 24 ч уже закрыто, но писал он всё же — колонка про это, а не про окно.
         ->assertTableColumnStateSet('supplier_wrote', true, $wrote);

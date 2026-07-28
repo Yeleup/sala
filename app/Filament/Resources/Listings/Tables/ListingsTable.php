@@ -78,10 +78,11 @@ class ListingsTable
                     ->sortable(),
             ])
             ->filters([
+                // Not preselected: the working sets live on the page's tabs,
+                // and this filter reaches the remaining statuses.
                 SelectFilter::make('status')
                     ->label('Статус')
-                    ->options(ListingStatus::class)
-                    ->default(ListingStatus::PendingModeration->value),
+                    ->options(ListingStatus::class),
                 SelectFilter::make('type')
                     ->label('Тип')
                     ->options(ListingType::class),
@@ -119,6 +120,10 @@ class ListingsTable
                     ->modalHeading('Удалить выбранные объявления?')
                     ->modalDescription('Объявления удаляются безвозвратно вместе с медиа и заявками по ним.'),
             ])
-            ->defaultSort('created_at');
+            // Newest first: the listing the operator has just typed belongs
+            // on the first screen, not at the end of a list that grows daily.
+            // Listings created back to back by «создать ещё» share a
+            // second-granular timestamp; the record key breaks the tie.
+            ->defaultSort('created_at', 'desc');
     }
 }

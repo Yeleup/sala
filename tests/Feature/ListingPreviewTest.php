@@ -84,7 +84,6 @@ describe('оператор смотрит объявление глазами з
             ->assertActionVisible('preview');
 
         Livewire::test(ListListings::class)
-            ->filterTable('status', 'draft')
             ->assertActionVisible(TestAction::make('preview')->table($listing));
     });
 });

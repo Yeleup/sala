@@ -29,3 +29,4 @@ Thumbs.db
 **/caddy
 frankenphp
 frankenphp-worker.php
+/docker/db/dump.sql.gz

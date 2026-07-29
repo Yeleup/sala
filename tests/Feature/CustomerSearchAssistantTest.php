@@ -1413,3 +1413,64 @@ test('a question about the service spends neither a clarification nor a fruitles
         ->and($session->fresh()->state)
         ->toMatchArray(['clarifications' => 1, 'attempts' => 1, 'transcript' => ['нужен кран']]);
 });
+
+test('a service question while a place pick list is open resends the same list', function () {
+    SearchQueryExtractionAgent::fake([[
+        'subject' => null, 'location' => null, 'location_any' => false,
+        'clarifying_question' => '', 'user_intent' => 'service_question',
+    ]]);
+    $districtA = locationNamed('Абайский район', locationNamed('Карагандинская область'));
+    $districtB = locationNamed('Абайский район', locationNamed('г.Шымкент'));
+    $session = searchSession([
+        'phase' => 'locating',
+        'clarifications' => 1,
+        'attempts' => 1,
+        'query' => 'кран 25 тонн, Абайский район',
+        'location_candidates' => [$districtA->id, $districtB->id],
+    ]);
+
+    $messenger = fakeSearchMessenger();
+    $messenger->shouldReceive('sendText')->once()
+        ->withArgs(fn (Contact $to, string $text) => str_contains($text, 'оператор'));
+    $messenger->shouldReceive('sendList')->once()->withArgs(
+        fn (Contact $contact, string $text, string $button, array $rows): bool => str_contains($text, 'Нашли несколько подходящих мест')
+            && $button === CustomerSearchAssistant::LOCATION_LIST_BUTTON
+            && count($rows) === 2,
+    );
+
+    $outcome = app(CustomerSearchAssistant::class)
+        ->resume($session, customerAiNode(), new InboundMessage(text: 'а как это работает?'));
+
+    expect($outcome)->toBe(AiOutcome::InProgress)
+        ->and($session->fresh()->state)
+        ->toMatchArray(['phase' => 'locating', 'clarifications' => 1, 'attempts' => 1]);
+});
+
+test('a service question while a results list is open sends a hint instead of resending the list', function () {
+    SearchQueryExtractionAgent::fake([[
+        'subject' => null, 'location' => null, 'location_any' => false,
+        'clarifying_question' => '', 'user_intent' => 'service_question',
+    ]]);
+    $listing = Listing::factory()->published()->create(['category_id' => categoryNamed('Автокран')->id]);
+    $session = searchSession([
+        'phase' => 'choosing',
+        'clarifications' => 1,
+        'attempts' => 1,
+        'query' => 'кран',
+        'offered' => [$listing->id],
+    ]);
+
+    $messenger = fakeSearchMessenger();
+    $messenger->shouldReceive('sendList')->never();
+    $messenger->shouldReceive('sendText')->once()
+        ->withArgs(fn (Contact $to, string $text) => str_contains($text, 'оператор'));
+    $messenger->shouldReceive('sendText')->once()
+        ->withArgs(fn (Contact $to, string $text) => $text === 'Выберите вариант из списка выше или уточните запрос.');
+
+    $outcome = app(CustomerSearchAssistant::class)
+        ->resume($session, customerAiNode(), new InboundMessage(text: 'а вы берёте комиссию?'));
+
+    expect($outcome)->toBe(AiOutcome::InProgress)
+        ->and($session->fresh()->state)
+        ->toMatchArray(['phase' => 'choosing', 'clarifications' => 1, 'attempts' => 1]);
+});

@@ -1167,3 +1167,44 @@ test('the operator can override the service question reply', function () {
 
     app(BotReplyTexts::class)->flush();
 });
+
+test('a single AI provider failure asks to repeat without spending an attempt', function () {
+    ListingExtractionAgent::fake([fn () => throw new RuntimeException('AI недоступен')]);
+    $session = collectorSession(['transcript' => ['Сдаю трактор']]);
+
+    fakeCollectorMessenger()->shouldReceive('sendText')->once()
+        ->withArgs(fn (Contact $to, string $text) => str_contains($text, 'повторите'));
+
+    $outcome = app(SupplierListingCollector::class)
+        ->resume($session, supplierAiNode(), new InboundMessage(text: 'в Шымкенте, 10000 тг/час'));
+
+    expect($outcome)->toBe(AiOutcome::InProgress)
+        ->and($session->fresh()->state)
+        ->toMatchArray(['attempts' => 0, 'provider_failures' => 1]);
+});
+
+test('two AI provider failures in a row hand the supplier over to the web form', function () {
+    ListingExtractionAgent::fake([fn () => throw new RuntimeException('AI недоступен')]);
+    $session = collectorSession(['provider_failures' => 1, 'transcript' => ['Сдаю трактор']]);
+
+    fakeCollectorMessenger()->shouldReceive('sendCtaUrl')->once()
+        ->withArgs(fn (Contact $to, string $text, string $button, string $url) => mb_strlen($button) <= 20
+            && str_contains($url, '/supplier/listings/'));
+
+    $outcome = app(SupplierListingCollector::class)
+        ->resume($session, supplierAiNode(), new InboundMessage(text: 'ещё раз'));
+
+    expect($outcome)->toBe(AiOutcome::Completed);
+});
+
+test('a successful extraction resets the provider failure streak', function () {
+    ListingExtractionAgent::fake([fullExtraction()]);
+    $session = collectorSession(['provider_failures' => 1]);
+
+    fakeCollectorMessenger()->shouldReceive('sendButtons')->once();
+
+    app(SupplierListingCollector::class)
+        ->resume($session, supplierAiNode(), new InboundMessage(text: 'Сдаю трактор в Шымкенте, 10000 тг/час'));
+
+    expect($session->fresh()->state['provider_failures'])->toBe(0);
+});

@@ -63,6 +63,15 @@ class SupplierListingCollector
     private const int MAX_LOCATION_LISTS = 2;
 
     /**
+     * AI provider failures in a row before the collector stops asking to
+     * repeat. Unlike the customer search, the collector cannot degrade to
+     * raw text: listing fields do not come out of a message without the
+     * model. Two silent turns is the point where the web form beats
+     * another apology.
+     */
+    private const int MAX_PROVIDER_FAILURES = 2;
+
+    /**
      * Photos attached to one extraction call — enough to recognize the
      * equipment without inflating the prompt.
      */
@@ -104,6 +113,7 @@ class SupplierListingCollector
             'attempts' => 0,
             'unreadable' => 0,
             'location_lists' => 0,
+            'provider_failures' => 0,
             'transcript' => [],
             'fields' => [],
             'draft_id' => null,
@@ -175,6 +185,25 @@ class SupplierListingCollector
         $state['unreadable'] = 0;
 
         $fields = $this->extract($session, $state);
+
+        if ($fields === null) {
+            $state['provider_failures']++;
+
+            if ($state['provider_failures'] >= self::MAX_PROVIDER_FAILURES) {
+                return $this->handOffToWebForm($session, $state);
+            }
+
+            $this->persist($session, $state);
+            $this->messenger->sendText(
+                $session->contact,
+                'Не получилось обработать сообщение, повторите его, пожалуйста, ещё раз.',
+            );
+
+            return AiOutcome::InProgress;
+        }
+
+        $state['provider_failures'] = 0;
+
         $intent = UserIntent::fromExtraction($fields['user_intent'] ?? null);
 
         // A refusal or a question about the service is not listing data:
@@ -646,10 +675,13 @@ class SupplierListingCollector
      * the draft's photos so the model reads the pictures themselves, not
      * only their captions.
      *
+     * Null when the AI provider is unavailable — the caller then asks to
+     * repeat and, on the second failure in a row, hands over the web form.
+     *
      * @param  array<string, mixed>  $state
-     * @return array<string, mixed>
+     * @return array<string, mixed>|null
      */
-    private function extract(BotSession $session, array $state): array
+    private function extract(BotSession $session, array $state): ?array
     {
         $expectedType = ListingType::tryFrom((string) ($state['listing_type'] ?? ''));
 
@@ -670,17 +702,26 @@ class SupplierListingCollector
             ? implode("\n", $state['transcript'])
             : 'Поставщик прислал только фотографии — извлеки из них, что сможешь.';
 
-        $fields = $this->audit->run(
-            AiOperationType::ListingExtraction,
-            fn (): array => (new ListingExtractionAgent($expectedType, $categories->pluck('name')->all(), $brands->pluck('name')->all()))
-                ->prompt($prompt, attachments: $this->photoAttachments($state))
-                ->toArray(),
-            [
-                'contact_id' => $session->contact_id,
+        try {
+            $fields = $this->audit->run(
+                AiOperationType::ListingExtraction,
+                fn (): array => (new ListingExtractionAgent($expectedType, $categories->pluck('name')->all(), $brands->pluck('name')->all()))
+                    ->prompt($prompt, attachments: $this->photoAttachments($state))
+                    ->toArray(),
+                [
+                    'contact_id' => $session->contact_id,
+                    'bot_session_id' => $session->id,
+                    'listing_id' => $state['draft_id'],
+                ],
+            );
+        } catch (Throwable $e) {
+            Log::warning('Listing extraction failed; the collector asks to repeat.', [
                 'bot_session_id' => $session->id,
-                'listing_id' => $state['draft_id'],
-            ],
-        );
+                'error' => $e->getMessage(),
+            ]);
+
+            return null;
+        }
 
         $category = $this->canonicalCategory($fields['category'] ?? null, $categories);
         $fields['category'] = $category?->name;
@@ -1018,6 +1059,7 @@ class SupplierListingCollector
             'attempts' => 0,
             'unreadable' => 0,
             'location_lists' => 0,
+            'provider_failures' => 0,
             'transcript' => [],
             'fields' => [],
             'draft_id' => null,

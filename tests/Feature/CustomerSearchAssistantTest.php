@@ -100,6 +100,15 @@ test('entering the block asks what the customer needs', function () {
         ->and($session->refresh()->state['phase'])->toBe('searching');
 });
 
+test('the search AI block sends the operator text instead of the built-in prompt', function () {
+    $session = searchSession();
+
+    fakeSearchMessenger()->shouldReceive('sendText')->once()
+        ->withArgs(fn (Contact $to, string $text) => $text === 'Что ищете и где?');
+
+    app(CustomerSearchAssistant::class)->start($session, customerAiNode() + ['text' => 'Что ищете и где?']);
+});
+
 test('a complete query returns a ranked list of matching published listings', function () {
     SearchQueryExtractionAgent::fake([fullSearchIntake()]);
     $shymkent = locationNamed('г.Шымкент');

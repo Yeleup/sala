@@ -169,7 +169,7 @@
                     <div class="bse-panel-body">
                         <div class="bse-panel-title" x-text="typeLabels[selected.type] ?? selected.type"></div>
 
-                        <template x-if="!['start', 'ai', 'condition', 'end'].includes(selected.type)
+                        <template x-if="!['start', 'condition', 'end'].includes(selected.type)
                             && !(selected.type === 'message' && selected.channel !== 'session')">
                             <label class="bse-field">
                                 <span>Текст сообщения</span>
@@ -180,6 +180,9 @@
                                 </template>
                                 <template x-if="selected.type === 'action'">
                                     <p class="bse-note">Используется действием «Отправить CTA-ссылку на кабинет» как текст сообщения; для остальных действий не нужен.</p>
+                                </template>
+                                <template x-if="selected.type === 'ai'">
+                                    <p class="bse-note">Первое сообщение блока — то, что бот отправляет, передавая ход AI. Пусто — стандартный текст под выбранную задачу.</p>
                                 </template>
                             </label>
                         </template>

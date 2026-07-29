@@ -106,6 +106,27 @@ test('entering the AI block greets the supplier and keeps the turn', function ()
         ->and($session->fresh()->state['phase'])->toBe('collecting');
 });
 
+test('the AI block sends the operator text instead of the built-in greeting', function () {
+    $session = collectorSession();
+
+    fakeCollectorMessenger()->shouldReceive('sendText')->once()
+        ->withArgs(fn (Contact $to, string $text) => $text === 'Что сдаёте? Напишите или наговорите.');
+
+    app(SupplierListingCollector::class)->start(
+        $session,
+        supplierAiNode() + ['text' => 'Что сдаёте? Напишите или наговорите.'],
+    );
+});
+
+test('an empty AI block text keeps the built-in greeting', function () {
+    $session = collectorSession();
+
+    fakeCollectorMessenger()->shouldReceive('sendText')->once()
+        ->withArgs(fn (Contact $to, string $text) => str_contains($text, 'Расскажите'));
+
+    app(SupplierListingCollector::class)->start($session, supplierAiNode() + ['text' => '   ']);
+});
+
 test('a complete description creates a draft and asks for confirmation', function () {
     ListingExtractionAgent::fake([fullExtraction()]);
     $session = collectorSession();

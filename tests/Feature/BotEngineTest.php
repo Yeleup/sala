@@ -352,6 +352,14 @@ test('republication with only a text tweak keeps the fingerprinted step alive', 
     expect(BotSession::sole()->scenario_version)->toBe(2);
 });
 
+test('the AI block text stays out of the compatibility fingerprint', function () {
+    $definition = new App\Services\Bot\ScenarioDefinition([]);
+    $node = ['id' => 'collect', 'type' => 'ai', 'task' => 'collect_listing', 'listing_type' => 'equipment'];
+
+    expect($definition->nodeFingerprint($node + ['text' => 'Что сдаёте?']))
+        ->toBe($definition->nodeFingerprint($node));
+});
+
 test('the my_listings block sends the personal portal link and ends the branch', function () {
     $scenario = BotScenario::factory()->published([
         'nodes' => [

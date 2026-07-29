@@ -103,7 +103,7 @@ class CustomerSearchAssistant
 
         $this->messenger->sendText(
             $session->contact,
-            'Опишите, что вам нужно и в каком городе или районе — например: «нужен кран 25 тонн, Шымкент».',
+            trim((string) ($node['text'] ?? '')) ?: 'Опишите, что вам нужно и в каком городе или районе — например: «нужен кран 25 тонн, Шымкент».',
         );
 
         return AiOutcome::InProgress;

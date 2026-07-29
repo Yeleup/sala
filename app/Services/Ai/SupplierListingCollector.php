@@ -63,6 +63,16 @@ class SupplierListingCollector
     private const int MAX_LOCATION_LISTS = 2;
 
     /**
+     * Questions about the service answered in a row before the collector
+     * stops treating a message as one. The abuse case is not a person
+     * asking four times but a stuck classification: the question is pulled
+     * out of the transcript, so an unchanged rephrasing gets classified the
+     * same way forever — for free, and bypassing MAX_LOCATION_LISTS, since
+     * repeating the step re-sends the place list without counting it.
+     */
+    private const int MAX_SERVICE_QUESTIONS = 3;
+
+    /**
      * AI provider failures in a row before the collector stops asking to
      * repeat. Unlike the customer search, the collector cannot degrade to
      * raw text: listing fields do not come out of a message without the
@@ -114,6 +124,7 @@ class SupplierListingCollector
             'unreadable' => 0,
             'location_lists' => 0,
             'provider_failures' => 0,
+            'service_questions' => 0,
             'transcript' => [],
             'fields' => [],
             'draft_id' => null,
@@ -217,12 +228,29 @@ class SupplierListingCollector
         // the message leaves the transcript and the fields stay as they
         // were, so «я передумал» or «это платно?» never ends up in the
         // saved description.
-        if ($intent !== UserIntent::Task) {
+        if ($intent === UserIntent::Abandoned) {
             $state['transcript'] = array_slice($state['transcript'], 0, $intakeMark);
 
-            return $intent === UserIntent::Abandoned
-                ? $this->abandon($session, $state)
-                : $this->answerServiceQuestion($session, $state);
+            return $this->abandon($session, $state);
+        }
+
+        // The free answer is bounded like every other exit of the block.
+        // Past the limit the message walks the ordinary task path: it stays
+        // in the transcript, feeds the extraction and spends a clarification
+        // attempt like any other, so the clarification limit — and behind it
+        // the web form — carries the dialog to its end.
+        if ($intent === UserIntent::ServiceQuestion && $state['service_questions'] < self::MAX_SERVICE_QUESTIONS) {
+            $state['transcript'] = array_slice($state['transcript'], 0, $intakeMark);
+            $state['service_questions']++;
+
+            return $this->answerServiceQuestion($session, $state);
+        }
+
+        // Any message that is not a question about the service ends the
+        // streak; the one that spent the limit is still such a question and
+        // keeps it, so further ones keep walking the task path.
+        if ($intent !== UserIntent::ServiceQuestion) {
+            $state['service_questions'] = 0;
         }
 
         $state['fields'] = $fields;
@@ -365,6 +393,7 @@ class SupplierListingCollector
      * built-in reply and costs nothing: no clarification attempt, and the
      * message stays out of the listing data. The bot then repeats whatever
      * it was waiting for, so the dialog does not stall on an open question.
+     * Bounded by MAX_SERVICE_QUESTIONS in a row.
      *
      * @param  array<string, mixed>  $state
      */
@@ -1076,6 +1105,7 @@ class SupplierListingCollector
             'unreadable' => 0,
             'location_lists' => 0,
             'provider_failures' => 0,
+            'service_questions' => 0,
             'transcript' => [],
             'fields' => [],
             'draft_id' => null,

@@ -1166,6 +1166,61 @@ test('a question about the service does not spend a clarification attempt', func
         ->and($session->fresh()->state['transcript'])->toBe(['Сдаю трактор в Шымкенте']);
 });
 
+test('a fourth service question in a row walks the ordinary collection path', function () {
+    // Залипшая классификация не должна крутить диалог бесконечно: вопрос
+    // изымается из транскрипта, поэтому неизменённая переформулировка
+    // классифицируется так же. Три вопроса подряд отвечаются встроенным
+    // текстом, четвёртый разбирается как обычное сообщение.
+    ListingExtractionAgent::fake(fn (): array => fullExtraction([
+        'price' => null,
+        'clarifying_question' => 'Какая цена или тариф?',
+        'user_intent' => 'service_question',
+    ]));
+    $session = collectorSession([
+        'transcript' => ['Сдаю трактор в Шымкенте'],
+        'last_question' => 'Какая цена или тариф?',
+    ]);
+
+    $messenger = fakeCollectorMessenger();
+    $messenger->shouldReceive('sendText')->times(3)
+        ->withArgs(fn (Contact $to, string $text) => str_contains($text, 'оператор'));
+    // Три повтора текущего вопроса плюс он же как уточнение на четвёртом ходе.
+    $messenger->shouldReceive('sendText')->times(4)
+        ->withArgs(fn (Contact $to, string $text) => $text === 'Какая цена или тариф?');
+
+    $collector = app(SupplierListingCollector::class);
+    $question = new InboundMessage(text: 'ну я и спрашиваю, сколько это стоит');
+
+    foreach (range(1, 3) as $ignored) {
+        $collector->resume($session->fresh(), supplierAiNode(), $question);
+    }
+
+    expect($session->fresh()->state)->toMatchArray([
+        'attempts' => 0,
+        'service_questions' => 3,
+        'transcript' => ['Сдаю трактор в Шымкенте'],
+    ]);
+
+    $outcome = $collector->resume($session->fresh(), supplierAiNode(), $question);
+
+    expect($outcome)->toBe(AiOutcome::InProgress)
+        ->and($session->fresh()->state['attempts'])->toBe(1)
+        ->and($session->fresh()->state['transcript'])
+        ->toBe(['Сдаю трактор в Шымкенте', 'ну я и спрашиваю, сколько это стоит']);
+});
+
+test('a message about the listing resets the service question streak', function () {
+    ListingExtractionAgent::fake([fullExtraction()]);
+    $session = collectorSession(['service_questions' => 2]);
+
+    fakeCollectorMessenger()->shouldReceive('sendButtons')->once();
+
+    app(SupplierListingCollector::class)
+        ->resume($session, supplierAiNode(), new InboundMessage(text: 'Сдаю трактор в Шымкенте, 10000 тг/час'));
+
+    expect($session->fresh()->state['service_questions'])->toBe(0);
+});
+
 test('a question during confirmation repeats the summary instead of re-collecting', function () {
     ListingExtractionAgent::fake([fullExtraction(['user_intent' => 'service_question'])]);
     $draft = Listing::factory()->create();

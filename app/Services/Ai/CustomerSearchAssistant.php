@@ -48,6 +48,15 @@ class CustomerSearchAssistant
      */
     private const int MAX_CLARIFICATIONS = 3;
 
+    /**
+     * Questions about the service answered in a row before the assistant
+     * stops treating a message as one. The abuse case is not a person
+     * asking four times but a stuck classification: the question is pulled
+     * out of the transcript, so an unchanged rephrasing gets classified the
+     * same way forever, paying for an extraction call every turn.
+     */
+    private const int MAX_SERVICE_QUESTIONS = 3;
+
     private const string ROW_ID_PREFIX = 'listing:';
 
     public const string LOCATION_ROW_PREFIX = 'search_location:';
@@ -202,21 +211,34 @@ class CustomerSearchAssistant
 
         // A refusal or an off-topic question is not a search requirement:
         // the message leaves the transcript and neither counter moves.
-        if ($intent !== UserIntent::Task) {
+        if ($intent === UserIntent::Abandoned) {
             $state['transcript'] = array_slice($state['transcript'], 0, $intakeMark);
+            $this->persist($session, $state);
+            $this->messenger->sendText($session->contact, 'Хорошо, остановимся.');
 
-            if ($intent === UserIntent::Abandoned) {
-                $this->persist($session, $state);
-                $this->messenger->sendText($session->contact, 'Хорошо, остановимся.');
+            return AiOutcome::Completed;
+        }
 
-                return AiOutcome::Completed;
-            }
-
+        // The free answer is bounded like every other exit of the block.
+        // Past the limit the message walks the ordinary search path: it
+        // stays in the transcript, feeds the requirements and spends a
+        // clarification like any other, so the existing limits carry the
+        // dialog to a search over whatever was collected.
+        if ($intent === UserIntent::ServiceQuestion && $state['service_questions'] < self::MAX_SERVICE_QUESTIONS) {
+            $state['transcript'] = array_slice($state['transcript'], 0, $intakeMark);
+            $state['service_questions']++;
             $this->persist($session, $state);
             $this->messenger->sendText($session->contact, $this->replyTexts->get(BotReplyKey::ServiceQuestion));
             $this->repeatCurrentStep($session, $state);
 
             return AiOutcome::InProgress;
+        }
+
+        // Any message that is not a question about the service ends the
+        // streak; the one that spent the limit is still such a question and
+        // keeps it, so further ones keep walking the search path.
+        if ($intent !== UserIntent::ServiceQuestion) {
+            $state['service_questions'] = 0;
         }
 
         // The extracted subject on its own feeds the catalog link: with a
@@ -846,6 +868,7 @@ class CustomerSearchAssistant
             'phase' => 'searching',
             'attempts' => 0,
             'clarifications' => 0,
+            'service_questions' => 0,
             'transcript' => [],
             'query' => null,
             'subject' => null,

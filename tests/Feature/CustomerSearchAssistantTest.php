@@ -1423,6 +1423,60 @@ test('a question about the service spends neither a clarification nor a fruitles
         ->toMatchArray(['clarifications' => 1, 'attempts' => 1, 'transcript' => ['нужен кран']]);
 });
 
+test('a fourth service question in a row walks the ordinary intake path', function () {
+    // Вопрос изымается из транскрипта, поэтому неизменённая переформулировка
+    // классифицируется так же: без предела диалог крутился бы вечно, платя
+    // по вызову разбора за ход. Три подряд отвечаются встроенным текстом,
+    // четвёртый разбирается как обычное сообщение и тратит уточнение.
+    SearchQueryExtractionAgent::fake(fn (): array => [
+        'subject' => null, 'location' => null, 'location_any' => false,
+        'clarifying_question' => '', 'user_intent' => 'service_question',
+    ]);
+    $session = searchSession(['last_question' => 'Что именно вам нужно — какая техника или услуга?']);
+
+    $messenger = fakeSearchMessenger();
+    $messenger->shouldReceive('sendText')->times(3)
+        ->withArgs(fn (Contact $to, string $text) => str_contains($text, 'оператор'));
+    // Три повтора текущего вопроса плюс он же как уточнение на четвёртом ходе.
+    $messenger->shouldReceive('sendText')->times(4)
+        ->withArgs(fn (Contact $to, string $text) => $text === 'Что именно вам нужно — какая техника или услуга?');
+
+    $assistant = app(CustomerSearchAssistant::class);
+    $question = new InboundMessage(text: 'ну я и спрашиваю, как это у вас устроено');
+
+    foreach (range(1, 3) as $ignored) {
+        $assistant->resume($session->fresh(), customerAiNode(), $question);
+    }
+
+    expect($session->fresh()->state)->toMatchArray([
+        'clarifications' => 0,
+        'attempts' => 0,
+        'service_questions' => 3,
+        'transcript' => [],
+    ]);
+
+    $outcome = $assistant->resume($session->fresh(), customerAiNode(), $question);
+
+    expect($outcome)->toBe(AiOutcome::InProgress)
+        ->and($session->fresh()->state['clarifications'])->toBe(1)
+        ->and($session->fresh()->state['transcript'])->toBe(['ну я и спрашиваю, как это у вас устроено']);
+});
+
+test('a search requirement resets the service question streak', function () {
+    SearchQueryExtractionAgent::fake([fullSearchIntake()]);
+    locationNamed('г.Шымкент');
+    $session = searchSession(['service_questions' => 2]);
+
+    $messenger = fakeSearchMessenger();
+    $messenger->shouldReceive('sendButtons')->once(); // пустая выдача с кнопкой «В меню»
+    expectCatalogCta($messenger);
+
+    app(CustomerSearchAssistant::class)
+        ->resume($session, customerAiNode(), new InboundMessage(text: 'нужен кран 25 тонн в Шымкенте'));
+
+    expect($session->fresh()->state['service_questions'])->toBe(0);
+});
+
 test('a service question while a place pick list is open resends the same list', function () {
     SearchQueryExtractionAgent::fake([[
         'subject' => null, 'location' => null, 'location_any' => false,

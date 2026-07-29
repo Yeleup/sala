@@ -1371,3 +1371,45 @@ test('a declined request does not block a new chat pick of the same listing', fu
     expect($outcome)->toBe(AiOutcome::Completed)
         ->and(CustomerRequest::count())->toBe(2);
 });
+
+test('an explicit refusal releases the customer', function () {
+    SearchQueryExtractionAgent::fake([[
+        'subject' => null, 'location' => null, 'location_any' => false,
+        'clarifying_question' => '', 'user_intent' => 'abandoned',
+    ]]);
+    $session = searchSession();
+
+    fakeSearchMessenger()->shouldReceive('sendText')->once()
+        ->withArgs(fn (Contact $to, string $text) => $text === 'Хорошо, остановимся.');
+
+    $outcome = app(CustomerSearchAssistant::class)
+        ->resume($session, customerAiNode(), new InboundMessage(text: 'спасибо, я передумал'));
+
+    expect($outcome)->toBe(AiOutcome::Completed);
+});
+
+test('a question about the service spends neither a clarification nor a fruitless attempt', function () {
+    SearchQueryExtractionAgent::fake([[
+        'subject' => null, 'location' => null, 'location_any' => false,
+        'clarifying_question' => '', 'user_intent' => 'service_question',
+    ]]);
+    $session = searchSession([
+        'clarifications' => 1,
+        'attempts' => 1,
+        'transcript' => ['нужен кран'],
+        'last_question' => 'В каком городе или районе нужен кран?',
+    ]);
+
+    $messenger = fakeSearchMessenger();
+    $messenger->shouldReceive('sendText')->once()
+        ->withArgs(fn (Contact $to, string $text) => str_contains($text, 'оператор'));
+    $messenger->shouldReceive('sendText')->once()
+        ->withArgs(fn (Contact $to, string $text) => $text === 'В каком городе или районе нужен кран?');
+
+    $outcome = app(CustomerSearchAssistant::class)
+        ->resume($session, customerAiNode(), new InboundMessage(text: 'а вы берёте комиссию?'));
+
+    expect($outcome)->toBe(AiOutcome::InProgress)
+        ->and($session->fresh()->state)
+        ->toMatchArray(['clarifications' => 1, 'attempts' => 1, 'transcript' => ['нужен кран']]);
+});

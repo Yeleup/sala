@@ -5,10 +5,13 @@ namespace App\Services\Ai;
 use App\Ai\Agents\SearchQueryExtractionAgent;
 use App\Enums\AiOperationType;
 use App\Enums\AiOutcome;
+use App\Enums\BotReplyKey;
+use App\Enums\UserIntent;
 use App\Models\BotSession;
 use App\Models\Listing;
 use App\Models\Location;
 use App\Services\Ai\Audit\AiAudit;
+use App\Services\Bot\BotReplyTexts;
 use App\Services\Bot\InboundMessage;
 use App\Services\CustomerRequestPlacer;
 use App\Services\DereuMessenger;
@@ -87,6 +90,7 @@ class CustomerSearchAssistant
         private readonly CtaLinkBuilder $links,
         private readonly LocationResolver $locations,
         private readonly AiAudit $audit,
+        private readonly BotReplyTexts $replyTexts,
     ) {}
 
     /**
@@ -177,6 +181,10 @@ class CustomerSearchAssistant
             return AiOutcome::InProgress;
         }
 
+        // The transcript length before this message: a message the
+        // extractor classifies as «not about the search» is rolled back.
+        $intakeMark = count($state['transcript']);
+
         $state['transcript'][] = $input;
         $state['unresolved_location'] = null;
 
@@ -188,6 +196,27 @@ class CustomerSearchAssistant
             $state['subject'] = null;
 
             return $this->runSearch($session, $state, implode(', ', $state['transcript']));
+        }
+
+        $intent = UserIntent::fromExtraction($requirements['user_intent'] ?? null);
+
+        // A refusal or an off-topic question is not a search requirement:
+        // the message leaves the transcript and neither counter moves.
+        if ($intent !== UserIntent::Task) {
+            $state['transcript'] = array_slice($state['transcript'], 0, $intakeMark);
+
+            if ($intent === UserIntent::Abandoned) {
+                $this->persist($session, $state);
+                $this->messenger->sendText($session->contact, 'Хорошо, остановимся.');
+
+                return AiOutcome::Completed;
+            }
+
+            $this->persist($session, $state);
+            $this->messenger->sendText($session->contact, $this->replyTexts->get(BotReplyKey::ServiceQuestion));
+            $this->repeatCurrentStep($session, $state);
+
+            return AiOutcome::InProgress;
         }
 
         // The extracted subject on its own feeds the catalog link: with a
@@ -232,8 +261,9 @@ class CustomerSearchAssistant
 
         if ($missing !== [] && $state['clarifications'] < self::MAX_CLARIFICATIONS) {
             $state['clarifications']++;
+            $state['last_question'] = $this->clarifyingQuestion($requirements, $missing, $candidates);
             $this->persist($session, $state);
-            $this->messenger->sendText($session->contact, $this->clarifyingQuestion($requirements, $missing, $candidates));
+            $this->messenger->sendText($session->contact, $state['last_question']);
 
             return AiOutcome::InProgress;
         }
@@ -380,6 +410,16 @@ class CustomerSearchAssistant
         $state['expand_location_id'] = null;
         $this->persist($session, $state);
 
+        $this->sendLocationChoices($session, $candidates);
+
+        return AiOutcome::InProgress;
+    }
+
+    /**
+     * @param  EloquentCollection<int, Location>  $candidates
+     */
+    protected function sendLocationChoices(BotSession $session, EloquentCollection $candidates): void
+    {
         $this->messenger->sendList(
             $session->contact,
             'Нашли несколько подходящих мест — уточните, в каком из них искать.',
@@ -396,8 +436,45 @@ class CustomerSearchAssistant
                 ->values()
                 ->all(),
         );
+    }
 
-        return AiOutcome::InProgress;
+    /**
+     * Re-send whatever the assistant is waiting for. The results list is
+     * not resent — it is still visible in the chat, so a nudge is enough
+     * and cheaper than a second interactive message.
+     *
+     * @param  array<string, mixed>  $state
+     */
+    protected function repeatCurrentStep(BotSession $session, array $state): void
+    {
+        $candidates = array_map(intval(...), (array) ($state['location_candidates'] ?? []));
+
+        if ($state['phase'] === 'locating' && $candidates !== []) {
+            $this->sendLocationChoices(
+                $session,
+                Location::query()->whereIn('id', $candidates)->orderBy('depth')->orderBy('id')->get(),
+            );
+
+            return;
+        }
+
+        if ($state['phase'] === 'choosing') {
+            $this->messenger->sendText(
+                $session->contact,
+                'Выберите вариант из списка выше или уточните запрос.',
+            );
+
+            return;
+        }
+
+        $question = trim((string) ($state['last_question'] ?? ''));
+
+        $this->messenger->sendText(
+            $session->contact,
+            $question !== ''
+                ? $question
+                : sprintf('Что вам нужно и в каком городе, %s?', self::QUERY_EXAMPLE),
+        );
     }
 
     /**
@@ -777,6 +854,7 @@ class CustomerSearchAssistant
             'location_id' => null,
             'expand_location_id' => null,
             'unresolved_location' => null,
+            'last_question' => null,
         ];
     }
 

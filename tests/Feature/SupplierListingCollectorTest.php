@@ -666,8 +666,11 @@ test('the third same-named place list is replaced by a clarifying question', fun
 
     $messenger = fakeCollectorMessenger();
     $messenger->shouldReceive('sendList')->never();
+    // Место в справочнике есть — именно поэтому список показывали дважды.
+    // Формулировка «Не нашли» здесь была бы неправдой, а проверка на одно
+    // лишь название места её бы пропустила.
     $messenger->shouldReceive('sendText')->once()
-        ->withArgs(fn (Contact $to, string $text) => str_contains($text, 'Абайский район'));
+        ->withArgs(fn (Contact $to, string $text) => $text === 'Мест с названием «Абайский район» в справочнике несколько, и мы не поняли, какое из них ваше. Напишите точнее — вместе с областью или районом.');
 
     $outcome = app(SupplierListingCollector::class)
         ->resume($session, supplierAiNode(), new InboundMessage(text: 'да там же'));

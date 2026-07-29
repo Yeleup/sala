@@ -1001,10 +1001,19 @@ class SupplierListingCollector
 
         // The named place did not resolve to the dictionary — the extractor
         // believes the location is filled, so its question would miss this.
-        // More namesakes than a list can hold even at their biggest level
-        // is its own case: the name IS in the dictionary, so retyping it
-        // cannot help — only a bigger unit can.
+        // Two cases are not «не нашли» at all: the name IS in the dictionary,
+        // shared by several places, and retyping it alone cannot help — only
+        // a bigger unit can. Namesakes reached here either because there are
+        // more of them than a list can hold, or because the pick list is
+        // spent (MAX_LOCATION_LISTS) and the candidates are still known.
         if (($missing[0] ?? null) === 'location_id' && filled($fields['location'] ?? null)) {
+            if (($fields['location_candidates'] ?? []) !== []) {
+                return sprintf(
+                    'Мест с названием «%s» в справочнике несколько, и мы не поняли, какое из них ваше. Напишите точнее — вместе с областью или районом.',
+                    $fields['location'],
+                );
+            }
+
             return ($fields['location_overflow'] ?? false)
                 ? sprintf(
                     'Мест с названием «%s» в справочнике слишком много. Напишите точнее — вместе с областью или районом.',

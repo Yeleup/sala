@@ -4,16 +4,19 @@ use App\Ai\Agents\ListingExtractionAgent;
 use App\Ai\Agents\LocationChoiceAgent;
 use App\Enums\AiOperationType;
 use App\Enums\AiOutcome;
+use App\Enums\BotReplyKey;
 use App\Enums\ListingMediaType;
 use App\Enums\ListingStatus;
 use App\Enums\ListingType;
 use App\Models\AiOperation;
+use App\Models\BotReplyText;
 use App\Models\BotSession;
 use App\Models\Contact;
 use App\Models\Listing;
 use App\Models\ListingMedia;
 use App\Services\Ai\ScenarioAiAssistant;
 use App\Services\Ai\SupplierListingCollector;
+use App\Services\Bot\BotReplyTexts;
 use App\Services\Bot\InboundMessage;
 use App\Services\DereuMediaDownloader;
 use App\Services\DereuMessenger;
@@ -1004,4 +1007,78 @@ test('a refusal never lands in the listing description', function () {
     // Сообщение с отказом изъято: транскрипт остался как был до него.
     expect($session->fresh()->state['transcript'])
         ->toBe(['Сдаю трактор в Шымкенте, 10000 тг/час']);
+});
+
+test('a question about the service does not spend a clarification attempt', function () {
+    ListingExtractionAgent::fake([fullExtraction(['price' => null, 'user_intent' => 'service_question'])]);
+    $session = collectorSession([
+        'attempts' => 1,
+        'transcript' => ['Сдаю трактор в Шымкенте'],
+        'last_question' => 'Какая цена или тариф?',
+    ]);
+
+    $messenger = fakeCollectorMessenger();
+    $messenger->shouldReceive('sendText')->once()
+        ->withArgs(fn (Contact $to, string $text) => str_contains($text, 'оператор'));
+    $messenger->shouldReceive('sendText')->once()
+        ->withArgs(fn (Contact $to, string $text) => $text === 'Какая цена или тариф?');
+
+    $outcome = app(SupplierListingCollector::class)
+        ->resume($session, supplierAiNode(), new InboundMessage(text: 'а размещение платное?'));
+
+    expect($outcome)->toBe(AiOutcome::InProgress)
+        ->and($session->fresh()->state['attempts'])->toBe(1)
+        ->and($session->fresh()->state['transcript'])->toBe(['Сдаю трактор в Шымкенте']);
+});
+
+test('a question during confirmation repeats the summary instead of re-collecting', function () {
+    ListingExtractionAgent::fake([fullExtraction(['user_intent' => 'service_question'])]);
+    $draft = Listing::factory()->create();
+    $session = collectorSession([
+        'phase' => 'confirming',
+        'draft_id' => $draft->id,
+        'fields' => fullExtraction(),
+        'transcript' => ['Сдаю трактор в Шымкенте, 10000 тг/час'],
+    ]);
+
+    $messenger = fakeCollectorMessenger();
+    $messenger->shouldReceive('sendText')->once()
+        ->withArgs(fn (Contact $to, string $text) => str_contains($text, 'оператор'));
+    $messenger->shouldReceive('sendButtons')->once()
+        ->withArgs(fn (Contact $to, string $text, array $buttons) => str_contains($text, 'Всё верно?')
+            && array_column($buttons, 'title') === ['Да, отправить', 'Исправить']);
+
+    $outcome = app(SupplierListingCollector::class)
+        ->resume($session, supplierAiNode(), new InboundMessage(text: 'а сколько объявление висит?'));
+
+    expect($outcome)->toBe(AiOutcome::InProgress)
+        ->and($session->fresh()->state['phase'])->toBe('confirming');
+});
+
+test('the operator can override the service question reply', function () {
+    // Кэш встроенных ответов — rememberForever, и env контейнера перекрывает
+    // CACHE_STORE из phpunit.xml: фиксируем array-стор и чистим набор, как в
+    // BotReplyTextsTest.
+    config()->set('cache.default', 'array');
+    app(BotReplyTexts::class)->flush();
+
+    BotReplyText::query()->create([
+        'key' => BotReplyKey::ServiceQuestion->value,
+        'text' => 'Условия — на нашем сайте.',
+    ]);
+    app(BotReplyTexts::class)->flush();
+
+    ListingExtractionAgent::fake([fullExtraction(['price' => null, 'user_intent' => 'service_question'])]);
+    $session = collectorSession(['last_question' => 'Какая цена или тариф?']);
+
+    $messenger = fakeCollectorMessenger();
+    $messenger->shouldReceive('sendText')->once()
+        ->withArgs(fn (Contact $to, string $text) => $text === 'Условия — на нашем сайте.');
+    $messenger->shouldReceive('sendText')->once()
+        ->withArgs(fn (Contact $to, string $text) => $text === 'Какая цена или тариф?');
+
+    app(SupplierListingCollector::class)
+        ->resume($session, supplierAiNode(), new InboundMessage(text: 'это платно?'));
+
+    app(BotReplyTexts::class)->flush();
 });

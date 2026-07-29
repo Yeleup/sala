@@ -6,6 +6,7 @@ use App\Ai\Agents\ListingExtractionAgent;
 use App\Ai\Agents\LocationChoiceAgent;
 use App\Enums\AiOperationType;
 use App\Enums\AiOutcome;
+use App\Enums\BotReplyKey;
 use App\Enums\ListingMediaType;
 use App\Enums\ListingOrigin;
 use App\Enums\ListingType;
@@ -17,6 +18,7 @@ use App\Models\Listing;
 use App\Models\ListingMedia;
 use App\Models\Location;
 use App\Services\Ai\Audit\AiAudit;
+use App\Services\Bot\BotReplyTexts;
 use App\Services\Bot\InboundMessage;
 use App\Services\DereuMediaDownloader;
 use App\Services\DereuMessenger;
@@ -72,6 +74,7 @@ class SupplierListingCollector
         private readonly CtaLinkBuilder $cta,
         private readonly AiAudit $audit,
         private readonly LocationResolver $locations,
+        private readonly BotReplyTexts $replyTexts,
     ) {}
 
     /**
@@ -89,6 +92,7 @@ class SupplierListingCollector
             'picked_location_id' => null,
             'picked_location_wording' => null,
             'declined_location_wording' => null,
+            'last_question' => null,
         ];
         $session->save();
 
@@ -142,13 +146,16 @@ class SupplierListingCollector
         $fields = $this->extract($session, $state);
         $intent = UserIntent::fromExtraction($fields['user_intent'] ?? null);
 
-        // A refusal is not listing data: the message leaves the transcript
-        // and the fields stay as they were, so «я передумал» never ends up
-        // in the saved description.
-        if ($intent === UserIntent::Abandoned) {
+        // A refusal or a question about the service is not listing data:
+        // the message leaves the transcript and the fields stay as they
+        // were, so «я передумал» or «это платно?» never ends up in the
+        // saved description.
+        if ($intent !== UserIntent::Task) {
             $state['transcript'] = array_slice($state['transcript'], 0, $intakeMark);
 
-            return $this->abandon($session, $state);
+            return $intent === UserIntent::Abandoned
+                ? $this->abandon($session, $state)
+                : $this->answerServiceQuestion($session, $state);
         }
 
         $state['fields'] = $fields;
@@ -225,8 +232,9 @@ class SupplierListingCollector
 
         $state['attempts']++;
         $state['phase'] = 'collecting';
+        $state['last_question'] = $this->clarificationQuestion($state['fields'], $missing);
         $this->persist($session, $state);
-        $this->messenger->sendText($session->contact, $this->clarificationQuestion($state['fields'], $missing));
+        $this->messenger->sendText($session->contact, $state['last_question']);
 
         return AiOutcome::InProgress;
     }
@@ -264,6 +272,55 @@ class SupplierListingCollector
         );
 
         return AiOutcome::Completed;
+    }
+
+    /**
+     * A question about the service is answered with the operator's own
+     * built-in reply and costs nothing: no clarification attempt, and the
+     * message stays out of the listing data. The bot then repeats whatever
+     * it was waiting for, so the dialog does not stall on an open question.
+     *
+     * @param  array<string, mixed>  $state
+     */
+    private function answerServiceQuestion(BotSession $session, array $state): AiOutcome
+    {
+        $this->persist($session, $state);
+        $this->messenger->sendText($session->contact, $this->replyTexts->get(BotReplyKey::ServiceQuestion));
+        $this->repeatCurrentStep($session, $state);
+
+        return AiOutcome::InProgress;
+    }
+
+    /**
+     * Re-send whatever the collector is waiting for at this phase.
+     *
+     * @param  array<string, mixed>  $state
+     */
+    private function repeatCurrentStep(BotSession $session, array $state): void
+    {
+        if ($state['phase'] === 'confirming') {
+            $this->sendConfirmation($session, $state['fields']);
+
+            return;
+        }
+
+        if ($state['phase'] === 'locating') {
+            $this->sendLocationChoices(
+                $session,
+                array_map(intval(...), (array) ($state['fields']['location_candidates'] ?? [])),
+            );
+
+            return;
+        }
+
+        $question = trim((string) ($state['last_question'] ?? ''));
+
+        $this->messenger->sendText(
+            $session->contact,
+            $question !== ''
+                ? $question
+                : 'Расскажите, что вы предлагаете: что это, в каком городе и по какой цене.',
+        );
     }
 
     /**
@@ -915,6 +972,7 @@ class SupplierListingCollector
             'picked_location_id' => null,
             'picked_location_wording' => null,
             'declined_location_wording' => null,
+            'last_question' => null,
         ], $session->state ?? []);
     }
 

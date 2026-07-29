@@ -227,10 +227,10 @@ enum UserIntent: string
         $fields = $this->extract($session, $state);
         $intent = UserIntent::fromExtraction($fields['user_intent'] ?? null);
 
-        // A refusal or an off-topic question is not listing data: the
-        // message leaves the transcript and the fields stay as they were,
-        // so «я передумал» never ends up in the saved description.
-        if ($intent !== UserIntent::Task) {
+        // A refusal is not listing data: the message leaves the transcript
+        // and the fields stay as they were, so «я передумал» never ends up
+        // in the saved description.
+        if ($intent === UserIntent::Abandoned) {
             $state['transcript'] = array_slice($state['transcript'], 0, $intakeMark);
 
             return $this->abandon($session, $state);
@@ -242,7 +242,7 @@ enum UserIntent: string
     }
 ```
 
-Задача 2 расширит эту ветку вторым исходом; сейчас оба нетаск-намерения ведут в `abandon()`.
+Условие проверяет именно `Abandoned`, а не «любое намерение кроме `Task`»: обработчик вопроса про сервис появляется только в задаче 2, и до неё такое сообщение должно вести себя как сегодня — обычный ввод по задаче. Иначе промежуточный коммит отвечал бы «Хорошо, остановимся» на вопрос «а это платно?».
 
 Добавить метод `abandon()` рядом с `advance()`:
 
@@ -479,7 +479,7 @@ make test test_args="--compact --filter='service'"
         private readonly BotReplyTexts $replyTexts,
 ```
 
-В `handleCollecting()` заменить ветку нетаск-намерения (введённую в задаче 1) на разбор обоих исходов:
+В `handleCollecting()` расширить ветку отказа (введённую в задаче 1 как `if ($intent === UserIntent::Abandoned)`) до разбора обоих нетаск-исходов:
 
 ```php
         if ($intent !== UserIntent::Task) {

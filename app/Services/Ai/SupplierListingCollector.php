@@ -46,6 +46,14 @@ class SupplierListingCollector
     private const int MAX_CLARIFICATIONS = 3;
 
     /**
+     * Unreadable messages in a row (sticker, caption-less photo, silent
+     * audio) before the collector stops asking and hands over the web
+     * form. Without it the «просьба описать словами» loop is endless:
+     * such a message never spends a clarification attempt.
+     */
+    private const int MAX_UNREADABLE = 3;
+
+    /**
      * Photos attached to one extraction call — enough to recognize the
      * equipment without inflating the prompt.
      */
@@ -85,6 +93,7 @@ class SupplierListingCollector
         $session->state = [
             'phase' => 'collecting',
             'attempts' => 0,
+            'unreadable' => 0,
             'transcript' => [],
             'fields' => [],
             'draft_id' => null,
@@ -133,7 +142,17 @@ class SupplierListingCollector
 
         // An unreadable message (sticker, empty caption, silent audio) never
         // consumes a clarification attempt — the bot just asks to rephrase.
+        // But it is not free forever: a run of MAX_UNREADABLE in a row hands
+        // the supplier over to the web form, the same dead end as a spent
+        // clarification limit — otherwise the «опишите словами» loop never
+        // ends for a message the model never even sees.
         if (! $this->intake($session, $state, $message)) {
+            $state['unreadable']++;
+
+            if ($state['unreadable'] >= self::MAX_UNREADABLE) {
+                return $this->handOffToWebForm($session, $state);
+            }
+
             $this->persist($session, $state);
             $this->messenger->sendText(
                 $session->contact,
@@ -142,6 +161,8 @@ class SupplierListingCollector
 
             return AiOutcome::InProgress;
         }
+
+        $state['unreadable'] = 0;
 
         $fields = $this->extract($session, $state);
         $intent = UserIntent::fromExtraction($fields['user_intent'] ?? null);
@@ -217,17 +238,7 @@ class SupplierListingCollector
         }
 
         if ($state['attempts'] >= self::MAX_CLARIFICATIONS) {
-            $draft = $this->ensureDraft($session, $state);
-            $draft->update($this->listingAttributes($state));
-            $this->persist($session, $state);
-            $this->messenger->sendCtaUrl(
-                $session->contact,
-                'Не получилось собрать все данные из переписки. Откройте форму и заполните объявление вручную.',
-                'Заполнить вручную',
-                $this->cta->editUrl($draft),
-            );
-
-            return AiOutcome::Completed;
+            return $this->handOffToWebForm($session, $state);
         }
 
         $state['attempts']++;
@@ -237,6 +248,28 @@ class SupplierListingCollector
         $this->messenger->sendText($session->contact, $state['last_question']);
 
         return AiOutcome::InProgress;
+    }
+
+    /**
+     * Save whatever was collected and let the supplier finish in the web
+     * form. Shared by every dead end that must not loop: the clarification
+     * limit, an unreadable-message streak, an unavailable AI provider.
+     *
+     * @param  array<string, mixed>  $state
+     */
+    private function handOffToWebForm(BotSession $session, array $state): AiOutcome
+    {
+        $draft = $this->ensureDraft($session, $state);
+        $draft->update($this->listingAttributes($state));
+        $this->persist($session, $state);
+        $this->messenger->sendCtaUrl(
+            $session->contact,
+            'Не получилось собрать все данные из переписки. Откройте форму и заполните объявление вручную.',
+            'Заполнить вручную',
+            $this->cta->editUrl($draft),
+        );
+
+        return AiOutcome::Completed;
     }
 
     /**
@@ -965,6 +998,7 @@ class SupplierListingCollector
         return array_merge([
             'phase' => 'collecting',
             'attempts' => 0,
+            'unreadable' => 0,
             'transcript' => [],
             'fields' => [],
             'draft_id' => null,

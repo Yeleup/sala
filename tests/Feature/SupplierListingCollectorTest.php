@@ -336,6 +336,35 @@ test('an unreadable follow-up does not spend a clarification attempt', function 
     ListingExtractionAgent::assertNeverPrompted();
 });
 
+test('three unreadable messages in a row hand the supplier over to the web form', function () {
+    ListingExtractionAgent::fake()->preventStrayPrompts();
+    $session = collectorSession(['unreadable' => 2, 'transcript' => ['Сдаю трактор']]);
+
+    fakeCollectorMessenger()->shouldReceive('sendCtaUrl')->once()
+        ->withArgs(fn (Contact $to, string $text, string $button, string $url) => mb_strlen($button) <= 20
+            && str_contains($url, '/supplier/listings/')
+            && str_contains($url, 'signature='));
+
+    $outcome = app(SupplierListingCollector::class)
+        ->resume($session, supplierAiNode(), new InboundMessage);
+
+    expect($outcome)->toBe(AiOutcome::Completed)
+        ->and(Listing::count())->toBe(1);
+    ListingExtractionAgent::assertNeverPrompted();
+});
+
+test('a readable message resets the unreadable streak', function () {
+    ListingExtractionAgent::fake([fullExtraction()]);
+    $session = collectorSession(['unreadable' => 2]);
+
+    fakeCollectorMessenger()->shouldReceive('sendButtons')->once();
+
+    app(SupplierListingCollector::class)
+        ->resume($session, supplierAiNode(), new InboundMessage(text: 'Сдаю трактор в Шымкенте, 10000 тг/час'));
+
+    expect($session->fresh()->state['unreadable'])->toBe(0);
+});
+
 test('a category outside the dictionary never reaches the draft and is asked again', function () {
     ListingExtractionAgent::fake([
         fullExtraction(['category' => 'Дирижабль', 'clarifying_question' => 'Что именно за техника?']),

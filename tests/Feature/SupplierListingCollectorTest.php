@@ -1173,7 +1173,7 @@ test('a single AI provider failure asks to repeat without spending an attempt', 
     $session = collectorSession(['transcript' => ['Сдаю трактор']]);
 
     fakeCollectorMessenger()->shouldReceive('sendText')->once()
-        ->withArgs(fn (Contact $to, string $text) => str_contains($text, 'повторите'));
+        ->withArgs(fn (Contact $to, string $text) => str_contains($text, 'Повторите его'));
 
     $outcome = app(SupplierListingCollector::class)
         ->resume($session, supplierAiNode(), new InboundMessage(text: 'в Шымкенте, 10000 тг/час'));

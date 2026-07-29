@@ -196,7 +196,7 @@ class SupplierListingCollector
             $this->persist($session, $state);
             $this->messenger->sendText(
                 $session->contact,
-                'Не получилось обработать сообщение, повторите его, пожалуйста, ещё раз.',
+                'Не получилось обработать сообщение. Повторите его, пожалуйста, ещё раз.',
             );
 
             return AiOutcome::InProgress;

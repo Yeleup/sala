@@ -54,6 +54,15 @@ class SupplierListingCollector
     private const int MAX_UNREADABLE = 3;
 
     /**
+     * How many times the same-named place list may go out before the
+     * collector stops offering it — the third request for it falls through
+     * to the ordinary missing-field path. Picking from the list spends no
+     * clarification attempt, so a supplier who keeps ignoring it would
+     * otherwise get it forever.
+     */
+    private const int MAX_LOCATION_LISTS = 2;
+
+    /**
      * Photos attached to one extraction call — enough to recognize the
      * equipment without inflating the prompt.
      */
@@ -94,6 +103,7 @@ class SupplierListingCollector
             'phase' => 'collecting',
             'attempts' => 0,
             'unreadable' => 0,
+            'location_lists' => 0,
             'transcript' => [],
             'fields' => [],
             'draft_id' => null,
@@ -220,6 +230,7 @@ class SupplierListingCollector
             if ($chosen !== null) {
                 $state['picked_location_id'] = $chosen->id;
                 $state['picked_location_wording'] = $this->locationWording((string) ($state['fields']['location'] ?? ''));
+                $state['location_lists'] = 0;
 
                 $state['fields']['location_id'] = $chosen->id;
                 $state['fields']['location'] = $chosen->name;
@@ -230,11 +241,17 @@ class SupplierListingCollector
                 return $this->advance($session, $state);
             }
 
-            $state['phase'] = 'locating';
-            $this->persist($session, $state);
-            $this->sendLocationChoices($session, $candidates);
+            // The list goes out a bounded number of times: a supplier who
+            // keeps not picking falls through to the ordinary missing-field
+            // path, which spends attempts and ends at the web form.
+            if ($state['location_lists'] < self::MAX_LOCATION_LISTS) {
+                $state['location_lists']++;
+                $state['phase'] = 'locating';
+                $this->persist($session, $state);
+                $this->sendLocationChoices($session, $candidates);
 
-            return AiOutcome::InProgress;
+                return AiOutcome::InProgress;
+            }
         }
 
         if ($state['attempts'] >= self::MAX_CLARIFICATIONS) {
@@ -374,6 +391,7 @@ class SupplierListingCollector
             // while the extractor keeps naming the place the same way.
             $state['picked_location_id'] = $picked->id;
             $state['picked_location_wording'] = $this->locationWording((string) ($state['fields']['location'] ?? ''));
+            $state['location_lists'] = 0;
 
             $state['fields']['location_id'] = $picked->id;
             $state['fields']['location'] = $picked->name;
@@ -999,6 +1017,7 @@ class SupplierListingCollector
             'phase' => 'collecting',
             'attempts' => 0,
             'unreadable' => 0,
+            'location_lists' => 0,
             'transcript' => [],
             'fields' => [],
             'draft_id' => null,

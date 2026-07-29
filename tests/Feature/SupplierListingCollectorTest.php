@@ -632,6 +632,29 @@ test('an ambiguous location sends a pick list without spending an attempt', func
         ->and($session->fresh()->state['attempts'])->toBe(0);
 });
 
+test('the third same-named place list is replaced by a clarifying question', function () {
+    locationNamed('Абайский район', locationNamed('область Абай'));
+    locationNamed('Абайский район', locationNamed('г.Шымкент'));
+
+    ListingExtractionAgent::fake([fullExtraction(['location' => 'Абайский район'])]);
+    fakeLocationChoice();
+    $session = collectorSession([
+        'location_lists' => 2,
+        'transcript' => ['Сдаю трактор в Абайском районе, 10000 тг/час'],
+    ]);
+
+    $messenger = fakeCollectorMessenger();
+    $messenger->shouldReceive('sendList')->never();
+    $messenger->shouldReceive('sendText')->once()
+        ->withArgs(fn (Contact $to, string $text) => str_contains($text, 'Абайский район'));
+
+    $outcome = app(SupplierListingCollector::class)
+        ->resume($session, supplierAiNode(), new InboundMessage(text: 'да там же'));
+
+    expect($outcome)->toBe(AiOutcome::InProgress)
+        ->and($session->fresh()->state['attempts'])->toBe(1);
+});
+
 test('a confident AI pick resolves same-named places without asking', function () {
     locationNamed('Абайский район', locationNamed('область Абай'));
     $picked = locationNamed('Абайский район', locationNamed('Карагандинская область'));

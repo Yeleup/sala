@@ -30,3 +30,6 @@ Thumbs.db
 frankenphp
 frankenphp-worker.php
 /docker/db/dump.sql.gz
+
+/tools/demo-video/node_modules
+/storage/app/demo-video

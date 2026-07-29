@@ -1,0 +1,9 @@
+{
+    "name": "sala-demo-video",
+    "private": true,
+    "type": "module",
+    "description": "Демо-видео флоу оператора: Playwright + OpenAI TTS + ffmpeg",
+    "dependencies": {
+        "playwright": "1.62.0"
+    }
+}

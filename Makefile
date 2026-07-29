@@ -28,7 +28,7 @@ dump_file ?= docker/db/dump.sql.gz
 storage_dump_file ?= docker/db/storage.tar.gz
 storage_dir ?= storage/app
 
-.PHONY: help init ports ensure-vendor ensure-node-modules build up down down-volumes restart logs ps shell artisan composer npm key-show key-generate dump import dump-media import-media test test-worktree deploy
+.PHONY: help init ports ensure-vendor ensure-node-modules build up down down-volumes restart logs ps shell artisan composer npm key-show key-generate dump import dump-media import-media test test-worktree demo-video deploy
 
 help:
 	@printf '%s\n' \
@@ -53,6 +53,7 @@ help:
 		'make import-media        # replace storage/app from docker/db/storage.tar.gz' \
 		'make test                # run Laravel tests in the app container' \
 		'make test-worktree       # run tests from a git worktree in a one-off app container' \
+		'make demo-video          # record the operator demo video with narration' \
 		'make deploy              # production: pull, build, migrate, and restart queue workers'
 
 init:
@@ -211,6 +212,11 @@ test-worktree:
 		QUEUE_CONNECTION=sync \
 		CACHE_STORE=array \
 		php artisan test $(test_args)
+
+demo-video:
+	@test "$(APP_ENV)" != "production" || (echo 'Refusing to record a demo against production.' >&2; exit 1)
+	DEMO_APP_CONTAINER=$(DOCKER_PROJECT_NAME)-app-1 \
+	tools/demo-video/run.sh
 
 deploy:
 	git pull

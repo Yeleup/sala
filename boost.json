@@ -15,6 +15,7 @@
         "octane-development",
         "pest-testing",
         "tailwindcss-development",
+        "demo-video",
         "dereu-integration"
     ]
 }

@@ -688,6 +688,39 @@ test('a confident AI pick resolves same-named places without asking', function (
         ->and(AiOperation::query()->where('operation', AiOperationType::LocationDisambiguation)->count())->toBe(1);
 });
 
+test('a confident AI pick after a shown list resets the repeat counter', function () {
+    locationNamed('Абайский район', locationNamed('область Абай'));
+    $picked = locationNamed('Абайский район', locationNamed('Карагандинская область'));
+
+    // Первое сообщение модель не разбирает — список уходит и счётчик
+    // становится 1. Второе называет место иначе («Абайская г.а.» —
+    // тот же поисковый ключ, что и «Абайский район», см.
+    // docs/modules/ai-assistant.md), и модель разбирает его уверенно.
+    ListingExtractionAgent::fake([
+        fullExtraction(['location' => 'Абайский район']),
+        fullExtraction(['location' => 'Абайская г.а.']),
+    ]);
+    LocationChoiceAgent::fake([
+        fn (): array => ['location_id' => null],
+        fn (): array => ['location_id' => (string) $picked->id],
+    ]);
+    $session = collectorSession();
+
+    $messenger = fakeCollectorMessenger();
+    $messenger->shouldReceive('sendList')->once();
+    $messenger->shouldReceive('sendButtons')->once();
+
+    $collector = app(SupplierListingCollector::class);
+    $collector->resume($session, supplierAiNode(), new InboundMessage(text: 'Трактор, Абайский район, 10000 тг/час'));
+
+    expect($session->fresh()->state['location_lists'])->toBe(1);
+
+    $collector->resume($session->fresh(), supplierAiNode(), new InboundMessage(text: 'Это в Карагандинской области'));
+
+    expect($session->fresh()->state['location_lists'])->toBe(0)
+        ->and($session->fresh()->state['picked_location_id'])->toBe($picked->id);
+});
+
 test('a remembered AI pick is not put to the model again on later messages', function () {
     locationNamed('Абайский район', locationNamed('область Абай'));
     $picked = locationNamed('Абайский район', locationNamed('Карагандинская область'));

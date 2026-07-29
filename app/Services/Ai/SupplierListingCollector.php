@@ -9,6 +9,7 @@ use App\Enums\AiOutcome;
 use App\Enums\ListingMediaType;
 use App\Enums\ListingOrigin;
 use App\Enums\ListingType;
+use App\Enums\UserIntent;
 use App\Models\BotSession;
 use App\Models\Brand;
 use App\Models\Category;
@@ -122,6 +123,10 @@ class SupplierListingCollector
      */
     private function handleCollecting(BotSession $session, array $state, InboundMessage $message): AiOutcome
     {
+        // The transcript length before intake: a message the extractor
+        // classifies as «not about the listing» is rolled back out of it.
+        $intakeMark = count($state['transcript']);
+
         // An unreadable message (sticker, empty caption, silent audio) never
         // consumes a clarification attempt — the bot just asks to rephrase.
         if (! $this->intake($session, $state, $message)) {
@@ -134,7 +139,19 @@ class SupplierListingCollector
             return AiOutcome::InProgress;
         }
 
-        $state['fields'] = $this->extract($session, $state);
+        $fields = $this->extract($session, $state);
+        $intent = UserIntent::fromExtraction($fields['user_intent'] ?? null);
+
+        // A refusal is not listing data: the message leaves the transcript
+        // and the fields stay as they were, so «я передумал» never ends up
+        // in the saved description.
+        if ($intent === UserIntent::Abandoned) {
+            $state['transcript'] = array_slice($state['transcript'], 0, $intakeMark);
+
+            return $this->abandon($session, $state);
+        }
+
+        $state['fields'] = $fields;
 
         return $this->advance($session, $state);
     }
@@ -215,6 +232,41 @@ class SupplierListingCollector
     }
 
     /**
+     * An explicit refusal releases the supplier through the block's own
+     * «continue» output. Whatever was collected is kept as a draft, but no
+     * CTA to the web form goes out: the person just said they do not want
+     * to continue, and a link would be nagging.
+     *
+     * @param  array<string, mixed>  $state
+     */
+    private function abandon(BotSession $session, array $state): AiOutcome
+    {
+        $attributes = $this->listingAttributes($state);
+
+        // The type is always set, so it alone does not count as content;
+        // an existing draft does — it may already hold photos or audio.
+        $hasContent = $state['draft_id'] !== null
+            || collect($attributes)->forget('type')->contains(fn (mixed $value): bool => filled($value));
+
+        if (! $hasContent) {
+            $this->persist($session, $state);
+            $this->messenger->sendText($session->contact, 'Хорошо, остановимся.');
+
+            return AiOutcome::Completed;
+        }
+
+        $draft = $this->ensureDraft($session, $state);
+        $draft->update($attributes);
+        $this->persist($session, $state);
+        $this->messenger->sendText(
+            $session->contact,
+            'Хорошо, остановимся. Черновик объявления сохранили — он в вашем кабинете.',
+        );
+
+        return AiOutcome::Completed;
+    }
+
+    /**
      * The supplier picks one of the matching dictionary locations — by the
      * list row or by typing a row's title (the scenario-wide convention).
      * Any other reply is treated as further details.
@@ -240,8 +292,6 @@ class SupplierListingCollector
 
             return $this->advance($session, $state);
         }
-
-        $state['phase'] = 'collecting';
 
         return $this->handleCollecting($session, $state, $message);
     }
@@ -408,8 +458,6 @@ class SupplierListingCollector
 
         // Anything else during confirmation is treated as more details:
         // re-collect, re-extract and confirm again.
-        $state['phase'] = 'collecting';
-
         return $this->handleCollecting($session, $state, $message);
     }
 

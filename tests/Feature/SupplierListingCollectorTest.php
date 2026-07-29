@@ -931,3 +931,77 @@ test('the scenario assistant clears the working memory once the AI releases the 
     expect($outcome)->toBe(AiOutcome::Completed)
         ->and($session->fresh()->state)->toBeNull();
 });
+
+test('an explicit refusal saves the partial draft and releases the supplier', function () {
+    ListingExtractionAgent::fake([fullExtraction(['price' => null, 'user_intent' => 'abandoned'])]);
+    $session = collectorSession([
+        'transcript' => ['Сдаю трактор в Шымкенте'],
+        'fields' => fullExtraction(['price' => null]),
+    ]);
+
+    fakeCollectorMessenger()->shouldReceive('sendText')->once()
+        ->withArgs(fn (Contact $to, string $text) => str_contains($text, 'Хорошо, остановимся')
+            && str_contains($text, 'кабинете'));
+
+    $outcome = app(SupplierListingCollector::class)
+        ->resume($session, supplierAiNode(), new InboundMessage(text: 'ой нет, я передумал'));
+
+    expect($outcome)->toBe(AiOutcome::Completed)
+        ->and(Listing::sole())
+        ->status->toBe(ListingStatus::Draft)
+        ->category->name->toBe('Трактор');
+});
+
+test('a refusal with nothing collected releases the supplier without mentioning a draft', function () {
+    ListingExtractionAgent::fake([[
+        'type' => null, 'title' => null, 'category' => null, 'brand' => null,
+        'description' => null, 'location' => null, 'location_detail' => null,
+        'price' => null, 'clarifying_question' => '', 'summary' => null,
+        'user_intent' => 'abandoned',
+    ]]);
+    $session = collectorSession();
+
+    fakeCollectorMessenger()->shouldReceive('sendText')->once()
+        ->withArgs(fn (Contact $to, string $text) => $text === 'Хорошо, остановимся.');
+
+    $outcome = app(SupplierListingCollector::class)
+        ->resume($session, supplierAiNode(), new InboundMessage(text: 'не буду ничего размещать'));
+
+    expect($outcome)->toBe(AiOutcome::Completed)
+        ->and(Listing::count())->toBe(0);
+});
+
+test('a refusal during confirmation ends the loop instead of re-confirming', function () {
+    ListingExtractionAgent::fake([fullExtraction(['user_intent' => 'abandoned'])]);
+    $draft = Listing::factory()->create();
+    $session = collectorSession([
+        'phase' => 'confirming',
+        'draft_id' => $draft->id,
+        'transcript' => ['Сдаю трактор в Шымкенте, 10000 тг/час'],
+    ]);
+
+    fakeCollectorMessenger()->shouldReceive('sendText')->once()
+        ->withArgs(fn (Contact $to, string $text) => str_contains($text, 'Хорошо, остановимся'));
+
+    $outcome = app(SupplierListingCollector::class)
+        ->resume($session, supplierAiNode(), new InboundMessage(text: 'да ну его, не надо'));
+
+    expect($outcome)->toBe(AiOutcome::Completed);
+});
+
+test('a refusal never lands in the listing description', function () {
+    ListingExtractionAgent::fake([fullExtraction(['user_intent' => 'abandoned'])]);
+    $session = collectorSession([
+        'transcript' => ['Сдаю трактор в Шымкенте, 10000 тг/час'],
+        'fields' => fullExtraction(),
+    ]);
+
+    fakeCollectorMessenger()->shouldReceive('sendText')->once();
+
+    app(SupplierListingCollector::class)
+        ->resume($session, supplierAiNode(), new InboundMessage(text: 'всё, я передумал'));
+
+    // Сообщение с отказом изъято: транскрипт остался как был до него.
+    expect($session->fresh()->state['transcript'])
+        ->toBe(['Сдаю трактор в Шымкенте, 10000 тг/час']);
+});

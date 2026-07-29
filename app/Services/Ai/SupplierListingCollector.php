@@ -204,7 +204,14 @@ class SupplierListingCollector
 
         $state['provider_failures'] = 0;
 
-        $intent = UserIntent::fromExtraction($fields['user_intent'] ?? null);
+        // Nothing the supplier said reached the model on this turn: a
+        // caption-less photo leaves the transcript untouched, so what got
+        // classified was our own synthetic prompt, not their words. There is
+        // nothing to classify — the turn is ordinary listing data, and a
+        // confident «abandoned» would end the block on a silent photo.
+        $intent = count($state['transcript']) === $intakeMark
+            ? UserIntent::Task
+            : UserIntent::fromExtraction($fields['user_intent'] ?? null);
 
         // A refusal or a question about the service is not listing data:
         // the message leaves the transcript and the fields stay as they

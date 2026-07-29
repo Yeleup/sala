@@ -318,6 +318,32 @@ test('a photo without a caption still runs the extraction with the image attache
     );
 });
 
+test('a caption-less photo is never treated as leaving the block', function () {
+    Storage::fake('public');
+    // Транскрипт пуст: модели уходит наш собственный синтетический промпт
+    // («поставщик прислал только фотографии»), и классифицировать в нём
+    // нечего — слов поставщика на этом ходе не было вовсе. Ответ модели
+    // про намерение здесь не должен завершать блок на фото без подписи.
+    ListingExtractionAgent::fake([fullExtraction(['user_intent' => 'abandoned'])]);
+
+    $session = collectorSession();
+
+    test()->mock(DereuMediaDownloader::class)
+        ->shouldReceive('download')->once()->with('media-5')
+        ->andReturn(['contents' => 'JPEG-BYTES', 'mime_type' => 'image/jpeg']);
+
+    fakeCollectorMessenger()->shouldReceive('sendButtons')->once()
+        ->withArgs(fn (Contact $to, string $text) => str_contains($text, 'Всё верно?'));
+
+    $outcome = app(SupplierListingCollector::class)->resume($session, supplierAiNode(), new InboundMessage(
+        mediaType: ListingMediaType::Photo,
+        mediaId: 'media-5',
+    ));
+
+    expect($outcome)->toBe(AiOutcome::InProgress)
+        ->and($session->fresh()->state['phase'])->toBe('confirming');
+});
+
 test('photos are attached to the extraction alongside the caption text', function () {
     Storage::fake('public');
     ListingExtractionAgent::fake([fullExtraction()]);

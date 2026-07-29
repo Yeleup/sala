@@ -1209,6 +1209,116 @@ test('a fourth service question in a row walks the ordinary collection path', fu
         ->toBe(['Сдаю трактор в Шымкенте', 'ну я и спрашиваю, сколько это стоит']);
 });
 
+test('a service question before any clarifying question repeats the operator greeting', function () {
+    // Вопрос про сервис пришёл раньше любого уточняющего: повторять нечего,
+    // кроме приветствия блока — а его задаёт оператор в редакторе схем.
+    ListingExtractionAgent::fake([fullExtraction(['user_intent' => 'service_question'])]);
+    $session = collectorSession(['transcript' => ['Сдаю трактор']]);
+
+    $messenger = fakeCollectorMessenger();
+    $messenger->shouldReceive('sendText')->once()
+        ->withArgs(fn (Contact $to, string $text) => str_contains($text, 'оператор'));
+    $messenger->shouldReceive('sendText')->once()
+        ->withArgs(fn (Contact $to, string $text) => $text === 'Что сдаёте? Напишите или наговорите.');
+
+    $outcome = app(SupplierListingCollector::class)->resume(
+        $session,
+        supplierAiNode() + ['text' => 'Что сдаёте? Напишите или наговорите.'],
+        new InboundMessage(text: 'а это платно?'),
+    );
+
+    expect($outcome)->toBe(AiOutcome::InProgress);
+});
+
+test('a service question while a place pick list is open resends the same list', function () {
+    $districtA = locationNamed('Абайский район', locationNamed('область Абай'));
+    $districtB = locationNamed('Абайский район', locationNamed('г.Шымкент'));
+
+    ListingExtractionAgent::fake([fullExtraction(['location' => 'Абайский район', 'user_intent' => 'service_question'])]);
+    $session = collectorSession([
+        'phase' => 'locating',
+        'location_lists' => 1,
+        'transcript' => ['Трактор, Абайский район, 10000 тг/час'],
+        'fields' => fullExtraction([
+            'location' => 'Абайский район',
+            'location_id' => null,
+            'location_candidates' => [$districtA->id, $districtB->id],
+        ]),
+    ]);
+
+    $messenger = fakeCollectorMessenger();
+    $messenger->shouldReceive('sendText')->once()
+        ->withArgs(fn (Contact $to, string $text) => str_contains($text, 'оператор'));
+    $messenger->shouldReceive('sendList')->once()
+        ->withArgs(fn (Contact $to, string $text, string $button, array $rows) => str_contains($text, 'уточните')
+            && count($rows) === 2);
+
+    $outcome = app(SupplierListingCollector::class)
+        ->resume($session, supplierAiNode(), new InboundMessage(text: 'а как это у вас работает?'));
+
+    expect($outcome)->toBe(AiOutcome::InProgress)
+        ->and($session->fresh()->state)
+        // Ни попытка уточнения, ни счёт повторов списка на вопрос не тратятся.
+        ->toMatchArray(['phase' => 'locating', 'attempts' => 0, 'location_lists' => 1]);
+});
+
+test('a hand-off from the confirmation phase does not claim the data is missing', function () {
+    // Данные уже собраны, и бот ждал нажатия кнопки: «не получилось собрать
+    // все данные» здесь было бы неправдой.
+    ListingExtractionAgent::fake()->preventStrayPrompts();
+    $draft = Listing::factory()->create();
+    $session = collectorSession([
+        'phase' => 'confirming',
+        'draft_id' => $draft->id,
+        'unreadable' => 2,
+        'fields' => fullExtraction(),
+    ]);
+
+    fakeCollectorMessenger()->shouldReceive('sendCtaUrl')->once()
+        ->withArgs(fn (Contact $to, string $text, string $button, string $url) => $text === 'Данные объявления собраны. Откройте форму, чтобы проверить и отправить объявление.'
+            && mb_strlen($button) <= 20
+            && str_contains($url, "/supplier/listings/{$draft->id}/edit"));
+
+    $outcome = app(SupplierListingCollector::class)
+        ->resume($session, supplierAiNode(), new InboundMessage);
+
+    expect($outcome)->toBe(AiOutcome::Completed);
+    ListingExtractionAgent::assertNeverPrompted();
+});
+
+test('an unreadable message during confirmation keeps the phase and the submit button working', function () {
+    // Стикер на сводке не переводит сессию в сбор: иначе следующее нажатие
+    // «Да, отправить» проглатывалось бы, и объявление нельзя было бы отправить.
+    ListingExtractionAgent::fake()->preventStrayPrompts();
+    $draft = Listing::factory()->create();
+    $session = collectorSession([
+        'phase' => 'confirming',
+        'draft_id' => $draft->id,
+        'fields' => fullExtraction(),
+    ]);
+
+    $messenger = fakeCollectorMessenger();
+    $messenger->shouldReceive('sendText')->once()
+        ->withArgs(fn (Contact $to, string $text) => str_contains($text, 'Не удалось разобрать'));
+    $messenger->shouldReceive('sendText')->once()
+        ->withArgs(fn (Contact $to, string $text) => str_contains($text, 'отправлено на проверку'));
+
+    $collector = app(SupplierListingCollector::class);
+    $collector->resume($session, supplierAiNode(), new InboundMessage);
+
+    expect($session->fresh()->state['phase'])->toBe('confirming');
+
+    $outcome = $collector->resume(
+        $session->fresh(),
+        supplierAiNode(),
+        new InboundMessage(text: 'Да, отправить', replyId: SupplierListingCollector::BUTTON_SUBMIT),
+    );
+
+    expect($outcome)->toBe(AiOutcome::Completed)
+        ->and($draft->fresh()->status)->toBe(ListingStatus::PendingModeration);
+    ListingExtractionAgent::assertNeverPrompted();
+});
+
 test('a message about the listing resets the service question streak', function () {
     ListingExtractionAgent::fake([fullExtraction()]);
     $session = collectorSession(['service_questions' => 2]);

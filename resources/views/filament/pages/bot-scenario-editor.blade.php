@@ -400,7 +400,7 @@
 
                         <div class="bse-fallbacks">
                             <p class="bse-outline-title">Встроенные ответы бота</p>
-                            <p class="bse-note">Эти тексты бот отправляет сам, вне блоков сценария.
+                            <p class="bse-note">Эти тексты бот отправляет сам, а не по тексту блока сценария.
                                 <a class="bse-fallbacks-link" x-bind:href="config.fallbacksUrl">Изменить тексты</a></p>
                             <template x-for="f in config.fallbacks" :key="f.value">
                                 <div class="bse-fallback">

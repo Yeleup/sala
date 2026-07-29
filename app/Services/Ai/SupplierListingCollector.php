@@ -152,20 +152,21 @@ class SupplierListingCollector
         $state = $this->normalizeState($session, $node);
 
         if ($state['phase'] === 'confirming') {
-            return $this->handleConfirmation($session, $state, $message);
+            return $this->handleConfirmation($session, $state, $message, $node);
         }
 
         if ($state['phase'] === 'locating') {
-            return $this->handleLocating($session, $state, $message);
+            return $this->handleLocating($session, $state, $message, $node);
         }
 
-        return $this->handleCollecting($session, $state, $message);
+        return $this->handleCollecting($session, $state, $message, $node);
     }
 
     /**
      * @param  array<string, mixed>  $state
+     * @param  array<string, mixed>  $node
      */
-    private function handleCollecting(BotSession $session, array $state, InboundMessage $message): AiOutcome
+    private function handleCollecting(BotSession $session, array $state, InboundMessage $message, array $node): AiOutcome
     {
         // The transcript length before intake: a message the extractor
         // classifies as «not about the listing» is rolled back out of it.
@@ -243,7 +244,7 @@ class SupplierListingCollector
             $state['transcript'] = array_slice($state['transcript'], 0, $intakeMark);
             $state['service_questions']++;
 
-            return $this->answerServiceQuestion($session, $state);
+            return $this->answerServiceQuestion($session, $state, $node);
         }
 
         // Any message that is not a question about the service ends the
@@ -343,10 +344,18 @@ class SupplierListingCollector
         $draft = $this->ensureDraft($session, $state);
         $draft->update($this->listingAttributes($state));
         $this->persist($session, $state);
+
+        // Reached from the confirmation phase the data IS collected: the bot
+        // was waiting for a button press, not for a missing field, so the
+        // «не получилось собрать» wording would be untrue.
+        $collected = $state['phase'] === 'confirming';
+
         $this->messenger->sendCtaUrl(
             $session->contact,
-            'Не получилось собрать все данные из переписки. Откройте форму и заполните объявление вручную.',
-            'Заполнить вручную',
+            $collected
+                ? 'Данные объявления собраны. Откройте форму, чтобы проверить и отправить объявление.'
+                : 'Не получилось собрать все данные из переписки. Откройте форму и заполните объявление вручную.',
+            $collected ? 'Открыть объявление' : 'Заполнить вручную',
             $this->cta->editUrl($draft),
         );
 
@@ -396,22 +405,26 @@ class SupplierListingCollector
      * Bounded by MAX_SERVICE_QUESTIONS in a row.
      *
      * @param  array<string, mixed>  $state
+     * @param  array<string, mixed>  $node
      */
-    private function answerServiceQuestion(BotSession $session, array $state): AiOutcome
+    private function answerServiceQuestion(BotSession $session, array $state, array $node): AiOutcome
     {
         $this->persist($session, $state);
         $this->messenger->sendText($session->contact, $this->replyTexts->get(BotReplyKey::ServiceQuestion));
-        $this->repeatCurrentStep($session, $state);
+        $this->repeatCurrentStep($session, $state, $node);
 
         return AiOutcome::InProgress;
     }
 
     /**
-     * Re-send whatever the collector is waiting for at this phase.
+     * Re-send whatever the collector is waiting for at this phase. Before
+     * the first clarifying question that is the block's greeting — the one
+     * the operator writes in the scenario editor, not the built-in text.
      *
      * @param  array<string, mixed>  $state
+     * @param  array<string, mixed>  $node
      */
-    private function repeatCurrentStep(BotSession $session, array $state): void
+    private function repeatCurrentStep(BotSession $session, array $state, array $node): void
     {
         if ($state['phase'] === 'confirming') {
             $this->sendConfirmation($session, $state['fields']);
@@ -429,13 +442,10 @@ class SupplierListingCollector
         }
 
         $question = trim((string) ($state['last_question'] ?? ''));
+        $greeting = trim((string) ($node['text'] ?? ''))
+            ?: 'Расскажите, что вы предлагаете: что это, в каком городе и по какой цене.';
 
-        $this->messenger->sendText(
-            $session->contact,
-            $question !== ''
-                ? $question
-                : 'Расскажите, что вы предлагаете: что это, в каком городе и по какой цене.',
-        );
+        $this->messenger->sendText($session->contact, $question !== '' ? $question : $greeting);
     }
 
     /**
@@ -444,8 +454,9 @@ class SupplierListingCollector
      * Any other reply is treated as further details.
      *
      * @param  array<string, mixed>  $state
+     * @param  array<string, mixed>  $node
      */
-    private function handleLocating(BotSession $session, array $state, InboundMessage $message): AiOutcome
+    private function handleLocating(BotSession $session, array $state, InboundMessage $message, array $node): AiOutcome
     {
         $candidates = array_map(intval(...), (array) ($state['fields']['location_candidates'] ?? []));
         $picked = $this->matchLocationChoice($candidates, $message);
@@ -466,7 +477,7 @@ class SupplierListingCollector
             return $this->advance($session, $state);
         }
 
-        return $this->handleCollecting($session, $state, $message);
+        return $this->handleCollecting($session, $state, $message, $node);
     }
 
     /**
@@ -604,8 +615,9 @@ class SupplierListingCollector
 
     /**
      * @param  array<string, mixed>  $state
+     * @param  array<string, mixed>  $node
      */
-    private function handleConfirmation(BotSession $session, array $state, InboundMessage $message): AiOutcome
+    private function handleConfirmation(BotSession $session, array $state, InboundMessage $message, array $node): AiOutcome
     {
         $draft = $state['draft_id'] !== null ? Listing::find($state['draft_id']) : null;
 
@@ -631,7 +643,7 @@ class SupplierListingCollector
 
         // Anything else during confirmation is treated as more details:
         // re-collect, re-extract and confirm again.
-        return $this->handleCollecting($session, $state, $message);
+        return $this->handleCollecting($session, $state, $message, $node);
     }
 
     /**

@@ -133,7 +133,7 @@ class CustomerSearchAssistant
         }
 
         if ($state['phase'] === 'locating') {
-            return $this->handleLocating($session, $state, $message);
+            return $this->handleLocating($session, $state, $message, $node);
         }
 
         if ($state['phase'] === 'choosing') {
@@ -145,10 +145,10 @@ class CustomerSearchAssistant
         }
 
         if ($state['phase'] === 'expanding' && $this->matchesExpandButton($message)) {
-            return $this->expandSearch($session, $state);
+            return $this->expandSearch($session, $state, $node);
         }
 
-        return $this->search($session, $state, $message);
+        return $this->search($session, $state, $message, $node);
     }
 
     /**
@@ -158,8 +158,9 @@ class CustomerSearchAssistant
      * requirements are settled.
      *
      * @param  array<string, mixed>  $state
+     * @param  array<string, mixed>  $node
      */
-    protected function search(BotSession $session, array $state, InboundMessage $message): AiOutcome
+    protected function search(BotSession $session, array $state, InboundMessage $message, array $node): AiOutcome
     {
         $input = trim((string) $message->text);
 
@@ -229,7 +230,7 @@ class CustomerSearchAssistant
             $state['service_questions']++;
             $this->persist($session, $state);
             $this->messenger->sendText($session->contact, $this->replyTexts->get(BotReplyKey::ServiceQuestion));
-            $this->repeatCurrentStep($session, $state);
+            $this->repeatCurrentStep($session, $state, $node);
 
             return AiOutcome::InProgress;
         }
@@ -463,11 +464,14 @@ class CustomerSearchAssistant
     /**
      * Re-send whatever the assistant is waiting for. The results list is
      * not resent — it is still visible in the chat, so a nudge is enough
-     * and cheaper than a second interactive message.
+     * and cheaper than a second interactive message. Before the first
+     * clarifying question that is the block's greeting — the one the
+     * operator writes in the scenario editor, not the built-in text.
      *
      * @param  array<string, mixed>  $state
+     * @param  array<string, mixed>  $node
      */
-    protected function repeatCurrentStep(BotSession $session, array $state): void
+    protected function repeatCurrentStep(BotSession $session, array $state, array $node): void
     {
         $candidates = array_map(intval(...), (array) ($state['location_candidates'] ?? []));
 
@@ -490,13 +494,10 @@ class CustomerSearchAssistant
         }
 
         $question = trim((string) ($state['last_question'] ?? ''));
+        $greeting = trim((string) ($node['text'] ?? ''))
+            ?: sprintf('Что вам нужно и в каком городе, %s?', self::QUERY_EXAMPLE);
 
-        $this->messenger->sendText(
-            $session->contact,
-            $question !== ''
-                ? $question
-                : sprintf('Что вам нужно и в каком городе, %s?', self::QUERY_EXAMPLE),
-        );
+        $this->messenger->sendText($session->contact, $question !== '' ? $question : $greeting);
     }
 
     /**
@@ -507,8 +508,9 @@ class CustomerSearchAssistant
      * through the normal intake, which re-offers the list.
      *
      * @param  array<string, mixed>  $state
+     * @param  array<string, mixed>  $node
      */
-    protected function handleLocating(BotSession $session, array $state, InboundMessage $message): AiOutcome
+    protected function handleLocating(BotSession $session, array $state, InboundMessage $message, array $node): AiOutcome
     {
         $candidates = array_map(intval(...), (array) $state['location_candidates']);
         $picked = $this->matchLocationChoice($candidates, $message);
@@ -524,7 +526,7 @@ class CustomerSearchAssistant
         // refinement. The open list stays valid until a search supersedes
         // or re-offers it — an unreadable message (a sticker, a stray row
         // id) must not kill the awaited tap.
-        return $this->search($session, $state, $message);
+        return $this->search($session, $state, $message, $node);
     }
 
     /**
@@ -564,14 +566,15 @@ class CustomerSearchAssistant
      * phase — an empty subtree hands off to the catalog instead.
      *
      * @param  array<string, mixed>  $state
+     * @param  array<string, mixed>  $node
      */
-    protected function expandSearch(BotSession $session, array $state): AiOutcome
+    protected function expandSearch(BotSession $session, array $state, array $node): AiOutcome
     {
         $location = Location::find($state['expand_location_id']);
         $query = (string) $state['query'];
 
         if ($query === '') {
-            return $this->search($session, $state, new InboundMessage(text: null));
+            return $this->search($session, $state, new InboundMessage(text: null), $node);
         }
 
         // The saved expansion point vanished: the query is already

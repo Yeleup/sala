@@ -25,8 +25,8 @@ class ListingsTable
     {
         return $table
             // Every column can be switched off, and the four the operator
-            // needs least often start off: thirteen columns do not fit a
-            // laptop screen, and which ones matter depends on what he is doing
+            // needs least often start off: they do not all fit a laptop
+            // screen, and which ones matter depends on what he is doing
             // — sorting out the moderation queue, or calling round the
             // suppliers whose listings expire tomorrow. Nothing is removed,
             // and a column switched off still takes part in the search. The
@@ -125,8 +125,8 @@ class ListingsTable
                         ->whereBetween('expires_at', [now(), now()->addDay()])),
             ])
             // One menu at the start of the row instead of labelled links at
-            // its end. Inline they took some 500px and, since thirteen columns
-            // do not fit a laptop screen anyway, they sat behind the
+            // its end. Inline they took some 500px and, since the columns do
+            // not fit a laptop screen anyway, they sat behind the
             // horizontal scroll — the operator had to drag the scrollbar to
             // reach the very controls the row exists for. Nothing is dropped,
             // and clicking the row still opens the form. The three sections

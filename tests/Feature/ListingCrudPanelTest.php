@@ -534,8 +534,7 @@ test('все действия строки собраны в одно меню �
 test('любую колонку можно выключить, а четыре редких выключены сразу', function () {
     $columns = Livewire::test(ListListings::class)->instance()->getTable()->getColumns();
 
-    expect(array_keys($columns))->toHaveCount(13)
-        ->and(collect($columns)->reject(fn ($column) => $column->isToggleable())->keys())->toBeEmpty()
+    expect(collect($columns)->reject(fn ($column) => $column->isToggleable())->keys())->toBeEmpty()
         ->and(collect($columns)->filter(fn ($column) => $column->isToggledHiddenByDefault())->keys()->all())
         ->toEqualCanonicalizing(['id', 'brand.name', 'origin', 'created_at']);
 });

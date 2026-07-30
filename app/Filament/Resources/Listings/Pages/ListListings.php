@@ -16,9 +16,9 @@ class ListListings extends ListRecords
     protected static string $resource = ListingResource::class;
 
     /**
-     * The listing table is the widest screen in the panel — thirteen columns
-     * against the default 7xl cap — so this page alone drops the cap and
-     * takes the whole window. Every other page keeps the panel default.
+     * The listing table is the widest screen in the panel, so this page alone
+     * drops the default 7xl cap and takes the whole window. Every other page
+     * keeps the panel default.
      */
     protected Width|string|null $maxContentWidth = Width::Full;
 

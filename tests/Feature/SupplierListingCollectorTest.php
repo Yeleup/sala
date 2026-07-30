@@ -368,6 +368,70 @@ test('photos are attached to the extraction alongside the caption text', functio
     );
 });
 
+test('the confirmation asks for photos when the draft has none', function () {
+    ListingExtractionAgent::fake([fullExtraction()]);
+    $session = collectorSession();
+
+    // Просьба не заменяет подтверждение и не мешает его нажать: объявление
+    // без фотографий уходит на модерацию так же, как и с ними.
+    fakeCollectorMessenger()->shouldReceive('sendButtons')->once()
+        ->withArgs(fn (Contact $to, string $text, array $buttons) => str_contains($text, 'Фотографий пока нет')
+            && str_contains($text, 'Всё верно?')
+            && array_column($buttons, 'title') === ['Да, отправить', 'Исправить']);
+
+    $outcome = app(SupplierListingCollector::class)
+        ->resume($session, supplierAiNode(), new InboundMessage(text: 'Сдаю трактор в Шымкенте, 10000 тг/час'));
+
+    expect($outcome)->toBe(AiOutcome::InProgress)
+        ->and($session->fresh()->state['phase'])->toBe('confirming');
+});
+
+test('the confirmation does not ask for photos when the draft already has one', function () {
+    ListingExtractionAgent::fake([fullExtraction()]);
+
+    $draft = Listing::factory()->create();
+    ListingMedia::factory()->create(['listing_id' => $draft->id]);
+    $session = collectorSession(['draft_id' => $draft->id]);
+
+    fakeCollectorMessenger()->shouldReceive('sendButtons')->once()
+        ->withArgs(fn (Contact $to, string $text) => str_contains($text, 'Всё верно?')
+            && ! str_contains($text, 'Фотографий пока нет'));
+
+    $outcome = app(SupplierListingCollector::class)
+        ->resume($session, supplierAiNode(), new InboundMessage(text: 'Сдаю трактор в Шымкенте, 10000 тг/час'));
+
+    expect($outcome)->toBe(AiOutcome::InProgress);
+});
+
+test('a photo sent at confirmation drops the request from the repeated summary', function () {
+    Storage::fake('public');
+    ListingExtractionAgent::fake([fullExtraction()]);
+
+    $draft = Listing::factory()->create();
+    $session = collectorSession([
+        'phase' => 'confirming',
+        'draft_id' => $draft->id,
+        'transcript' => ['Сдаю трактор в Шымкенте, 10000 тг/час'],
+        'fields' => fullExtraction(),
+    ]);
+
+    test()->mock(DereuMediaDownloader::class)
+        ->shouldReceive('download')->once()->with('media-6')
+        ->andReturn(['contents' => 'JPEG-BYTES', 'mime_type' => 'image/jpeg']);
+
+    fakeCollectorMessenger()->shouldReceive('sendButtons')->once()
+        ->withArgs(fn (Contact $to, string $text) => str_contains($text, 'Всё верно?')
+            && ! str_contains($text, 'Фотографий пока нет'));
+
+    $outcome = app(SupplierListingCollector::class)->resume($session, supplierAiNode(), new InboundMessage(
+        mediaType: ListingMediaType::Photo,
+        mediaId: 'media-6',
+    ));
+
+    expect($outcome)->toBe(AiOutcome::InProgress)
+        ->and($draft->photos()->count())->toBe(1);
+});
+
 test('an unreadable follow-up does not spend a clarification attempt', function () {
     ListingExtractionAgent::fake()->preventStrayPrompts();
     $session = collectorSession(['attempts' => 1, 'transcript' => ['Сдаю трактор в Шымкенте']]);

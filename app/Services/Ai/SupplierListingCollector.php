@@ -275,7 +275,7 @@ class SupplierListingCollector
             $draft->update($this->listingAttributes($state));
             $state['phase'] = 'confirming';
             $this->persist($session, $state);
-            $this->sendConfirmation($session, $state['fields']);
+            $this->sendConfirmation($session, $state);
 
             return AiOutcome::InProgress;
         }
@@ -427,7 +427,7 @@ class SupplierListingCollector
     private function repeatCurrentStep(BotSession $session, array $state, array $node): void
     {
         if ($state['phase'] === 'confirming') {
-            $this->sendConfirmation($session, $state['fields']);
+            $this->sendConfirmation($session, $state);
 
             return;
         }
@@ -908,6 +908,22 @@ class SupplierListingCollector
     }
 
     /**
+     * Whether the draft already carries a photo. No draft yet means no
+     * photos — the confirmation then asks for them, which is the answer the
+     * caller wants and not merely a guard against a missing id.
+     *
+     * @param  array<string, mixed>  $state
+     */
+    private function hasPhotos(array $state): bool
+    {
+        if ($state['draft_id'] === null) {
+            return false;
+        }
+
+        return Listing::find($state['draft_id'])?->photos()->exists() === true;
+    }
+
+    /**
      * The type joins the required fields when the branch leaves it to the
      * AI («Определять автоматически») — a listing must never silently
      * default to «техника».
@@ -993,10 +1009,22 @@ class SupplierListingCollector
     }
 
     /**
-     * @param  array<string, mixed>  $fields
+     * The confirmation is also the one moment the bot knows the collection
+     * succeeded and no photo ever arrived, so a listing heading for
+     * moderation as an empty card in the catalog is asked for pictures here
+     * — not earlier, where a separate «пришлите фото» step would cost a
+     * round trip on every dialog, photos or not. The ask never blocks:
+     * photos are not a required field, «Да, отправить» stays right under it,
+     * and a photo sent instead of pressing it is ordinary further detail
+     * (handleConfirmation) that attaches to the draft and re-confirms. The
+     * line is a property of the summary rather than a one-off event — it
+     * stands while the draft has no photos and disappears once it has one.
+     *
+     * @param  array<string, mixed>  $state
      */
-    private function sendConfirmation(BotSession $session, array $fields): void
+    private function sendConfirmation(BotSession $session, array $state): void
     {
+        $fields = $state['fields'];
         $summary = filled($fields['summary'] ?? null) ? $fields['summary'] : $this->buildSummary($fields);
 
         // The summary repeats the supplier's own wording of the place, and
@@ -1017,7 +1045,18 @@ class SupplierListingCollector
             $place !== null ? 'Место: '.$place->label() : null,
         ]));
 
-        $this->messenger->sendButtons($session->contact, $text."\nВсё верно? Нажмите «".self::BUTTON_SUBMIT_TITLE.'», чтобы отправить объявление на проверку.', [
+        $body = implode("\n", array_filter([
+            $text,
+            'Всё верно? Нажмите «'.self::BUTTON_SUBMIT_TITLE.'», чтобы отправить объявление на проверку.',
+            // Last, after the call to action: put ahead of «Всё верно?» the
+            // ask would leave that question hanging on a request instead of
+            // on the collected data.
+            $this->hasPhotos($state)
+                ? null
+                : 'Фотографий пока нет — пришлите снимки, с фото объявление смотрят охотнее.',
+        ]));
+
+        $this->messenger->sendButtons($session->contact, $body, [
             ['id' => self::BUTTON_SUBMIT, 'title' => self::BUTTON_SUBMIT_TITLE],
             ['id' => self::BUTTON_EDIT, 'title' => self::BUTTON_EDIT_TITLE],
         ]);

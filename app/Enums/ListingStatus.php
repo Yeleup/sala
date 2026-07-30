@@ -2,10 +2,13 @@
 
 namespace App\Enums;
 
+use BackedEnum;
 use Filament\Support\Contracts\HasColor;
+use Filament\Support\Contracts\HasIcon;
 use Filament\Support\Contracts\HasLabel;
+use Filament\Support\Icons\Heroicon;
 
-enum ListingStatus: string implements HasColor, HasLabel
+enum ListingStatus: string implements HasColor, HasIcon, HasLabel
 {
     case Draft = 'draft';
     case PendingModeration = 'pending_moderation';
@@ -31,6 +34,21 @@ enum ListingStatus: string implements HasColor, HasLabel
             self::PendingModeration => 'warning',
             self::Published => 'success',
             self::Rejected => 'danger',
+        };
+    }
+
+    /**
+     * States, not the actions that lead to them: a draft is still being
+     * written, a listing on moderation is waiting for someone.
+     */
+    public function getIcon(): string|BackedEnum|null
+    {
+        return match ($this) {
+            self::Draft => Heroicon::OutlinedPencil,
+            self::PendingModeration => Heroicon::OutlinedClock,
+            self::Published => Heroicon::OutlinedCheckCircle,
+            self::Rejected => Heroicon::OutlinedXCircle,
+            self::Archived => Heroicon::OutlinedArchiveBox,
         };
     }
 }

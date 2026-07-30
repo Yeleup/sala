@@ -18,8 +18,12 @@ use App\Models\ListingMedia;
 use App\Models\Location;
 use App\Models\User;
 use App\Services\DereuMessenger;
+use Filament\Actions\ActionGroup;
 use Filament\Actions\Testing\TestAction;
 use Filament\Schemas\Components\Component;
+use Filament\Support\Icons\Heroicon;
+use Filament\Tables\Columns\IconColumn;
+use Filament\Tables\Enums\RecordActionsPosition;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Storage;
@@ -501,6 +505,87 @@ test('у объявления нет страницы просмотра — о�
 
     Livewire::test(ListListings::class)
         ->assertActionDoesNotExist(TestAction::make('view')->table($listing));
+});
+
+test('все действия строки собраны в одно меню и ни одно не потеряно', function () {
+    $table = Livewire::test(ListListings::class)->instance()->getTable();
+
+    $recordActions = $table->getRecordActions();
+
+    // The menu opens the row: as the last column it stayed behind the
+    // horizontal scroll, which is exactly what the operator complained about.
+    expect($table->getRecordActionsPosition())->toBe(RecordActionsPosition::BeforeCells)
+        ->and($recordActions)->toHaveCount(1)
+        ->and($recordActions[0])->toBeInstanceOf(ActionGroup::class)
+        ->and(array_keys($recordActions[0]->getFlatActions()))
+        ->toEqualCanonicalizing([
+            'edit',
+            'preview',
+            'publish',
+            'submitForModeration',
+            'approve',
+            'reject',
+            'renew',
+            'archive',
+            'delete',
+        ]);
+});
+
+test('любую колонку можно выключить, а четыре редких выключены сразу', function () {
+    $columns = Livewire::test(ListListings::class)->instance()->getTable()->getColumns();
+
+    expect(array_keys($columns))->toHaveCount(13)
+        ->and(collect($columns)->reject(fn ($column) => $column->isToggleable())->keys())->toBeEmpty()
+        ->and(collect($columns)->filter(fn ($column) => $column->isToggledHiddenByDefault())->keys()->all())
+        ->toEqualCanonicalizing(['id', 'brand.name', 'origin', 'created_at']);
+});
+
+test('статус показан иконкой, а подсказка называет его и срок актуальности', function () {
+    $published = Listing::factory()->published()->create(['expires_at' => now()->addDays(30)]);
+    $draft = Listing::factory()->create(['status' => ListingStatus::Draft, 'expires_at' => null]);
+
+    $column = Livewire::test(ListListings::class)->instance()->getTable()->getColumn('status');
+
+    expect($column)->toBeInstanceOf(IconColumn::class)
+        ->and($column->record($published)->getIcon(ListingStatus::Published))
+        ->toBe(Heroicon::OutlinedCheckCircle)
+        ->and($column->record($published)->getTooltip())
+        ->toBe('Опубликовано, актуально до '.$published->expires_at->format('d.m.Y H:i'))
+        // A draft never expires, so there is nothing to add to its name.
+        ->and($column->record($draft)->getTooltip())->toBe('Черновик');
+
+    // Five states the operator now tells apart by shape, so no two may share
+    // an icon.
+    $icons = collect(ListingStatus::cases())
+        ->mapWithKeys(fn (ListingStatus $status): array => [$status->value => $column->getIcon($status)]);
+
+    expect($icons->filter())->toHaveCount(5)
+        ->and($icons->unique())->toHaveCount(5);
+});
+
+test('выключенная колонка остаётся в поиске', function () {
+    $matching = Listing::factory()->create([
+        'brand_id' => Brand::factory()->create(['name' => 'Komatsu'])->id,
+    ]);
+    Listing::factory()->create(['brand_id' => Brand::factory()->create(['name' => 'Hitachi'])->id]);
+
+    // «Марка» is switched off by default, and the operator still has to be
+    // able to find a listing by it.
+    Livewire::test(ListListings::class)
+        ->searchTable('Komatsu')
+        ->assertCanSeeTableRecords([$matching])
+        ->assertCountTableRecords(1);
+});
+
+test('клик по строке по-прежнему открывает объявление на редактирование', function () {
+    $listing = Listing::factory()->create();
+
+    $recordUrl = Livewire::test(ListListings::class)
+        ->instance()
+        ->getTable()
+        ->getRecordUrl($listing);
+
+    expect($recordUrl)->toBe(ListingResource::getUrl('edit', ['record' => $listing]));
 });
 
 test('оператор редактирует бизнес-поля объявления', function () {

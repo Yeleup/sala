@@ -8,11 +8,19 @@ use App\Models\Listing;
 use Filament\Actions\CreateAction;
 use Filament\Resources\Pages\ListRecords;
 use Filament\Schemas\Components\Tabs\Tab;
+use Filament\Support\Enums\Width;
 use Illuminate\Database\Eloquent\Builder;
 
 class ListListings extends ListRecords
 {
     protected static string $resource = ListingResource::class;
+
+    /**
+     * The listing table is the widest screen in the panel — thirteen columns
+     * against the default 7xl cap — so this page alone drops the cap and
+     * takes the whole window. Every other page keeps the panel default.
+     */
+    protected Width|string|null $maxContentWidth = Width::Full;
 
     protected function getHeaderActions(): array
     {

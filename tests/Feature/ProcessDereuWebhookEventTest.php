@@ -5,6 +5,7 @@ use App\Models\Contact;
 use App\Models\DereuWebhookEvent;
 use App\Services\Bot\BotEngine;
 use App\Services\Bot\InboundMessage;
+use App\Services\DereuMessenger;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 
 uses(RefreshDatabase::class);
@@ -26,6 +27,21 @@ function runDereuWebhookJob(DereuWebhookEvent $event): void
 {
     app()->call([new ProcessDereuWebhookEvent($event), 'handle']);
 }
+
+test('waiting for the per-contact lock is bounded by time, not by the attempt count', function () {
+    $job = new ProcessDereuWebhookEvent(inboundMessageEvent());
+
+    // Сообщения одного контакта сериализованы: пока обрабатывается первое
+    // (скачивание медиа + vision-вызов — десятки секунд), джобы остальных
+    // раз за разом получают release от WithoutOverlapping. Каждый release —
+    // это попытка, поэтому жёсткий $tries хоронит хвост пачки (альбом фото)
+    // за ~30 секунд ожидания. Ожидание должно ограничиваться временем
+    // (retryUntil), а настоящие падения — своим бюджетом maxExceptions.
+    expect(property_exists($job, 'tries'))->toBeFalse()
+        ->and($job->maxExceptions)->toBe(3)
+        ->and($job->retryUntil()->getTimestamp())
+        ->toBeGreaterThanOrEqual(now()->addMinutes(5)->getTimestamp());
+});
 
 test('an inbound message creates the contact, feeds the engine and is marked processed', function () {
     test()->mock(BotEngine::class)
@@ -141,6 +157,44 @@ test('an event of our own company is processed', function () {
     runDereuWebhookJob(inboundMessageEvent(overrides: ['company_id' => 'co_ours']));
 
     expect(Contact::count())->toBe(1);
+});
+
+test('a job that died apologizes to the contact and marks the event processed', function () {
+    $contact = Contact::factory()->create(['phone' => '77011234567', 'last_inbound_at' => now()]);
+    $event = inboundMessageEvent();
+
+    test()->mock(DereuMessenger::class)
+        ->shouldReceive('sendText')->once()
+        ->withArgs(fn (Contact $to, string $text) => $to->is($contact)
+            && str_contains($text, 'Не получилось обработать'));
+
+    (new ProcessDereuWebhookEvent($event))->failed(new RuntimeException('boom'));
+
+    // Помеченное событие свипер не переигрывает: джоба уже исчерпала свои
+    // попытки, и повтор часами позже запутал бы диалог сильнее молчания.
+    expect($event->fresh()->processed_at)->not->toBeNull();
+});
+
+test('a failing apology still marks the event processed', function () {
+    Contact::factory()->create(['phone' => '77011234567', 'last_inbound_at' => now()]);
+    $event = inboundMessageEvent();
+
+    test()->mock(DereuMessenger::class)
+        ->shouldReceive('sendText')->once()->andThrow(new RuntimeException('окно закрыто'));
+
+    (new ProcessDereuWebhookEvent($event))->failed(new RuntimeException('boom'));
+
+    expect($event->fresh()->processed_at)->not->toBeNull();
+});
+
+test('a dead job for an unknown contact just marks the event processed', function () {
+    $event = inboundMessageEvent();
+
+    test()->mock(DereuMessenger::class)->shouldNotReceive('sendText');
+
+    (new ProcessDereuWebhookEvent($event))->failed(new RuntimeException('boom'));
+
+    expect($event->fresh()->processed_at)->not->toBeNull();
 });
 
 test('non-message events are ignored', function () {

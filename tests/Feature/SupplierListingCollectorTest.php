@@ -294,6 +294,51 @@ test('an undownloadable voice message asks to rephrase without spending an attem
     ListingExtractionAgent::assertNeverPrompted();
 });
 
+test('an undownloadable photo asks to rephrase without spending an attempt', function () {
+    ListingExtractionAgent::fake()->preventStrayPrompts();
+    $session = collectorSession();
+
+    test()->mock(DereuMediaDownloader::class)
+        ->shouldReceive('download')->once()->with('media-403')
+        ->andThrow(new RuntimeException('403 Медиа принадлежит другой компании'));
+
+    fakeCollectorMessenger()->shouldReceive('sendText')->once()
+        ->withArgs(fn (Contact $to, string $text) => str_contains($text, 'Не удалось разобрать'));
+
+    $outcome = app(SupplierListingCollector::class)
+        ->resume($session, supplierAiNode(), new InboundMessage(mediaType: ListingMediaType::Photo, mediaId: 'media-403'));
+
+    expect($outcome)->toBe(AiOutcome::InProgress)
+        ->and($session->fresh()->state['attempts'])->toBe(0)
+        ->and(Listing::count())->toBe(0);
+    ListingExtractionAgent::assertNeverPrompted();
+});
+
+test('a failed photo download still feeds the caption to the extraction', function () {
+    ListingExtractionAgent::fake([fullExtraction()]);
+    $session = collectorSession();
+
+    test()->mock(DereuMediaDownloader::class)
+        ->shouldReceive('download')->once()->with('media-403')
+        ->andThrow(new RuntimeException('403 Медиа принадлежит другой компании'));
+
+    fakeCollectorMessenger()->shouldReceive('sendButtons')->once()
+        ->withArgs(fn (Contact $to, string $text) => str_contains($text, 'Всё верно?'));
+
+    $outcome = app(SupplierListingCollector::class)->resume($session, supplierAiNode(), new InboundMessage(
+        text: 'Сдаю трактор в Шымкенте, 10000 тг/час',
+        mediaType: ListingMediaType::Photo,
+        mediaId: 'media-403',
+    ));
+
+    expect($outcome)->toBe(AiOutcome::InProgress)
+        ->and($session->fresh()->state['unreadable'])->toBe(0)
+        ->and(ListingMedia::count())->toBe(0);
+    ListingExtractionAgent::assertPrompted(
+        fn ($prompt): bool => $prompt->attachments->count() === 0 && $prompt->contains('Сдаю трактор'),
+    );
+});
+
 test('a photo without a caption still runs the extraction with the image attached', function () {
     Storage::fake('public');
     ListingExtractionAgent::fake([fullExtraction()]);

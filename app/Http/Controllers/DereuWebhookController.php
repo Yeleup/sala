@@ -2,10 +2,6 @@
 
 namespace App\Http\Controllers;
 
-use App\Jobs\ApplyDereuDeliveryStatus;
-use App\Jobs\ApplyDereuTemplateStatus;
-use App\Jobs\ApplyDereuWabaDisconnect;
-use App\Jobs\ProcessDereuWebhookEvent;
 use App\Models\DereuWebhookEvent;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
@@ -48,21 +44,11 @@ class DereuWebhookController extends Controller
             ],
         );
 
-        if ($storedEvent->wasRecentlyCreated && $event === 'message_received') {
-            ProcessDereuWebhookEvent::dispatch($storedEvent);
-        }
-
-        if ($storedEvent->wasRecentlyCreated && $event === 'template_status_update') {
-            ApplyDereuTemplateStatus::dispatch($storedEvent);
-        }
-
-        if ($storedEvent->wasRecentlyCreated
-            && in_array($event, ['message_sent', 'message_delivered', 'message_read', 'message_failed'], true)) {
-            ApplyDereuDeliveryStatus::dispatch($storedEvent);
-        }
-
-        if ($storedEvent->wasRecentlyCreated && $event === 'waba_disconnected') {
-            ApplyDereuWabaDisconnect::dispatch($storedEvent);
+        // The event→job mapping lives on the model, shared with the
+        // redispatch sweeper: an event queued here is exactly an event the
+        // sweeper can re-queue if this dispatch is lost to a queue hiccup.
+        if ($storedEvent->wasRecentlyCreated && ($job = $storedEvent->jobClass()) !== null) {
+            $job::dispatch($storedEvent);
         }
 
         return response()->noContent();

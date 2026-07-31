@@ -1,6 +1,7 @@
 <?php
 
 use App\Console\Commands\ProcessScenarioRunTimeouts;
+use App\Console\Commands\RedispatchUnprocessedDereuEvents;
 use App\Console\Commands\RunListingRenewalCycle;
 use Illuminate\Foundation\Inspiring;
 use Illuminate\Support\Facades\Artisan;
@@ -17,3 +18,9 @@ Schedule::command(RunListingRenewalCycle::class)->dailyAt('04:00');
 // Reply timeouts of scenario runs are hour-grained, so an hourly sweep
 // is enough.
 Schedule::command(ProcessScenarioRunTimeouts::class)->hourly();
+
+// Webhook events whose job was lost (queue hiccup at dispatch, a worker
+// killed hard): Dereu's redelivery is deduplicated against the stored row
+// and never re-dispatches, so only this sweep stands between such an event
+// and the bot silently ignoring the message.
+Schedule::command(RedispatchUnprocessedDereuEvents::class)->everyFiveMinutes();

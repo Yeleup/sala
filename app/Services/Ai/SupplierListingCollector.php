@@ -703,7 +703,22 @@ class SupplierListingCollector
             return false;
         }
 
-        $download = $this->mediaDownloader->download((string) $message->mediaId);
+        // A failed download must not kill the dialog (Dereu 403/5xx are a
+        // known failure profile): the photo is simply not attached, the
+        // caption still counts as ordinary text, and a photo-only message
+        // walks the unreadable path — mirroring how voice failures behave.
+        try {
+            $download = $this->mediaDownloader->download((string) $message->mediaId);
+        } catch (Throwable $e) {
+            Log::warning('Photo download failed; the message is treated as unreadable.', [
+                'bot_session_id' => $session->id,
+                'media_id' => $message->mediaId,
+                'error' => $e->getMessage(),
+            ]);
+
+            return false;
+        }
+
         $draft = $this->ensureDraft($session, $state);
 
         $path = "listings/{$draft->id}/photos/".uniqid('', true).'.jpg';

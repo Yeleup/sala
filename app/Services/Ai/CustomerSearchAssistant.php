@@ -760,11 +760,21 @@ class CustomerSearchAssistant
      */
     protected function extractRequirements(BotSession $session, array $state): ?array
     {
+        $prompt = implode("\n", $state['transcript']);
+
+        // A short reply («не важно», «любой») only reads against the
+        // question it answers — the bot's side goes in as context.
+        $botMessage = $this->currentBotMessageSummary($state);
+
+        if ($botMessage !== null) {
+            $prompt = "Последнее сообщение бота заказчику: {$botMessage}\n\nСообщения заказчика:\n{$prompt}";
+        }
+
         try {
             return $this->audit->run(
                 AiOperationType::SearchQueryExtraction,
                 fn (): array => (new SearchQueryExtractionAgent)
-                    ->prompt(implode("\n", $state['transcript']))
+                    ->prompt($prompt)
                     ->toArray(),
                 [
                     'contact_id' => $session->contact_id,
@@ -779,6 +789,27 @@ class CustomerSearchAssistant
 
             return null;
         }
+    }
+
+    /**
+     * What the bot last sent, compressed for the extractor's context line.
+     * Null when the dialog has no open question yet (the greeting).
+     *
+     * @param  array<string, mixed>  $state
+     */
+    protected function currentBotMessageSummary(array $state): ?string
+    {
+        if ($state['phase'] === 'choosing') {
+            return 'показал список найденных вариантов и ждёт выбора или уточнения запроса';
+        }
+
+        if ($state['phase'] === 'locating') {
+            return 'прислал список одноимённых мест и попросил выбрать нужное';
+        }
+
+        $question = trim((string) ($state['last_question'] ?? ''));
+
+        return $question !== '' ? 'задал вопрос: «'.$question.'»' : null;
     }
 
     /**

@@ -728,6 +728,24 @@ test('a query without a place asks a clarifying question before showing listings
         ->and($session->state['transcript'])->toBe(['нужен кран 25 тонн']);
 });
 
+test('the intake extractor sees the bot\'s last question as context for a short reply', function () {
+    SearchQueryExtractionAgent::fake([
+        fullSearchIntake(['location' => null, 'clarifying_question' => 'В каком городе нужен кран?']),
+    ]);
+
+    fakeSearchMessenger()->shouldReceive('sendText')->once();
+
+    $session = searchSession(['last_question' => 'В каком городе нужна техника?', 'transcript' => ['нужен кран']]);
+    app(CustomerSearchAssistant::class)
+        ->resume($session, customerAiNode(), new InboundMessage(text: 'не важно'));
+
+    // «Не важно» имеет смысл только против вопроса о месте — без вопроса
+    // бота в промпте модель гадает, к чему относится короткий ответ.
+    SearchQueryExtractionAgent::assertPrompted(
+        fn ($prompt): bool => $prompt->contains('В каком городе нужна техника?') && $prompt->contains('не важно'),
+    );
+});
+
 test('the answer to the clarifying question completes the intake and lists the listings', function () {
     SearchQueryExtractionAgent::fake([fullSearchIntake()]);
     $listing = Listing::factory()->published()->create([

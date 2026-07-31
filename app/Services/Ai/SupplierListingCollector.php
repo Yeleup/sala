@@ -765,6 +765,15 @@ class SupplierListingCollector
             ? implode("\n", $state['transcript'])
             : 'Поставщик прислал только фотографии — извлеки из них, что сможешь.';
 
+        // A short reply («не надо», «да») only reads against the question
+        // it answers: without the bot's side the model takes a refusal of
+        // the photo ask for abandoning the listing.
+        $botMessage = $this->currentBotMessageSummary($state);
+
+        if ($botMessage !== null) {
+            $prompt = "Последнее сообщение бота поставщику: {$botMessage}\n\nСообщения поставщика:\n{$prompt}";
+        }
+
         try {
             $fields = $this->audit->run(
                 AiOperationType::ListingExtraction,
@@ -803,6 +812,28 @@ class SupplierListingCollector
             : $this->canonicalBrand($fields['brand'] ?? null, $brands)?->name;
 
         return $this->resolveLocation($fields, $state);
+    }
+
+    /**
+     * What the bot last sent, compressed for the extractor's context line.
+     * Null when the dialog has no open question yet (the greeting).
+     *
+     * @param  array<string, mixed>  $state
+     */
+    private function currentBotMessageSummary(array $state): ?string
+    {
+        if ($state['phase'] === 'confirming') {
+            return 'показал сводку объявления с кнопками «Да, отправить» и «Исправить», спросил «Всё верно?»'
+                .($this->hasPhotos($state) ? '' : ' и попросил прислать фотографии');
+        }
+
+        if ($state['phase'] === 'locating') {
+            return 'прислал список одноимённых мест и попросил выбрать нужное';
+        }
+
+        $question = trim((string) ($state['last_question'] ?? ''));
+
+        return $question !== '' ? 'задал вопрос: «'.$question.'»' : null;
     }
 
     /**

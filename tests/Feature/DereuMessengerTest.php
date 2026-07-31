@@ -223,6 +223,24 @@ test('a rejected send surfaces as an exception', function () {
         ->toThrow(RequestException::class);
 });
 
+test('a rejected send leaves a failed entry in the channel journal', function () {
+    Http::fake(['api.dereu.test/*' => Http::response(['error' => 'validation'], 422)]);
+    connectedDereuCompany();
+    $contact = Contact::factory()->withOpenSessionWindow()->create();
+
+    expect(fn () => app(DereuMessenger::class)->sendText($contact, 'Привет!'))
+        ->toThrow(RequestException::class);
+
+    // Без записи диалог в операторском «Чате» выглядит так, будто бот
+    // просто молчал: инцидент (протухший ключ, невалидный payload) ищется
+    // вслепую по laravel-логам, а счётчик ошибок показывает ноль.
+    $entry = App\Models\ChannelMessage::sole();
+    expect($entry->status)->toBe(App\Enums\ChannelMessageStatus::Failed)
+        ->and($entry->direction)->toBe(App\Enums\ChannelDirection::Outbound)
+        ->and($entry->text)->toBe('Привет!')
+        ->and($entry->failure_reason)->not->toBeNull();
+});
+
 test('a session message outside the 24-hour window is refused locally', function () {
     Http::fake();
     connectedDereuCompany();
@@ -231,7 +249,62 @@ test('a session message outside the 24-hour window is refused locally', function
     expect(fn () => app(DereuMessenger::class)->sendText($contact, 'Привет!'))
         ->toThrow(SessionWindowClosed::class);
 
+    // Пре-флайт отказ — не попытка отправки: sendTextOrTemplate и
+    // нотификаторы используют его как штатное ветвление на шаблон, и
+    // журналировать его «ошибкой» значило бы засорять чат ложными сбоями.
     Http::assertNothingSent();
+    expect(App\Models\ChannelMessage::count())->toBe(0);
+});
+
+test('a session send records its template fallback in the journal', function () {
+    fakeDereuSendAccepted();
+    connectedDereuCompany();
+    $contact = Contact::factory()->withOpenSessionWindow()->create();
+    $template = WhatsappTemplate::factory()->approved()->create();
+
+    // План Б на асинхронный отказ Meta: если сессионное сообщение умрёт
+    // как «вне окна», обработчик message_failed перепошлёт его шаблоном —
+    // для этого журнальная строка несёт всё нужное для отправки шаблона.
+    app(DereuMessenger::class)->sendButtons(
+        $contact,
+        'Новая заявка. Готовы взять заказ?',
+        [['id' => 'req:1:accept', 'title' => 'Согласиться']],
+        fallback: new App\Services\TemplateFallback($template, ['Автокран 25т'], ['req:1:accept']),
+    );
+
+    expect(App\Models\ChannelMessage::sole()->template_fallback)->toBe([
+        'whatsapp_template_id' => $template->id,
+        'body_parameters' => ['Автокран 25т'],
+        'button_payloads' => ['req:1:accept'],
+    ]);
+});
+
+test('sendTextOrTemplate inside the window records the template as its own fallback', function () {
+    fakeDereuSendAccepted();
+    connectedDereuCompany();
+    $contact = Contact::factory()->withOpenSessionWindow()->create();
+    $template = WhatsappTemplate::factory()->approved()->create();
+
+    app(DereuMessenger::class)->sendTextOrTemplate($contact, 'Объявление скоро истечёт', $template, ['Автокран']);
+
+    expect(App\Models\ChannelMessage::sole()->template_fallback)->toBe([
+        'whatsapp_template_id' => $template->id,
+        'body_parameters' => ['Автокран'],
+        'button_payloads' => [],
+    ]);
+});
+
+test('a template send never carries a fallback of its own', function () {
+    fakeDereuSendAccepted();
+    connectedDereuCompany();
+    $contact = Contact::factory()->withClosedSessionWindow()->create();
+    $template = WhatsappTemplate::factory()->approved()->create();
+
+    app(DereuMessenger::class)->sendTemplate($contact, $template, ['x']);
+
+    // Отсутствие фолбэка у шаблонных отправок — защита от цикла: упавший
+    // шаблон не может породить ещё одну переотправку.
+    expect(App\Models\ChannelMessage::sole()->template_fallback)->toBeNull();
 });
 
 test('an approved template is sent with body parameters regardless of the window', function () {

@@ -34,6 +34,14 @@ class ListingRenewalNotifier
 
         try {
             if ($supplier->hasOpenSessionWindow()) {
+                // Plan B: the window can close after Dereu accepts the
+                // message — the async rejection then re-sends through the
+                // template with the same button payloads.
+                $fallbackTemplate = WhatsappTemplate::query()
+                    ->approved()
+                    ->where('name', WhatsappTemplateLibrary::LISTING_RENEWAL)
+                    ->first();
+
                 $this->messenger->sendButtons(
                     $supplier,
                     sprintf('Ваше объявление «%s» скоро перестанет показываться в поиске. Оно ещё актуально?', $name),
@@ -41,6 +49,7 @@ class ListingRenewalNotifier
                         ['id' => $yesId, 'title' => self::BUTTON_YES_TITLE],
                         ['id' => $noId, 'title' => self::BUTTON_NO_TITLE],
                     ],
+                    fallback: $fallbackTemplate === null ? null : new TemplateFallback($fallbackTemplate, [$name], [$yesId, $noId]),
                 );
 
                 return true;

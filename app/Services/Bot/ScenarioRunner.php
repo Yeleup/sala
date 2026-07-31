@@ -12,6 +12,7 @@ use App\Models\BotScenario;
 use App\Models\Contact;
 use App\Models\ScenarioRun;
 use App\Models\WhatsappTemplate;
+use App\Services\TemplateFallback;
 use App\Services\Ai\CtaLinkBuilder;
 use App\Services\DereuMessenger;
 use Illuminate\Database\Eloquent\Model;
@@ -277,7 +278,19 @@ class ScenarioRunner
         // message needs no Meta approval — inside the window the block
         // keeps working while the moderation verdict is on its way.
         if ($channel === ScenarioMessageChannel::Adaptive && $run->contact->hasOpenSessionWindow()) {
-            $this->sendSession($run, $this->variables->renderTemplateBody($run, (string) $template->body, $variableKeys), $options);
+            // Plan B: the window can close after Dereu accepts the message —
+            // the async rejection then re-sends through the template with
+            // the same token payloads (approval is re-checked at that time).
+            $this->sendSession(
+                $run,
+                $this->variables->renderTemplateBody($run, (string) $template->body, $variableKeys),
+                $options,
+                new TemplateFallback(
+                    $template,
+                    $this->variables->values($run, $variableKeys),
+                    array_map(fn (array $option): string => ScenarioRunReplyHandler::payload($run, (string) $option['id']), $options),
+                ),
+            );
 
             return;
         }
@@ -293,10 +306,10 @@ class ScenarioRunner
     /**
      * @param  list<array{id: string, title: string}>  $options
      */
-    private function sendSession(ScenarioRun $run, string $text, array $options): void
+    private function sendSession(ScenarioRun $run, string $text, array $options, ?TemplateFallback $fallback = null): void
     {
         if ($options === []) {
-            $this->messenger->sendText($run->contact, $text);
+            $this->messenger->sendText($run->contact, $text, $fallback);
 
             return;
         }
@@ -304,7 +317,7 @@ class ScenarioRunner
         $this->messenger->sendButtons($run->contact, $text, array_map(fn (array $option): array => [
             'id' => ScenarioRunReplyHandler::payload($run, (string) $option['id']),
             'title' => (string) $option['title'],
-        ], $options));
+        ], $options), $fallback);
     }
 
     /**

@@ -116,7 +116,7 @@
                         <span class="wa-dialog-body">
                             <span class="wa-row">
                                 <span class="wa-name">{{ $dialog->displayName() ?? '+'.ltrim($dialog->phone, '+') }}</span>
-                                <span class="wa-time">{{ \Illuminate\Support\Carbon::parse($dialog->last_message_at)->format('d.m H:i') }}</span>
+                                <span class="wa-time">{{ \App\Support\DisplayTime::local(\Illuminate\Support\Carbon::parse($dialog->last_message_at))->format('d.m H:i') }}</span>
                             </span>
                             <span class="wa-snippet">{{ \Illuminate\Support\Str::limit($dialog->last_message_text ?? '—', 45) }}</span>
                         </span>
@@ -162,7 +162,7 @@
                     @php $previousDay = null; @endphp
 
                     @forelse ($thread['messages'] as $message)
-                        @php $day = $message->created_at->format('d.m.Y'); @endphp
+                        @php $day = \App\Support\DisplayTime::local($message->created_at)->format('d.m.Y'); @endphp
                         @if ($day !== $previousDay)
                             <div class="wa-chip-center" wire:key="day-{{ $message->id }}">{{ $day }}</div>
                             @php $previousDay = $day; @endphp
@@ -220,7 +220,7 @@
                                     @endif
                                 @endif
 
-                                <span>{{ $message->created_at->format('H:i') }}</span>
+                                <span>{{ \App\Support\DisplayTime::local($message->created_at)->format('H:i') }}</span>
 
                                 @if ($message->direction === \App\Enums\ChannelDirection::Outbound)
                                     <span class="wa-ticks {{ $message->status === \App\Enums\ChannelMessageStatus::Read ? 'is-read' : '' }}" title="{{ $message->status->value }}">

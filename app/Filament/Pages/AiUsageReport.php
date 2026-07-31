@@ -10,6 +10,7 @@ use App\Enums\ChannelMessageStatus;
 use App\Enums\WhatsappTemplateCategory;
 use App\Models\AiAttempt;
 use App\Models\ChannelMessage;
+use App\Support\DisplayTime;
 use BackedEnum;
 use Filament\Pages\Page;
 use Filament\Support\Icons\Heroicon;
@@ -88,7 +89,7 @@ class AiUsageReport extends Page
     public function byDay(): Collection
     {
         return $this->attempts()
-            ->selectRaw('date(created_at) as day')
+            ->selectRaw($this->localDayExpression(), [DisplayTime::timezone()])
             ->selectRaw('count(*) as requests')
             ->selectRaw('count(*) filter (where status = ?) as errors', [AiAttemptStatus::Failed->value])
             ->selectRaw('coalesce(sum(input_tokens + output_tokens), 0) as tokens')
@@ -186,7 +187,7 @@ class AiUsageReport extends Page
         $billable = $this->billableStatusValues();
 
         return $this->templateMessages()
-            ->selectRaw('date(created_at) as day')
+            ->selectRaw($this->localDayExpression(), [DisplayTime::timezone()])
             ->selectRaw('count(*) as sent')
             ->selectRaw('count(*) filter (where status in (?, ?)) as billable', $billable)
             ->selectRaw('count(*) filter (where status = ?) as failed', [ChannelMessageStatus::Failed->value])
@@ -227,7 +228,7 @@ class AiUsageReport extends Page
     {
         return ChannelMessage::query()
             ->where('created_at', '>=', now()->subDays($this->days))
-            ->selectRaw('date(created_at) as day')
+            ->selectRaw($this->localDayExpression(), [DisplayTime::timezone()])
             ->selectRaw('count(*) filter (where direction = ?) as inbound', [ChannelDirection::Inbound->value])
             ->selectRaw('count(*) filter (where direction = ?) as outbound', [ChannelDirection::Outbound->value])
             ->selectRaw("count(*) filter (where type = 'template') as templates")
@@ -235,6 +236,16 @@ class AiUsageReport extends Page
             ->groupBy('day')
             ->orderByDesc('day')
             ->get();
+    }
+
+    /**
+     * The stored-UTC timestamp bucketed into operator-local days (bind the
+     * display timezone): a nightly call at 21:00 UTC belongs to the next
+     * Kazakhstan day, and a UTC date() would smear its cost across days.
+     */
+    protected function localDayExpression(): string
+    {
+        return "date(created_at at time zone 'UTC' at time zone ?) as day";
     }
 
     /**

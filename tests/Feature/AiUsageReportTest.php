@@ -43,6 +43,27 @@ test('отчёт показывает сводку, разрезы и топ к�
         ->assertSee('+77019990000');
 });
 
+test('суточные разрезы отчёта считаются в казахстанском времени, а не в UTC', function () {
+    // 21:00 UTC 30 июля — это 02:00 31 июля по Алматы (UTC+5): ночные
+    // вызовы и сообщения должны попадать в местные сутки, иначе суммы
+    // размазываются между днями и не бьются с выгрузками Meta.
+    $this->travelTo('2026-07-31 10:00:00');
+
+    AiAttempt::factory()
+        ->for(AiOperation::factory(), 'operation')
+        ->create(['created_at' => '2026-07-30 21:00:00']);
+    ChannelMessage::factory()->outbound()->create([
+        'type' => 'template',
+        'created_at' => '2026-07-30 21:00:00',
+    ]);
+
+    $page = Livewire::test(AiUsageReport::class)->instance();
+
+    expect($page->byDay()->first()->day)->toBe('2026-07-31')
+        ->and($page->whatsappByDay()->first()->day)->toBe('2026-07-31')
+        ->and($page->messagesByDay()->first()->day)->toBe('2026-07-31');
+});
+
 test('векторизация для поиска видна в отчёте с моделью и стоимостью', function () {
     $operation = AiOperation::factory()->create(['operation' => AiOperationType::Embedding]);
     AiAttempt::factory()->for($operation, 'operation')->create([

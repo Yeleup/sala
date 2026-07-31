@@ -69,6 +69,20 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Display Timezone
+    |--------------------------------------------------------------------------
+    |
+    | Storage stays in UTC; this timezone is applied only when showing
+    | times to the operator (chat bubbles, day separators, per-day report
+    | groupings). The market is Kazakhstan, so a UTC clock would put every
+    | message five hours in the past and split nightly spend across days.
+    |
+    */
+
+    'display_timezone' => env('APP_DISPLAY_TIMEZONE', 'Asia/Almaty'),
+
+    /*
+    |--------------------------------------------------------------------------
     | Application Locale Configuration
     |--------------------------------------------------------------------------
     |

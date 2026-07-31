@@ -13,7 +13,10 @@ use App\Support\WhatsappText;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\PendingRequest;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Str;
 use RuntimeException;
+use Throwable;
 
 /**
  * Outbound WhatsApp messages through Dereu (company api_key auth).
@@ -43,17 +46,17 @@ class DereuMessenger
 
     public function __construct(private readonly WhatsappCostEstimator $costs) {}
 
-    public function sendText(Contact $contact, string $text): void
+    public function sendText(Contact $contact, string $text, ?TemplateFallback $fallback = null): void
     {
-        $this->send($contact, 'text', ['body' => $text]);
+        $this->send($contact, 'text', ['body' => $text], fallback: $fallback);
     }
 
     /**
      * @param  list<array{id: string, title: string}>  $buttons  Up to 3 (WhatsApp limit).
      */
-    public function sendButtons(Contact $contact, string $text, array $buttons): void
+    public function sendButtons(Contact $contact, string $text, array $buttons, ?TemplateFallback $fallback = null): void
     {
-        $this->send($contact, 'interactive', [
+        $this->send($contact, 'interactive', fallback: $fallback, payload: [
             'type' => 'button',
             'body' => ['text' => WhatsappText::clamp($text, self::BODY_LIMIT)],
             'action' => [
@@ -74,9 +77,9 @@ class DereuMessenger
      *
      * @param  string  $buttonText  Up to 20 characters (WhatsApp limit).
      */
-    public function sendCtaUrl(Contact $contact, string $text, string $buttonText, string $url): void
+    public function sendCtaUrl(Contact $contact, string $text, string $buttonText, string $url, ?TemplateFallback $fallback = null): void
     {
-        $this->send($contact, 'interactive', [
+        $this->send($contact, 'interactive', fallback: $fallback, payload: [
             'type' => 'cta_url',
             'body' => ['text' => WhatsappText::clamp($text, self::BODY_LIMIT)],
             'action' => [
@@ -175,7 +178,10 @@ class DereuMessenger
     public function sendTextOrTemplate(Contact $contact, string $text, WhatsappTemplate $template, array $bodyParameters = []): void
     {
         if ($contact->hasOpenSessionWindow()) {
-            $this->sendText($contact, $text);
+            // The template rides along as the session message's plan B: the
+            // window can close between this check and Meta's processing, and
+            // the async rejection then re-sends through the template.
+            $this->sendText($contact, $text, new TemplateFallback($template, $bodyParameters));
 
             return;
         }
@@ -186,7 +192,7 @@ class DereuMessenger
     /**
      * @param  array<string, mixed>  $payload
      */
-    protected function send(Contact $contact, string $type, array $payload, ?WhatsappTemplate $template = null): void
+    protected function send(Contact $contact, string $type, array $payload, ?WhatsappTemplate $template = null, ?TemplateFallback $fallback = null): void
     {
         if ($type !== 'template' && ! $contact->hasOpenSessionWindow()) {
             throw new SessionWindowClosed($contact);
@@ -198,14 +204,25 @@ class DereuMessenger
             throw new RuntimeException('WhatsApp number is not connected — cannot send messages.');
         }
 
-        $response = $this->request($company->api_key)
-            ->post('/messages/send', [
-                'phone_number_id' => $company->phone_number_id,
-                'to' => '+'.ltrim($contact->phone, '+'),
-                'type' => $type,
-                'payload' => $payload,
-            ])
-            ->throw();
+        try {
+            $response = $this->request($company->api_key)
+                ->post('/messages/send', [
+                    'phone_number_id' => $company->phone_number_id,
+                    'to' => '+'.ltrim($contact->phone, '+'),
+                    'type' => $type,
+                    'payload' => $payload,
+                ])
+                ->throw();
+        } catch (Throwable $e) {
+            // A failed attempt must leave a trace: without it the operator
+            // chat shows a dialog where the bot «just went silent», and the
+            // error counters stay at zero while every send is dying. The
+            // journal write itself is best effort — it must not mask the
+            // original failure.
+            $this->journalFailedSend($contact, $type, $payload, $template, $e);
+
+            throw $e;
+        }
 
         ChannelMessage::create([
             'contact_id' => $contact->id,
@@ -215,11 +232,36 @@ class DereuMessenger
             'payload' => $payload,
             'dereu_message_id' => $response->json('id'),
             'status' => ChannelMessageStatus::Queued,
+            'template_fallback' => $fallback?->toArray(),
             ...($template === null ? [] : [
                 'whatsapp_template_id' => $template->id,
                 ...$this->costs->estimate($template->category),
             ]),
         ]);
+    }
+
+    /**
+     * @param  array<string, mixed>  $payload
+     */
+    protected function journalFailedSend(Contact $contact, string $type, array $payload, ?WhatsappTemplate $template, Throwable $e): void
+    {
+        try {
+            ChannelMessage::create([
+                'contact_id' => $contact->id,
+                'direction' => ChannelDirection::Outbound,
+                'type' => $type,
+                'text' => $this->outboundText($type, $payload),
+                'payload' => $payload,
+                'status' => ChannelMessageStatus::Failed,
+                'failure_reason' => Str::limit($e->getMessage(), 500),
+                ...($template === null ? [] : ['whatsapp_template_id' => $template->id]),
+            ]);
+        } catch (Throwable $journalError) {
+            Log::warning('Failed to journal a failed WhatsApp send.', [
+                'contact_id' => $contact->id,
+                'error' => $journalError->getMessage(),
+            ]);
+        }
     }
 
     /**

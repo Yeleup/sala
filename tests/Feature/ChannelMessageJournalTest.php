@@ -60,14 +60,23 @@ describe('исходящие в журнале', function () {
             ->contact_id->toBe($contact->id);
     });
 
-    test('отказ Dereu не оставляет строки в журнале', function () {
+    test('отказ Dereu оставляет в журнале строку со статусом «ошибка»', function () {
+        // Раньше упавшая отправка не журналировалась вовсе — в «Чате»
+        // оператора бот выглядел просто молчащим, а счётчик ошибок
+        // показывал ноль при полностью лежащем канале.
         connectedDereuCompany(['phone_number_id' => '1234567890']);
         $contact = Contact::factory()->withOpenSessionWindow()->create();
         Http::fake(['api.dereu.test/api/v1/messages/send' => Http::response(['message' => 'invalid'], 422)]);
 
         expect(fn () => app(DereuMessenger::class)->sendText($contact, 'Привет'))
-            ->toThrow(Illuminate\Http\Client\RequestException::class)
-            ->and(ChannelMessage::count())->toBe(0);
+            ->toThrow(Illuminate\Http\Client\RequestException::class);
+
+        $entry = ChannelMessage::sole();
+        expect($entry)
+            ->direction->toBe(ChannelDirection::Outbound)
+            ->status->toBe(ChannelMessageStatus::Failed)
+            ->text->toBe('Привет')
+            ->failure_reason->not->toBeNull();
     });
 });
 
@@ -143,6 +152,127 @@ describe('статусы доставки', function () {
         $entry->refresh();
         expect($entry->status)->toBe(ChannelMessageStatus::Failed)
             ->and($entry->failure_reason)->toContain('24 hours');
+    });
+
+    /**
+     * Строка журнала с запасным шаблоном: так выглядит сессионное
+     * уведомление, отправленное в открытое по нашим часам окно.
+     */
+    function outboundEntryWithFallback(string $uuid, App\Models\WhatsappTemplate $template): ChannelMessage
+    {
+        return ChannelMessage::factory()->outbound()->create([
+            'dereu_message_id' => $uuid,
+            'template_fallback' => [
+                'whatsapp_template_id' => $template->id,
+                'body_parameters' => ['Автокран 25т'],
+                'button_payloads' => ['req:1:accept', 'req:1:decline'],
+            ],
+        ]);
+    }
+
+    test('message_failed из-за закрытого окна перепосылает уведомление платным шаблоном', function () {
+        $uuid = (string) Str::uuid();
+        $template = App\Models\WhatsappTemplate::factory()->approved()->create();
+        $entry = outboundEntryWithFallback($uuid, $template);
+
+        test()->mock(DereuMessenger::class)
+            ->shouldReceive('sendTemplate')->once()
+            ->withArgs(fn (Contact $to, App\Models\WhatsappTemplate $t, array $params, array $payloads): bool => $to->is($entry->contact)
+                && $t->is($template)
+                && $params === ['Автокран 25т']
+                && $payloads === ['req:1:accept', 'req:1:decline']);
+
+        signedDereuEvent([
+            'event' => 'message_failed',
+            'message_id' => $uuid,
+            'reason' => 'Message failed to send because more than 24 hours have passed since the customer last replied to this number.',
+            'from' => null, 'type' => null, 'payload' => [],
+        ]);
+
+        // Фолбэк одноразовый: израсходованный, он очищается — повторный
+        // message_failed (передоставка события) не породит второй шаблон.
+        expect($entry->refresh())
+            ->status->toBe(ChannelMessageStatus::Failed)
+            ->template_fallback->toBeNull();
+    });
+
+    test('повторный message_failed по тому же сообщению не перепосылает шаблон вторично', function () {
+        $uuid = (string) Str::uuid();
+        $template = App\Models\WhatsappTemplate::factory()->approved()->create();
+        outboundEntryWithFallback($uuid, $template);
+
+        test()->mock(DereuMessenger::class)->shouldReceive('sendTemplate')->once();
+
+        $reason = 'Message failed: re-engagement message (131047).';
+        signedDereuEvent(['event' => 'message_failed', 'message_id' => $uuid, 'reason' => $reason, 'from' => null, 'type' => null, 'payload' => []]);
+        signedDereuEvent(['event' => 'message_failed', 'message_id' => $uuid, 'reason' => $reason, 'from' => null, 'type' => null, 'payload' => []]);
+    });
+
+    test('message_failed по причине, не связанной с окном, шаблоном не перепосылается', function () {
+        $uuid = (string) Str::uuid();
+        $template = App\Models\WhatsappTemplate::factory()->approved()->create();
+        $entry = outboundEntryWithFallback($uuid, $template);
+
+        test()->mock(DereuMessenger::class)->shouldNotReceive('sendTemplate');
+
+        signedDereuEvent([
+            'event' => 'message_failed',
+            'message_id' => $uuid,
+            'reason' => 'Invalid interactive button payload.',
+            'from' => null, 'type' => null, 'payload' => [],
+        ]);
+
+        // Причина не «вне окна» — шаблон с тем же смыслом мог бы упасть так
+        // же; фолбэк остаётся на строке для разбора оператором.
+        expect($entry->refresh()->template_fallback)->not->toBeNull();
+    });
+
+    test('сбой самой переотправки не роняет обработку статуса', function () {
+        $uuid = (string) Str::uuid();
+        $template = App\Models\WhatsappTemplate::factory()->approved()->create();
+        outboundEntryWithFallback($uuid, $template);
+
+        test()->mock(DereuMessenger::class)
+            ->shouldReceive('sendTemplate')->once()->andThrow(new RuntimeException('Dereu 500'));
+
+        signedDereuEvent([
+            'event' => 'message_failed',
+            'message_id' => $uuid,
+            'reason' => 'more than 24 hours have passed',
+            'from' => null, 'type' => null, 'payload' => [],
+        ]);
+
+        expect(DereuWebhookEvent::sole()->processed_at)->not->toBeNull();
+    });
+
+    test('неутверждённый к моменту отказа шаблон не перепосылается', function () {
+        $uuid = (string) Str::uuid();
+        $template = App\Models\WhatsappTemplate::factory()->create();
+        outboundEntryWithFallback($uuid, $template);
+
+        test()->mock(DereuMessenger::class)->shouldNotReceive('sendTemplate');
+
+        signedDereuEvent([
+            'event' => 'message_failed',
+            'message_id' => $uuid,
+            'reason' => 'more than 24 hours have passed',
+            'from' => null, 'type' => null, 'payload' => [],
+        ]);
+    });
+
+    test('message_failed пишется в error-лог — мониторинг видит недоставленные ответы', function () {
+        Illuminate\Support\Facades\Log::spy();
+        $uuid = (string) Str::uuid();
+        outboundEntry($uuid);
+
+        signedDereuEvent([
+            'event' => 'message_failed',
+            'message_id' => $uuid,
+            'reason' => 'Message failed to send because more than 24 hours have passed',
+            'from' => null, 'type' => null, 'payload' => [],
+        ]);
+
+        Illuminate\Support\Facades\Log::shouldHaveReceived('error')->once();
     });
 
     test('статусное событие без строки журнала просто помечается обработанным', function () {

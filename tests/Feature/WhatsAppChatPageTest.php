@@ -38,6 +38,26 @@ test('чат показывает диалоги по последнему со�
         ->assertDontSee('Аскар');
 });
 
+test('времена сообщений показываются в казахстанском времени', function () {
+    $this->travelTo('2026-07-31 12:00:00');
+    $contact = Contact::factory()->create();
+
+    // 20:30 UTC 30 июля = 01:30 31 июля по Алматы: оператор, ищущий
+    // сообщение по времени из жалобы клиента, должен видеть местное время
+    // и местную дату разделителя, а не UTC на 5 часов позади.
+    ChannelMessage::factory()->for($contact)->create([
+        'text' => 'Ночное сообщение',
+        'created_at' => '2026-07-30 20:30:00',
+    ]);
+
+    Livewire::test(WhatsAppChat::class)
+        ->call('selectContact', $contact->id)
+        ->assertSee('01:30')
+        ->assertSee('31.07.2026')
+        ->assertDontSee('20:30')
+        ->assertDontSee('30.07.2026');
+});
+
 test('тред показывает входящие и исходящие со статусами доставки и причиной ошибки', function () {
     $contact = Contact::factory()->create();
 

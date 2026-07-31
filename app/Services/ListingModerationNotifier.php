@@ -65,11 +65,24 @@ class ListingModerationNotifier
         try {
             if ($supplier->hasOpenSessionWindow()) {
                 try {
+                    // The template rides along as plan B: the window can
+                    // also close after Dereu accepts the message, and the
+                    // async rejection then re-sends through the template.
+                    $fallbackTemplate = WhatsappTemplate::query()
+                        ->approved()
+                        ->where('name', $templateName)
+                        ->first();
+
                     $this->messenger->sendCtaUrl(
                         $supplier,
                         $text,
                         self::BUTTON_OPEN_TITLE,
                         $this->links->editUrl($listing),
+                        fallback: $fallbackTemplate === null ? null : new TemplateFallback(
+                            $fallbackTemplate,
+                            [$this->name($listing)],
+                            [NotificationReplyHandler::listingOpenId($listing)],
+                        ),
                     );
 
                     return true;

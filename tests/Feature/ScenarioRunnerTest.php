@@ -92,6 +92,31 @@ describe('запуск сценария «Новая заявка»', function (
             ->and($run->subject->is($request))->toBeTrue();
     });
 
+    test('сессионное сообщение в открытое окно несёт шаблонный фолбэк на асинхронный отказ', function () {
+        installFlowScenarios();
+        $template = WhatsappTemplate::query()
+            ->where('name', WhatsappTemplateLibrary::NEW_CUSTOMER_REQUEST)
+            ->sole();
+        $request = runnerPendingRequest();
+        $supplier = $request->listing->supplier;
+
+        // Окно может закрыться между нашей проверкой и обработкой в Meta:
+        // фолбэк даёт обработчику message_failed всё, чтобы перепослать то
+        // же уведомление платным шаблоном с теми же токен-кнопками.
+        $messenger = runnerMessenger();
+        $messenger->shouldReceive('sendButtons')->once()->withArgs(
+            fn (Contact $contact, string $text, array $buttons, ?App\Services\TemplateFallback $fallback = null): bool => $fallback !== null
+                && $fallback->template->is($template)
+                && $fallback->bodyParameters === ['Автокран', 'нужен кран']
+                && count($fallback->buttonPayloads) === 2
+                && str_ends_with($fallback->buttonPayloads[0], ':accept')
+                && str_ends_with($fallback->buttonPayloads[1], ':decline'),
+        );
+
+        $scenario = BotScenario::publishedForTrigger(BotScenarioTrigger::NewCustomerRequest);
+        app(ScenarioRunner::class)->launch($scenario, $supplier, $request);
+    });
+
     test('вне окна уходит утверждённый шаблон с переменными заявки и токен-payload кнопок', function () {
         installFlowScenarios();
         $template = WhatsappTemplate::query()

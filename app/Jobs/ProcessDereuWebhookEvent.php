@@ -90,6 +90,19 @@ class ProcessDereuWebhookEvent implements ShouldQueue
             return;
         }
 
+        // A reaction or a system event is not a message the contact typed:
+        // feeding it to the engine would greet a 👍, collect «нечитаемое»
+        // strikes in an AI block, and — worst — move the 24-hour window
+        // base for an event Meta does not open the window for, so the
+        // replies would die asynchronously and the contact would see
+        // nothing. Stickers stay: a sticker is a real message and walks
+        // the documented unreadable path.
+        if (in_array((string) ($event->payload['type'] ?? ''), ['reaction', 'system'], true)) {
+            $event->update(['processed_at' => now()]);
+
+            return;
+        }
+
         $phone = (string) ($event->payload['from'] ?? '');
 
         if ($phone === '') {

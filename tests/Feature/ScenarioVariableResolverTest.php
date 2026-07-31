@@ -65,6 +65,34 @@ test('без имени заказчика переменная «Заявка: 
         ->toBe('+77000930522');
 });
 
+test('ни одна переменная не резолвится в пустую строку', function (ScenarioVariable $variable) {
+    // Meta отклоняет шаблон с пустым текстовым параметром — пустая
+    // переменная убила бы отправку целиком. Даже на голых данных
+    // (контакт без имени, объявление без описания/места/цены, заявка
+    // без запроса) каждая переменная обязана дать непустую подстановку.
+    $run = ScenarioRun::factory()
+        ->for(Contact::factory()->state(['profile_name' => null, 'display_name' => null]), 'contact')
+        ->for(CustomerRequest::factory()->state(['query_text' => ''])->for(
+            Listing::factory()->create([
+                'title' => null,
+                'category_id' => null,
+                'description' => null,
+                'location_id' => null,
+                'price' => null,
+            ]),
+            'listing',
+        ), 'subject')
+        ->create();
+
+    expect(app(ScenarioVariableResolver::class)->resolve($run, $variable))->not->toBe('');
+})->with(ScenarioVariable::cases());
+
+test('неизвестный ключ переменной даёт прочерк, а не пустой параметр', function () {
+    $run = ScenarioRun::factory()->create();
+
+    expect(app(ScenarioVariableResolver::class)->values($run, ['no.such.key']))->toBe(['—']);
+});
+
 test('переменная «Объявление: название» берёт название объявления', function () {
     $run = ScenarioRun::factory()
         ->for(Listing::factory()->create(['title' => 'Аренда автокрана 25 т']), 'subject')

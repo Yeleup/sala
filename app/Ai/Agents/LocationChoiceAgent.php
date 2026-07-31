@@ -4,6 +4,7 @@ namespace App\Ai\Agents;
 
 use Illuminate\Contracts\JsonSchema\JsonSchema;
 use Illuminate\JsonSchema\Types\Type;
+use Laravel\Ai\Attributes\Strict;
 use Laravel\Ai\Attributes\Temperature;
 use Laravel\Ai\Contracts\Agent;
 use Laravel\Ai\Contracts\HasStructuredOutput;
@@ -23,6 +24,7 @@ use Stringable;
  * guess would silently publish the listing in a foreign region, which is
  * worse than one more question — see docs/modules/ai-assistant.md.
  */
+#[Strict]
 #[Temperature(0.1)]
 class LocationChoiceAgent implements Agent, HasStructuredOutput
 {
@@ -68,10 +70,12 @@ class LocationChoiceAgent implements Agent, HasStructuredOutput
      */
     public function schema(JsonSchema $schema): array
     {
+        // Strict mode: the key must be listed in required (nullable keeps
+        // «не уверен» expressible as null), or OpenAI rejects the request.
         return [
-            'location_id' => $this->candidates === []
-                ? $schema->string()->nullable()
-                : $schema->string()->enum(array_map(strval(...), array_keys($this->candidates)))->nullable(),
+            'location_id' => ($this->candidates === []
+                ? $schema->string()
+                : $schema->string()->enum(array_map(strval(...), array_keys($this->candidates))))->nullable()->required(),
         ];
     }
 }

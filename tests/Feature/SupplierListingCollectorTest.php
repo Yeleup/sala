@@ -294,6 +294,35 @@ test('an undownloadable voice message asks to rephrase without spending an attem
     ListingExtractionAgent::assertNeverPrompted();
 });
 
+test('the extractor sees the bot\'s last question as context for a short reply', function () {
+    ListingExtractionAgent::fake([fullExtraction()]);
+    $session = collectorSession(['last_question' => 'Какая цена или тариф?', 'transcript' => ['Сдаю трактор']]);
+
+    fakeCollectorMessenger()->shouldReceive('sendButtons')->once();
+
+    app(SupplierListingCollector::class)->resume($session, supplierAiNode(), new InboundMessage(text: 'не надо'));
+
+    // Короткий ответ («не надо») читается только против вопроса, на который
+    // отвечает, — без вопроса бота в промпте модель гадает вслепую и может
+    // принять отказ от просьбы за отказ от размещения.
+    ListingExtractionAgent::assertPrompted(
+        fn ($prompt): bool => $prompt->contains('Какая цена или тариф?') && $prompt->contains('не надо'),
+    );
+});
+
+test('during confirmation the extractor knows the summary and the photo ask were shown', function () {
+    ListingExtractionAgent::fake([fullExtraction()]);
+    $session = collectorSession(['phase' => 'confirming', 'transcript' => ['Сдаю трактор'], 'fields' => fullExtraction()]);
+
+    fakeCollectorMessenger()->shouldReceive('sendButtons')->once();
+
+    app(SupplierListingCollector::class)->resume($session, supplierAiNode(), new InboundMessage(text: 'не надо'));
+
+    ListingExtractionAgent::assertPrompted(
+        fn ($prompt): bool => $prompt->contains('сводку') && $prompt->contains('фотографии'),
+    );
+});
+
 test('an undownloadable photo asks to rephrase without spending an attempt', function () {
     ListingExtractionAgent::fake()->preventStrayPrompts();
     $session = collectorSession();

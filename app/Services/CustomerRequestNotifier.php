@@ -31,6 +31,16 @@ class CustomerRequestNotifier
         $declineId = NotificationReplyHandler::requestDeclineId($request);
 
         try {
+            $template = WhatsappTemplate::query()
+                ->approved()
+                ->where('name', WhatsappTemplateLibrary::NEW_CUSTOMER_REQUEST)
+                ->first();
+
+            $templateParameters = [
+                $request->listing->displayName() ?: 'без названия',
+                Str::limit($request->query_text, 200),
+            ];
+
             if ($supplier->hasOpenSessionWindow()) {
                 $this->messenger->sendButtons(
                     $supplier,
@@ -43,15 +53,14 @@ class CustomerRequestNotifier
                         ['id' => $acceptId, 'title' => self::BUTTON_ACCEPT_TITLE],
                         ['id' => $declineId, 'title' => self::BUTTON_DECLINE_TITLE],
                     ],
+                    // Plan B: the window can close after Dereu accepts the
+                    // message — the async rejection then re-sends through
+                    // the template with the same button payloads.
+                    fallback: $template === null ? null : new TemplateFallback($template, $templateParameters, [$acceptId, $declineId]),
                 );
 
                 return;
             }
-
-            $template = WhatsappTemplate::query()
-                ->approved()
-                ->where('name', WhatsappTemplateLibrary::NEW_CUSTOMER_REQUEST)
-                ->first();
 
             if ($template === null) {
                 Log::warning('No approved new_customer_request template — the supplier was not notified.', [
@@ -64,10 +73,7 @@ class CustomerRequestNotifier
             $this->messenger->sendTemplate(
                 $supplier,
                 $template,
-                [
-                    $request->listing->displayName() ?: 'без названия',
-                    Str::limit($request->query_text, 200),
-                ],
+                $templateParameters,
                 [$acceptId, $declineId],
             );
         } catch (Throwable $e) {

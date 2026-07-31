@@ -159,6 +159,51 @@ test('an event of our own company is processed', function () {
     expect(Contact::count())->toBe(1);
 });
 
+test('a reaction neither reaches the engine nor moves the session window', function () {
+    test()->mock(BotEngine::class)->shouldNotReceive('handle');
+    $this->freezeTime();
+
+    // Реакция — не сообщение: 👍 на реплику бота не должен запускать
+    // приветствие, собирать страйки «нечитаемого» в AI-блоке и — главное —
+    // «открывать» 24-часовое окно, которого Meta на своей стороне не открыла.
+    $contact = Contact::factory()->create([
+        'phone' => '77011234567',
+        'last_inbound_at' => now()->subDays(2),
+    ]);
+
+    $event = inboundMessageEvent([
+        'type' => 'reaction',
+        'timestamp' => now()->timestamp,
+        'payload' => ['emoji' => '👍', 'message_id' => 'wamid.reacted'],
+    ]);
+
+    runDereuWebhookJob($event);
+
+    expect($contact->fresh()->last_inbound_at->timestamp)->toBe(now()->subDays(2)->timestamp)
+        ->and($event->fresh()->processed_at)->not->toBeNull();
+});
+
+test('a system message neither reaches the engine nor moves the session window', function () {
+    test()->mock(BotEngine::class)->shouldNotReceive('handle');
+    $this->freezeTime();
+
+    $contact = Contact::factory()->create([
+        'phone' => '77011234567',
+        'last_inbound_at' => now()->subDays(2),
+    ]);
+
+    $event = inboundMessageEvent([
+        'type' => 'system',
+        'timestamp' => now()->timestamp,
+        'payload' => ['body' => 'User changed number'],
+    ]);
+
+    runDereuWebhookJob($event);
+
+    expect($contact->fresh()->last_inbound_at->timestamp)->toBe(now()->subDays(2)->timestamp)
+        ->and($event->fresh()->processed_at)->not->toBeNull();
+});
+
 test('a job that died apologizes to the contact and marks the event processed', function () {
     $contact = Contact::factory()->create(['phone' => '77011234567', 'last_inbound_at' => now()]);
     $event = inboundMessageEvent();

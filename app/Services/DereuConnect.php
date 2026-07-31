@@ -60,7 +60,6 @@ class DereuConnect
         string $nonce,
         int $ttlSeconds = 600,
         ?string $companyName = null,
-        ?string $accountMode = null,
     ): string {
         $this->ensureConfigured();
 
@@ -73,10 +72,6 @@ class DereuConnect
 
         if (filled($companyName)) {
             $payload['company_name'] = $companyName;
-        }
-
-        if (filled($accountMode)) {
-            $payload['account_mode'] = $accountMode;
         }
 
         $data = static::base64UrlEncode(
@@ -96,7 +91,11 @@ class DereuConnect
      * Returns null when the signature or payload is invalid — treat as a
      * refusal. The caller must additionally consume the nonce as one-time.
      *
-     * @return array{dereu_company_id: string, phone_number_id: string, waba_id: string, status: string, nonce: string, transferred?: bool}|null
+     * display_phone_number is optional on purpose: Dereu fetches it from Meta
+     * softly, so it is absent both when Graph did not answer and when Dereu
+     * itself is older than the field.
+     *
+     * @return array{dereu_company_id: string, phone_number_id: string, waba_id: string, status: string, nonce: string, transferred?: bool, display_phone_number?: string|null}|null
      */
     public function verifyResult(string $result, string $signature): ?array
     {
@@ -124,7 +123,7 @@ class DereuConnect
             }
         }
 
-        /** @var array{dereu_company_id: string, phone_number_id: string, waba_id: string, status: string, nonce: string, transferred?: bool} $data */
+        /** @var array{dereu_company_id: string, phone_number_id: string, waba_id: string, status: string, nonce: string, transferred?: bool, display_phone_number?: string|null} $data */
         return $data;
     }
 

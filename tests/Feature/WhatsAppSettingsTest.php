@@ -46,6 +46,7 @@ function signedDereuConnectResult(array $overrides = []): array
     $data = array_merge([
         'dereu_company_id' => 'co_abc123',
         'phone_number_id' => '1234567890',
+        'display_phone_number' => '+7 700 123 45 67',
         'waba_id' => '9876543210',
         'status' => 'connected',
         'nonce' => 'test-nonce',
@@ -55,7 +56,6 @@ function signedDereuConnectResult(array $overrides = []): array
 
     return [$result, DereuConnect::sign($result, 'consec_test_secret')];
 }
-
 
 test('guests are redirected to the panel login', function () {
     auth()->logout();
@@ -101,37 +101,14 @@ test('the connect action redirects to a signed hosted signup url and stores a on
     expect(Cache::get('dereu:connect-nonce:test-nonce'))->toBeTrue();
 });
 
-test('the connect coexistence action redirects to a signed hosted signup url with account_mode', function () {
-    Str::createRandomStringsUsing(fn (): string => 'test-nonce');
-    $this->freezeTime();
-
-    $expectedUrl = app(DereuConnect::class)->connectUrl(
-        externalId: 'org_test',
-        returnUrl: WhatsAppSettings::getUrl(),
-        nonce: 'test-nonce',
-        companyName: (string) config('app.name'),
-        accountMode: 'coexistence',
-    );
-
-    Livewire::test(WhatsAppSettings::class)
-        ->callAction('connectCoexistence')
-        ->assertRedirect($expectedUrl);
-
-    expect(Cache::get('dereu:connect-nonce:test-nonce'))->toBeTrue();
+test('the connect action is visible when the number is not connected', function () {
+    Livewire::test(WhatsAppSettings::class)->assertActionVisible('connect');
 });
 
-test('both connect actions are visible when the number is not connected', function () {
-    Livewire::test(WhatsAppSettings::class)
-        ->assertActionVisible('connect')
-        ->assertActionVisible('connectCoexistence');
-});
-
-test('both connect actions are hidden once the number is connected', function () {
+test('the connect action is hidden once the number is connected', function () {
     connectedDereuCompany();
 
-    Livewire::test(WhatsAppSettings::class)
-        ->assertActionHidden('connect')
-        ->assertActionHidden('connectCoexistence');
+    Livewire::test(WhatsAppSettings::class)->assertActionHidden('connect');
 });
 
 test('a valid OUT redirect stores the company and re-issues its api key', function () {
@@ -148,6 +125,7 @@ test('a valid OUT redirect stores the company and re-issues its api key', functi
     expect($company->external_id)->toBe('org_test')
         ->and($company->dereu_company_id)->toBe('co_abc123')
         ->and($company->phone_number_id)->toBe('1234567890')
+        ->and($company->display_phone_number)->toBe('+7 700 123 45 67')
         ->and($company->waba_id)->toBe('9876543210')
         ->and($company->status)->toBe(DereuCompanyStatus::Connected)
         ->and($company->api_key)->toBe('dereu_new_key')
@@ -160,6 +138,43 @@ test('a valid OUT redirect stores the company and re-issues its api key', functi
     });
 
     expect(collect(session('filament.notifications'))->pluck('title'))->toContain('WhatsApp подключён');
+});
+
+test('an OUT redirect without a display phone number still connects', function () {
+    Http::fake([
+        'dereu.test/api/v1/platform/companies/org_test/api-key/reissue' => Http::response(['api_key' => 'dereu_new_key']),
+    ]);
+    Cache::put('dereu:connect-nonce:test-nonce', true, 600);
+    // Dereu тянет номер из Meta мягко: поля нет и когда Graph не ответил.
+    [$result, $signature] = signedDereuConnectResult(['display_phone_number' => null]);
+
+    $this->get(WhatsAppSettings::getUrl(['result' => $result, 'sig' => $signature]))
+        ->assertRedirect(WhatsAppSettings::getUrl());
+
+    $company = DereuCompany::sole();
+    expect($company->status)->toBe(DereuCompanyStatus::Connected)
+        ->and($company->display_phone_number)->toBeNull();
+});
+
+test('a signup without a display phone number clears the one left from the previous number', function () {
+    connectedDereuCompany([
+        'status' => DereuCompanyStatus::Deactivated,
+        'display_phone_number' => '+7 700 000 00 00',
+        'api_key' => null,
+    ]);
+
+    Http::fake([
+        'dereu.test/api/v1/platform/companies/org_test/api-key/reissue' => Http::response(['api_key' => 'dereu_new_key']),
+    ]);
+    Cache::put('dereu:connect-nonce:test-nonce', true, 600);
+    [$result, $signature] = signedDereuConnectResult(['display_phone_number' => null]);
+
+    $this->get(WhatsAppSettings::getUrl(['result' => $result, 'sig' => $signature]))
+        ->assertRedirect(WhatsAppSettings::getUrl());
+
+    // Прежний номер относился к прежнему phone_number_id — показывать его как
+    // подключённый было бы неправдой.
+    expect(DereuCompany::sole()->display_phone_number)->toBeNull();
 });
 
 test('an OUT redirect marked as transferred connects and reports the number move', function () {
@@ -262,6 +277,7 @@ test('the company is kept even when the api key re-issue fails', function () {
 test('the connected state shows the number details', function () {
     connectedDereuCompany([
         'phone_number_id' => '111222333',
+        'display_phone_number' => '+7 707 111 22 33',
         'waba_id' => '999888777',
         'dereu_company_id' => 'co_visible',
     ]);
@@ -269,9 +285,19 @@ test('the connected state shows the number details', function () {
     $this->get(WhatsAppSettings::getUrl())
         ->assertOk()
         ->assertSee('Подключённый номер')
+        ->assertSee('+7 707 111 22 33')
         ->assertSee('111222333')
         ->assertSee('999888777')
         ->assertSee('co_visible');
+});
+
+test('the connected state stays readable when Meta gave no display phone number', function () {
+    connectedDereuCompany(['display_phone_number' => null, 'phone_number_id' => '111222333']);
+
+    $this->get(WhatsAppSettings::getUrl())
+        ->assertOk()
+        ->assertSee('Meta не отдала номер')
+        ->assertSee('111222333');
 });
 
 test('the disconnect action deprovisions the company and deactivates it locally', function () {

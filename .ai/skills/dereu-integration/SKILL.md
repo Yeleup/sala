@@ -96,7 +96,8 @@ Content-Type: application/json
   значения `cloud_api`/`smb_coexistence` как есть — приводить вручную не нужно.
   ⚠️ Для hosted-connect (§2b, redirect/widget) поле `account_mode` нужно класть в payload `d` ЯВНО — без
   него сервер дефолтит `business_only`, и coexistence-режим не активируется.
-- **201**: `{ "dereu_company_id": "...", "phone_number_id": "...", "status": "connected", "transferred": false, "catalogs": { "owned": [...], "waba": [...] } }`
+- **201**: `{ "dereu_company_id": "...", "phone_number_id": "...", "display_phone_number": "+7 700 123 45 67", "status": "connected", "transferred": false, "catalogs": { "owned": [...], "waba": [...] } }`
+  — `display_phone_number` может быть `null` (Graph не отдал номер; подключение это не валит).
   — каталоги Meta Commerce приходят сразу в этом ответе при подключении через `code`, отдельный
   `GET .../catalogs` обычно не нужен. Для coexistence/SMB-номеров `waba` в каталогах будет пустым
   (ограничение Meta) — используйте `owned`.
@@ -151,7 +152,7 @@ $p   = explode('.', substr($platformKey, strlen('plat_')), 2)[0];   // key_prefi
 ```
 
 **2. Верификация OUT-редиректа** `return_url?result=<b64>&sig=<hmac>` (`result` =
-`{dereu_company_id, phone_number_id, waba_id, status, nonce, transferred}`):
+`{dereu_company_id, phone_number_id, display_phone_number, waba_id, status, nonce, transferred, account_mode}`):
 
 ```php
 $expected = b64url(hash_hmac('sha256', $_GET['result'], $connectSigningSecret, true));
@@ -165,6 +166,11 @@ if ($data['status'] !== 'connected') { abort(409); }   // pending=ждать, su
 `status` — `WabaStatus` подключённой WABA: `connected` (успех, единственный статус happy-path) \|
 `pending` (заведена, ещё не подтверждена Meta — не declined, дозреет до `connected`) \| `suspended` \|
 `deleted` (отказ). **Литерала `success` НЕТ** — проверяйте `status === 'connected'`.
+
+`display_phone_number` (string\|null) и `account_mode` — аддитивные поля: подпись считается по строке
+`result` целиком, поэтому верификатор прежних полей от их появления не ломается. `display_phone_number` —
+человекочитаемый номер от Meta, его и показывают администратору вместо нечитаемого `phone_number_id`;
+`null` — Graph номер не отдал (подключение это не валит), обязательным полем его считать нельзя.
 
 `transferred` (boolean, входит в подписанный `result`-blob) — `true`, если подключение стало переносом
 номера от другого партнёра (owner-consented move, см. §2). Успешный чужой номер на hosted-пути — всегда

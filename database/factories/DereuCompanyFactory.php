@@ -25,6 +25,7 @@ class DereuCompanyFactory extends Factory
             'dereu_company_id' => 'co_'.Str::lower(Str::random(8)),
             'waba_id' => (string) fake()->unique()->numerify('##########'),
             'phone_number_id' => (string) fake()->unique()->numerify('##########'),
+            'display_phone_number' => '+7 '.fake()->unique()->numerify('7## ### ## ##'),
             'api_key' => 'dereu_'.Str::random(24),
             'status' => DereuCompanyStatus::Connected,
             'connected_at' => now(),

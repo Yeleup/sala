@@ -54,22 +54,7 @@ test('connectUrl omits the company name when it is not given', function () {
     expect($payload)->not->toHaveKey('company_name');
 });
 
-test('connectUrl adds account_mode to the payload when coexistence is requested', function () {
-    $url = dereuConnectService()->connectUrl(
-        externalId: 'org_123',
-        returnUrl: 'https://app.partner.test/done',
-        nonce: 'nonce-value',
-        accountMode: 'coexistence',
-    );
-
-    parse_str(explode('?', $url, 2)[1], $params);
-    $payload = json_decode((string) DereuConnect::base64UrlDecode($params['d']), true);
-
-    expect($payload)->toHaveKey('account_mode', 'coexistence')
-        ->and($params['sig'])->toBe(DereuConnect::sign($params['d'], 'consec_test_secret'));
-});
-
-test('connectUrl omits account_mode by default, defaulting Dereu to business_only', function () {
+test('connectUrl never requests an account mode: the client picks it inside the Meta popup', function () {
     $url = dereuConnectService()->connectUrl('org_123', 'https://app.partner.test/done', 'nonce-value');
 
     parse_str(explode('?', $url, 2)[1], $params);
@@ -102,6 +87,29 @@ test('verifyResult decodes a correctly signed OUT redirect', function () {
     $signature = DereuConnect::sign($result, 'consec_test_secret');
 
     expect(dereuConnectService()->verifyResult($result, $signature))->toBe($data);
+});
+
+test('verifyResult keeps the additive display phone number but does not require it', function () {
+    $data = [
+        'dereu_company_id' => 'co_abc123',
+        'phone_number_id' => '1234567890',
+        'display_phone_number' => '+7 700 123 45 67',
+        'waba_id' => '9876543210',
+        'status' => 'connected',
+        'nonce' => 'nonce-value',
+    ];
+
+    $result = DereuConnect::base64UrlEncode((string) json_encode($data, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE));
+
+    expect(dereuConnectService()->verifyResult($result, DereuConnect::sign($result, 'consec_test_secret')))
+        ->toBe($data);
+
+    // Пустое значение — не повод отвергнуть подключение: Dereu тянет номер из
+    // Meta мягко и присылает null, когда Graph его не отдал.
+    $withoutNumber = DereuConnect::base64UrlEncode((string) json_encode(['display_phone_number' => null] + $data));
+
+    expect(dereuConnectService()->verifyResult($withoutNumber, DereuConnect::sign($withoutNumber, 'consec_test_secret')))
+        ->not->toBeNull();
 });
 
 test('verifyResult rejects a wrong signature', function () {

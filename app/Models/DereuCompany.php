@@ -15,7 +15,7 @@ use Illuminate\Database\Eloquent\Model;
  * The project currently uses a single number, so at most one row exists —
  * the one whose external_id matches services.dereu.external_id.
  */
-#[Fillable(['external_id', 'name', 'dereu_company_id', 'waba_id', 'phone_number_id', 'api_key', 'status', 'connected_at'])]
+#[Fillable(['external_id', 'name', 'dereu_company_id', 'waba_id', 'phone_number_id', 'display_phone_number', 'api_key', 'status', 'connected_at'])]
 #[Hidden(['api_key'])]
 class DereuCompany extends Model
 {

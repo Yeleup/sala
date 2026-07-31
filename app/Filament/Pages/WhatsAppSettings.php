@@ -93,17 +93,6 @@ class WhatsAppSettings extends Page
                 ->visible(fn (): bool => $this->missingConfigKeys() === [] && ! $this->company?->isConnected())
                 ->action(fn () => $this->startConnect()),
 
-            Action::make('connectCoexistence')
-                ->label('Подключить в режиме Coexistence')
-                ->icon(Heroicon::OutlinedDevicePhoneMobile)
-                ->color('gray')
-                ->visible(fn (): bool => $this->missingConfigKeys() === [] && ! $this->company?->isConnected())
-                ->requiresConfirmation()
-                ->modalHeading('Подключить в режиме Coexistence?')
-                ->modalDescription('Номер продолжит работать в приложении WhatsApp Business на телефоне параллельно с Cloud API. Условия: номер должен быть заранее зарегистрирован в свежей версии WhatsApp Business App на телефоне; доступность режима зависит от страны номера.')
-                ->modalSubmitActionLabel('Подключить')
-                ->action(fn () => $this->startConnect(accountMode: 'coexistence')),
-
             Action::make('reissueApiKey')
                 ->label('Перевыпустить API-ключ')
                 ->icon(Heroicon::OutlinedKey)
@@ -140,6 +129,11 @@ class WhatsAppSettings extends Page
                 ->visible(fn (): bool => (bool) $this->company?->isConnected())
                 ->columns(2)
                 ->schema([
+                    TextEntry::make('display_phone_number')
+                        ->label('Номер телефона')
+                        ->state(fn (): ?string => $this->company?->display_phone_number)
+                        ->placeholder('Meta не отдала номер')
+                        ->copyable(),
                     TextEntry::make('phone_number_id')
                         ->label('ID номера (phone_number_id)')
                         ->state(fn (): ?string => $this->company?->phone_number_id)
@@ -203,7 +197,7 @@ class WhatsAppSettings extends Page
      * Start Hosted Embedded Signup: remember a one-time nonce and send the
      * browser to the signed connect.dereu.* URL.
      */
-    protected function startConnect(?string $accountMode = null): void
+    protected function startConnect(): void
     {
         $nonce = Str::random(32);
 
@@ -215,7 +209,6 @@ class WhatsAppSettings extends Page
             nonce: $nonce,
             ttlSeconds: self::CONNECT_TTL_SECONDS,
             companyName: (string) config('app.name'),
-            accountMode: $accountMode,
         ));
     }
 
@@ -280,6 +273,10 @@ class WhatsAppSettings extends Page
                 'dereu_company_id' => $data['dereu_company_id'],
                 'waba_id' => $data['waba_id'],
                 'phone_number_id' => $data['phone_number_id'],
+                // Пишется и когда Dereu номер не прислал: значение описывает
+                // ТЕКУЩИЙ phone_number_id, а сохранённый от прежнего номера
+                // показывал бы администратору чужой номер как подключённый.
+                'display_phone_number' => $data['display_phone_number'] ?? null,
                 'status' => DereuCompanyStatus::Connected,
                 'connected_at' => now(),
             ],

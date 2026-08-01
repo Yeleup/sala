@@ -232,6 +232,14 @@ if (! hash_equals($expected, (string) $signature)) {
 - `type` известные значения: `text`, `image`, `video`, `audio`, `document`, `sticker`, `location`,
   `interactive`, `button`, `order`, `contacts`, `reaction`, `system`, `unsupported` — список не закрыт,
   не падайте на неизвестном `type`.
+- Статусы доставки исходящих (`message_sent`, `message_delivered`, `message_read`, `message_failed`)
+  несут `message_id` (id из ответа `/messages/send`) и `wamid`. У `message_failed` ключа `wamid` может
+  не быть: при синхронном отказе Meta отклоняет сообщение до присвоения wamid — матчьте failed-события
+  по `message_id`. `message_failed` дополнительно несёт `reason` (string|null) — человекочитаемую
+  причину отказа. Формат не гарантирован: для отказов Meta обычно `meta error {code}: {message}`
+  (при асинхронном отказе — с расшифровкой `error_data.details`, например про закрытое 24-часовое окно,
+  код `131047`), при инфраструктурном сбое отправки — текст ошибки; `null` — причина неизвестна.
+  Ищите код ошибки подстрокой, не парсите строку строго.
 - `template_status_update` — статус шаблона в Meta изменился (модерация). У этого события нет `from`/
   `wamid`/`type`, форма другая:
 

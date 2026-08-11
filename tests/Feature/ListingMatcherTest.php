@@ -1,5 +1,7 @@
 <?php
 
+use App\Enums\ListingKind;
+use App\Enums\RepairPlace;
 use App\Models\Listing;
 use App\Models\ListingEmbedding;
 use App\Services\Ai\ListingEmbeddings;
@@ -237,6 +239,66 @@ test('опечатка в марке исправляется по справо�
     ]);
 
     expect(app(ListingMatcher::class)->match('hitachy')->pluck('id')->all())->toBe([$hitachi->id]);
+});
+
+test('поиск по виду не показывает чужие виды', function () {
+    fakeSemanticSpace();
+
+    $rental = Listing::factory()->published()->create(['title' => 'Аренда экскаватора', 'description' => 'копаем', 'price' => '10000']);
+    $driver = Listing::factory()->driver()->published()->create(['title' => 'Машинист экскаватора', 'person_name' => 'Иван']);
+
+    $found = app(ListingMatcher::class)->matchAll('экскаватор', kind: ListingKind::Driver);
+
+    expect($found->pluck('id'))->toContain($driver->id)->not->toContain($rental->id);
+});
+
+test('фильтр выезда жёсткий и свой у каждого вида', function () {
+    fakeSemanticSpace();
+
+    $stays = Listing::factory()->repair()->published()->create(['repair_place' => RepairPlace::OwnService, 'services' => 'гидравлика']);
+    $travels = Listing::factory()->repair()->published()->create(['repair_place' => RepairPlace::Both, 'services' => 'гидравлика']);
+
+    $found = app(ListingMatcher::class)->matchAll('гидравлика', kind: ListingKind::Repair, filters: ['needs_travel' => true]);
+
+    expect($found->pluck('id'))->toContain($travels->id)->not->toContain($stays->id);
+});
+
+test('фильтр выезда водителя отсекает не готовых выезжать', function () {
+    fakeSemanticSpace();
+
+    $stays = Listing::factory()->driver()->published()->create([
+        'travels_to_other_cities' => false,
+        'description' => 'Машинист экскаватора, стаж восемь лет.',
+    ]);
+    $travels = Listing::factory()->driver()->published()->create([
+        'travels_to_other_cities' => true,
+        'description' => 'Машинист экскаватора, стаж восемь лет.',
+    ]);
+
+    $found = app(ListingMatcher::class)->matchAll('экскаватор', kind: ListingKind::Driver, filters: ['needs_travel' => true]);
+
+    expect($found->pluck('id'))->toContain($travels->id)->not->toContain($stays->id);
+});
+
+test('слова полей вида находят объявление по пересечению слов', function () {
+    fakeSemanticSpace();
+
+    $master = Listing::factory()->repair()->published()->create(['person_name' => 'Сергей', 'services' => 'сварочные работы']);
+
+    expect(app(ListingMatcher::class)->matchAll('сварочные', kind: ListingKind::Repair)->pluck('id'))
+        ->toContain($master->id);
+});
+
+test('техника из анкеты водителя ищется по названию категории', function () {
+    fakeSemanticSpace();
+
+    $driver = Listing::factory()->driver()->published()->create([
+        'description' => 'Работаю аккуратно, без простоев.',
+    ]);
+    $driver->machineCategories()->sync([categoryNamed('Самосвал')->id]);
+
+    expect(app(ListingMatcher::class)->matchAll('самосвал', kind: ListingKind::Driver)->pluck('id'))
+        ->toContain($driver->id);
 });
 
 test('слово без близкого словарного не притягивается к категориям', function () {

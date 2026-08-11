@@ -2,6 +2,8 @@
 
 namespace App\Services\Ai;
 
+use App\Enums\ListingKind;
+use App\Enums\RepairPlace;
 use App\Models\Brand;
 use App\Models\Category;
 use App\Models\Listing;
@@ -78,22 +80,26 @@ class ListingMatcher
 
     /**
      * The chat list: the top of the full ranking, capped to what a
-     * WhatsApp list message can hold.
+     * WhatsApp list message can hold. A kind narrows the search to one
+     * questionnaire; the structural filters are hard SQL conditions on
+     * that kind's fields (see baseQuery()).
      *
+     * @param  array{needs_travel?: bool}  $filters
      * @return Collection<int, Listing>
      */
-    public function match(string $query, ?Location $within = null): Collection
+    public function match(string $query, ?Location $within = null, ?ListingKind $kind = null, array $filters = []): Collection
     {
-        return $this->matchAll($query, $within)->take(self::MAX_RESULTS)->values();
+        return $this->matchAll($query, $within, $kind, $filters)->take(self::MAX_RESULTS)->values();
     }
 
     /**
      * The full ranking without the chat cap — the customer web catalog
      * shows every match, paginated on its side.
      *
+     * @param  array{needs_travel?: bool}  $filters
      * @return Collection<int, Listing>
      */
-    public function matchAll(string $query, ?Location $within = null): Collection
+    public function matchAll(string $query, ?Location $within = null, ?ListingKind $kind = null, array $filters = []): Collection
     {
         $tokens = $this->tokenize($query);
 
@@ -109,8 +115,8 @@ class ListingMatcher
         $vector = DB::getDriverName() === 'pgsql' ? $this->embeddings->queryVector($embeddingQuery) : null;
 
         $ranked = $vector === null
-            ? $this->rankByKeywords($tokens, $corrections, $within)
-            : $this->rankHybrid($embeddingQuery, $tokens, $corrections, $vector, $within);
+            ? $this->rankByKeywords($tokens, $corrections, $within, $kind, $filters)
+            : $this->rankHybrid($embeddingQuery, $tokens, $corrections, $vector, $within, $kind, $filters);
 
         return $ranked
             ->sortBy([['score', 'desc'], ['listing.created_at', 'desc']])
@@ -121,11 +127,12 @@ class ListingMatcher
     /**
      * @param  list<string>  $tokens
      * @param  array<string, string>  $corrections
+     * @param  array{needs_travel?: bool}  $filters
      * @return Collection<int, array{listing: Listing, score: float}>
      */
-    protected function rankByKeywords(array $tokens, array $corrections, ?Location $within): Collection
+    protected function rankByKeywords(array $tokens, array $corrections, ?Location $within, ?ListingKind $kind, array $filters): Collection
     {
-        return $this->baseQuery($within)
+        return $this->baseQuery($within, $kind, $filters)
             ->get()
             ->map(fn (Listing $listing): array => [
                 'listing' => $listing,
@@ -143,11 +150,12 @@ class ListingMatcher
      * @param  list<string>  $tokens
      * @param  array<string, string>  $corrections
      * @param  array<float>  $vector
+     * @param  array{needs_travel?: bool}  $filters
      * @return Collection<int, array{listing: Listing, score: float}>
      */
-    protected function rankHybrid(string $query, array $tokens, array $corrections, array $vector, ?Location $within): Collection
+    protected function rankHybrid(string $query, array $tokens, array $corrections, array $vector, ?Location $within, ?ListingKind $kind, array $filters): Collection
     {
-        $ranked = $this->baseQuery($within)
+        $ranked = $this->baseQuery($within, $kind, $filters)
             ->leftJoin('listing_embeddings', 'listing_embeddings.listing_id', '=', 'listings.id')
             ->select('listings.*')
             ->selectRaw(
@@ -185,13 +193,28 @@ class ListingMatcher
     }
 
     /**
+     * The kind and the structural filters are hard SQL conditions, not
+     * ranking signals: a customer who asked for a driver must never see
+     * rentals, and «с выездом» must not surface masters who stay in
+     * their own shop, however similar the text.
+     *
+     * @param  array{needs_travel?: bool}  $filters
      * @return Builder<Listing>
      */
-    protected function baseQuery(?Location $within): Builder
+    protected function baseQuery(?Location $within, ?ListingKind $kind, array $filters): Builder
     {
         return Listing::query()
             ->searchable()
-            ->with(['supplier', 'category', 'brand', 'location'])
+            ->with(['supplier', 'category', 'brand', 'location', 'machineCategories'])
+            ->when($kind, fn (Builder $builder): Builder => $builder->where('kind', $kind))
+            ->when(
+                $kind === ListingKind::Repair && ($filters['needs_travel'] ?? false),
+                fn (Builder $builder): Builder => $builder->whereIn('repair_place', [RepairPlace::Travels, RepairPlace::Both]),
+            )
+            ->when(
+                $kind === ListingKind::Driver && ($filters['needs_travel'] ?? false),
+                fn (Builder $builder): Builder => $builder->where('travels_to_other_cities', true),
+            )
             ->when($within, fn (Builder $builder): Builder => $builder->whereHas(
                 'location',
                 fn (Builder $location) => $location->where('path', 'like', $within->path.'%'),
@@ -208,6 +231,9 @@ class ListingMatcher
             $listing->title,
             $listing->category?->name,
             $listing->brand?->name,
+            $listing->person_name,
+            $listing->services,
+            $listing->machineCategories->pluck('name')->implode(' '),
             $listing->description,
             $listing->location?->name,
             $listing->location?->search_name,

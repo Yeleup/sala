@@ -52,9 +52,12 @@ class Listing extends Model
 
     /**
      * The searchable text fields whose change makes the semantic search
-     * vector stale (see ListingEmbeddings::sourceText()).
+     * vector stale (see ListingEmbeddings::sourceText()). The driver's
+     * machine categories live on a pivot and fire no attribute event —
+     * the places that sync the pivot of a published listing dispatch
+     * GenerateListingEmbedding themselves.
      */
-    private const array EMBEDDING_SOURCE_FIELDS = ['status', 'title', 'category_id', 'brand_id', 'description', 'location_id', 'location_detail'];
+    private const array EMBEDDING_SOURCE_FIELDS = ['status', 'kind', 'title', 'category_id', 'brand_id', 'description', 'location_id', 'location_detail', 'person_name', 'services'];
 
     /**
      * Media rows go away with the listing via the DB cascade, but the

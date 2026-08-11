@@ -5,9 +5,11 @@ use App\Ai\Agents\LocationChoiceAgent;
 use App\Enums\AiOperationType;
 use App\Enums\AiOutcome;
 use App\Enums\BotReplyKey;
+use App\Enums\LicenceType;
 use App\Enums\ListingKind;
 use App\Enums\ListingMediaType;
 use App\Enums\ListingStatus;
+use App\Enums\RepairPlace;
 use App\Models\AiOperation;
 use App\Models\BotReplyText;
 use App\Models\BotSession;
@@ -35,6 +37,22 @@ uses(RefreshDatabase::class);
 function supplierAiNode(): array
 {
     return ['id' => 'collect', 'type' => 'ai', 'task' => 'collect_listing'];
+}
+
+/**
+ * @return array<string, mixed>
+ */
+function repairAiNode(): array
+{
+    return supplierAiNode() + ['kind' => 'repair'];
+}
+
+/**
+ * @return array<string, mixed>
+ */
+function driverAiNode(): array
+{
+    return supplierAiNode() + ['kind' => 'driver'];
 }
 
 /**
@@ -89,6 +107,59 @@ function fullExtraction(array $overrides = []): array
         'price' => '10000 тг/час',
         'clarifying_question' => '',
         'summary' => 'Трактор, Шымкент, 10000 тг/ч',
+    ], $overrides);
+}
+
+/**
+ * Ответ экстрактора для анкеты ремонта: цены и категории в ней нет,
+ * зато есть имя, услуги и место работы мастера.
+ *
+ * @param  array<string, mixed>  $overrides
+ * @return array<string, mixed>
+ */
+function repairExtraction(array $overrides = []): array
+{
+    locationNamed('г.Алматы');
+
+    return array_merge([
+        'title' => 'Ремонт гидравлики спецтехники',
+        'person_name' => 'Аскар',
+        'services' => 'диагностика, ремонт гидравлики',
+        'repair_place' => 'travels',
+        'description' => 'Ремонт гидравлики с выездом',
+        'location' => 'Алматы',
+        'location_detail' => null,
+        'price' => null,
+        'clarifying_question' => '',
+        'summary' => 'Ремонт гидравлики, с выездом, Алматы',
+    ], $overrides);
+}
+
+/**
+ * Ответ экстрактора для анкеты водителя. Категории техники — из
+ * операторского справочника, как и у аренды; готовность выезжать —
+ * false, потому что «нет» — это ответ, а не пропуск поля.
+ *
+ * @param  array<string, mixed>  $overrides
+ * @return array<string, mixed>
+ */
+function driverExtraction(array $overrides = []): array
+{
+    categoryNamed('Экскаватор');
+    locationNamed('г.Шымкент');
+
+    return array_merge([
+        'title' => 'Машинист экскаватора',
+        'person_name' => 'Ерлан',
+        'machine_categories' => ['Экскаватор'],
+        'licence_type' => 'tractor_operator',
+        'experience_years' => 8,
+        'travels_to_other_cities' => false,
+        'description' => 'Машинист экскаватора со стажем 8 лет',
+        'location' => 'Шымкент',
+        'location_detail' => null,
+        'clarifying_question' => '',
+        'summary' => 'Машинист экскаватора, стаж 8 лет, Шымкент',
     ], $overrides);
 }
 
@@ -684,6 +755,89 @@ test('промпт извлечения собирается из вида', fun
         ->not->toContain('Доступные марки')->not->toContain('Доступные категории')
         ->and($driver)->toContain('- Экскаватор')->toContain('tractor_operator')
         ->not->toContain('Доступные марки');
+});
+
+test('вид узла попадает в состояние и в черновик, приветствие — своё', function () {
+    $session = collectorSession();
+    fakeCollectorMessenger()->shouldReceive('sendText')->once()
+        ->withArgs(fn ($to, string $text) => str_contains($text, 'на какой технике'));
+
+    app(SupplierListingCollector::class)->start($session, driverAiNode());
+
+    expect($session->fresh()->state['kind'])->toBe('driver');
+});
+
+test('у ремонта сбор завершается без цены и категории', function () {
+    // person_name, services, repair_place и location заполнены; price=null —
+    // для анкеты ремонта этого достаточно: уходит сводка, а не вопрос.
+    ListingExtractionAgent::fake([repairExtraction()]);
+    $session = collectorSession(['kind' => 'repair']);
+    fakeCollectorMessenger()->shouldReceive('sendButtons')->once();
+
+    $outcome = app(SupplierListingCollector::class)
+        ->resume($session, repairAiNode(), new InboundMessage(text: 'ремонтирую гидравлику, выезжаю, Алматы'));
+
+    expect($outcome)->toBe(AiOutcome::InProgress)
+        ->and($session->fresh()->state['phase'])->toBe('confirming')
+        ->and(Listing::sole())
+        ->kind->toBe(ListingKind::Repair)
+        ->person_name->toBe('Аскар')
+        ->services->toBe('диагностика, ремонт гидравлики')
+        ->repair_place->toBe(RepairPlace::Travels)
+        ->price->toBeNull();
+});
+
+test('лимит уточнений у водителя — шесть', function () {
+    ListingExtractionAgent::fake([driverExtraction(['person_name' => null])]);
+    $session = collectorSession(['kind' => 'driver', 'attempts' => 5]);
+    fakeCollectorMessenger()->shouldReceive('sendText')->once();      // ещё вопрос, не веб-форма
+
+    app(SupplierListingCollector::class)->resume($session, driverAiNode(), new InboundMessage(text: 'стаж 8 лет'));
+
+    expect($session->fresh()->state['attempts'])->toBe(6);
+});
+
+test('полное описание водителя заполняет поля вида и привязывает технику', function () {
+    ListingExtractionAgent::fake([driverExtraction()]);
+    $session = collectorSession(['kind' => 'driver']);
+
+    fakeCollectorMessenger()->shouldReceive('sendButtons')->once();
+
+    $outcome = app(SupplierListingCollector::class)->resume(
+        $session,
+        driverAiNode(),
+        new InboundMessage(text: 'Ерлан, машинист экскаватора, стаж 8 лет, Шымкент, не выезжаю'),
+    );
+
+    // «Не готов выезжать» — это ответ false, а не пропущенное поле:
+    // анкета считается полной и уходит на подтверждение.
+    expect($outcome)->toBe(AiOutcome::InProgress)
+        ->and($session->fresh()->state['phase'])->toBe('confirming')
+        ->and(Listing::sole())
+        ->kind->toBe(ListingKind::Driver)
+        ->person_name->toBe('Ерлан')
+        ->licence_type->toBe(LicenceType::TractorOperator)
+        ->experience_years->toBe(8)
+        ->travels_to_other_cities->toBeFalse()
+        ->and(Listing::sole()->machineCategories()->pluck('name')->all())->toBe(['Экскаватор']);
+});
+
+test('null в категориях техники не стирает ранее привязанную технику', function () {
+    // Поля пересобираются с нуля каждый ход: если на очередном ходе модель
+    // не вернула категории, привязанная раньше техника должна уцелеть.
+    ListingExtractionAgent::fake([driverExtraction(['machine_categories' => null, 'person_name' => null])]);
+
+    $draft = Listing::factory()->driver()->create();
+    $draft->machineCategories()->attach(categoryNamed('Экскаватор'));
+    $session = collectorSession(['kind' => 'driver', 'draft_id' => $draft->id, 'attempts' => 6]);
+
+    fakeCollectorMessenger()->shouldReceive('sendCtaUrl')->once();
+
+    $outcome = app(SupplierListingCollector::class)
+        ->resume($session, driverAiNode(), new InboundMessage(text: 'не помню'));
+
+    expect($outcome)->toBe(AiOutcome::Completed)
+        ->and($draft->machineCategories()->pluck('name')->all())->toBe(['Экскаватор']);
 });
 
 test('a missing title never blocks confirmation and never spends an attempt', function () {

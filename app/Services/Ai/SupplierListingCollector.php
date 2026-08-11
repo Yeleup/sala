@@ -40,12 +40,6 @@ use Throwable;
 class SupplierListingCollector
 {
     /**
-     * Clarification attempts before giving up and handing the supplier a
-     * CTA URL to fill the draft in manually (business rule: 2–3 attempts).
-     */
-    private const int MAX_CLARIFICATIONS = 3;
-
-    /**
      * Unreadable messages in a row (sticker, caption-less photo, silent
      * audio) before the collector stops asking and hands over the web
      * form. Without it the «просьба описать словами» loop is endless:
@@ -87,9 +81,6 @@ class SupplierListingCollector
      */
     private const int MAX_PHOTO_ATTACHMENTS = 5;
 
-    /** @var list<string> */
-    private const array REQUIRED_FIELDS = ['category', 'description', 'location_id', 'price'];
-
     public const string LOCATION_ROW_PREFIX = 'listing_location:';
 
     public const string BUTTON_SUBMIT = 'listing_submit';
@@ -118,7 +109,10 @@ class SupplierListingCollector
      */
     public function start(BotSession $session, array $node): AiOutcome
     {
+        $kind = ListingKind::fromNode($node['kind'] ?? null);
+
         $session->state = [
+            'kind' => $kind->value,
             'phase' => 'collecting',
             'attempts' => 0,
             'unreadable' => 0,
@@ -132,12 +126,14 @@ class SupplierListingCollector
             'picked_location_wording' => null,
             'declined_location_wording' => null,
             'last_question' => null,
+            'button_prompts' => [],
+            'awaiting_document' => false,
         ];
         $session->save();
 
         $this->messenger->sendText(
             $session->contact,
-            trim((string) ($node['text'] ?? '')) ?: 'Расскажите, что вы предлагаете: пришлите фото, голосовое или напишите текстом — что это, в каком городе и по какой цене.',
+            trim((string) ($node['text'] ?? '')) ?: $kind->greeting(),
         );
 
         return AiOutcome::InProgress;
@@ -267,11 +263,13 @@ class SupplierListingCollector
      */
     private function advance(BotSession $session, array $state): AiOutcome
     {
-        $missing = $this->missingFields($state['fields']);
+        $kind = $this->kind($state);
+        $missing = $this->missingFields($state['fields'], $kind);
 
         if ($missing === []) {
             $draft = $this->ensureDraft($session, $state);
             $draft->update($this->listingAttributes($state));
+            $this->syncMachineCategories($draft, $state);
             $state['phase'] = 'confirming';
             $this->persist($session, $state);
             $this->sendConfirmation($session, $state);
@@ -318,13 +316,13 @@ class SupplierListingCollector
             }
         }
 
-        if ($state['attempts'] >= self::MAX_CLARIFICATIONS) {
+        if ($state['attempts'] >= $kind->maxClarifications()) {
             return $this->handOffToWebForm($session, $state);
         }
 
         $state['attempts']++;
         $state['phase'] = 'collecting';
-        $state['last_question'] = $this->clarificationQuestion($state['fields'], $missing);
+        $state['last_question'] = $this->clarificationQuestion($state['fields'], $missing, $kind);
         $this->persist($session, $state);
         $this->messenger->sendText($session->contact, $state['last_question']);
 
@@ -342,6 +340,7 @@ class SupplierListingCollector
     {
         $draft = $this->ensureDraft($session, $state);
         $draft->update($this->listingAttributes($state));
+        $this->syncMachineCategories($draft, $state);
         $this->persist($session, $state);
 
         // Reached from the confirmation phase the data IS collected: the bot
@@ -374,9 +373,11 @@ class SupplierListingCollector
         $attributes = $this->listingAttributes($state);
 
         // An existing draft counts as content on its own — it may already
-        // hold photos or audio even when no field got extracted.
+        // hold photos or audio even when no field got extracted. The kind
+        // comes from the scenario node, not from the supplier, so it never
+        // counts as collected content.
         $hasContent = $state['draft_id'] !== null
-            || collect($attributes)->contains(fn (mixed $value): bool => filled($value));
+            || collect($attributes)->except('kind')->contains(fn (mixed $value): bool => filled($value));
 
         if (! $hasContent) {
             $this->persist($session, $state);
@@ -745,9 +746,18 @@ class SupplierListingCollector
      */
     private function extract(BotSession $session, array $state): ?array
     {
-        $categories = Category::query()->orderBy('name')->get();
+        $kind = $this->kind($state);
 
-        $brands = Brand::query()->orderBy('name')->get();
+        // Each kind carries only its own dictionaries: the rental picks a
+        // category and a brand, the driver picks machine categories, the
+        // repair questionnaire has neither.
+        $categories = $kind === ListingKind::Repair
+            ? new Collection
+            : Category::query()->orderBy('name')->get();
+
+        $brands = $kind === ListingKind::Rental
+            ? Brand::query()->orderBy('name')->get()
+            : new Collection;
 
         $prompt = $state['transcript'] !== []
             ? implode("\n", $state['transcript'])
@@ -762,10 +772,16 @@ class SupplierListingCollector
             $prompt = "Последнее сообщение бота поставщику: {$botMessage}\n\nСообщения поставщика:\n{$prompt}";
         }
 
+        $agent = match ($kind) {
+            ListingKind::Rental => new ListingExtractionAgent($kind, $categories->pluck('name')->all(), $brands->pluck('name')->all()),
+            ListingKind::Repair => new ListingExtractionAgent($kind),
+            ListingKind::Driver => new ListingExtractionAgent($kind, $categories->pluck('name')->all()),
+        };
+
         try {
             $fields = $this->audit->run(
                 AiOperationType::ListingExtraction,
-                fn (): array => (new ListingExtractionAgent(ListingKind::Rental, $categories->pluck('name')->all(), $brands->pluck('name')->all()))
+                fn (): array => $agent
                     ->prompt($prompt, attachments: $this->photoAttachments($state))
                     ->toArray(),
                 [
@@ -783,8 +799,18 @@ class SupplierListingCollector
             return null;
         }
 
-        $fields['category'] = $this->canonicalCategory($fields['category'] ?? null, $categories)?->name;
-        $fields['brand'] = $this->canonicalBrand($fields['brand'] ?? null, $brands)?->name;
+        if ($kind === ListingKind::Rental) {
+            $fields['category'] = $this->canonicalCategory($fields['category'] ?? null, $categories)?->name;
+            $fields['brand'] = $this->canonicalBrand($fields['brand'] ?? null, $brands)?->name;
+        }
+
+        if ($kind === ListingKind::Driver) {
+            // Null stays null: it means «not extracted yet», and later it
+            // must not erase machine categories synced on an earlier turn.
+            $fields['machine_categories'] = is_array($fields['machine_categories'] ?? null)
+                ? $this->canonicalMachineCategories($fields['machine_categories'], $categories)
+                : null;
+        }
 
         return $this->resolveLocation($fields, $state);
     }
@@ -913,6 +939,44 @@ class SupplierListingCollector
     }
 
     /**
+     * The driver's machine categories, kept only where they match the
+     * category dictionary (the schema enum already enforces this — the
+     * lookup is a safety net), normalized to the dictionary spelling.
+     *
+     * @param  Collection<int, Category>  $categories
+     * @return list<string>
+     */
+    private function canonicalMachineCategories(mixed $names, Collection $categories): array
+    {
+        return collect(is_array($names) ? $names : [])
+            ->map(fn (mixed $name): ?Category => $this->canonicalCategory($name, $categories))
+            ->filter()
+            ->map(fn (Category $category): string => $category->name)
+            ->unique()
+            ->values()
+            ->all();
+    }
+
+    /**
+     * Bind the extracted machine categories to the driver's draft. Only
+     * when the extraction returned an array: the fields are rebuilt from
+     * scratch each turn, and a turn where the model returned null must not
+     * erase categories synced earlier.
+     *
+     * @param  array<string, mixed>  $state
+     */
+    private function syncMachineCategories(Listing $draft, array $state): void
+    {
+        if ($this->kind($state) !== ListingKind::Driver || ! is_array($state['fields']['machine_categories'] ?? null)) {
+            return;
+        }
+
+        $draft->machineCategories()->sync(
+            Category::query()->whereIn('name', $state['fields']['machine_categories'])->pluck('id'),
+        );
+    }
+
+    /**
      * @param  array<string, mixed>  $state
      * @return list<Image>
      */
@@ -948,11 +1012,16 @@ class SupplierListingCollector
      * @param  array<string, mixed>  $fields
      * @return list<string>
      */
-    private function missingFields(array $fields): array
+    private function missingFields(array $fields, ListingKind $kind): array
     {
         return array_values(array_filter(
-            self::REQUIRED_FIELDS,
-            fn (string $field): bool => blank($fields[$field] ?? null),
+            $kind->collectorRequiredFields(),
+            function (string $field) use ($fields): bool {
+                $value = $fields[$field] ?? null;
+
+                // false is an answer («не готов выезжать»), [] is not.
+                return is_bool($value) ? false : blank($value);
+            },
         ));
     }
 
@@ -972,6 +1041,7 @@ class SupplierListingCollector
         $draft = Listing::create([
             'contact_id' => $session->contact_id,
             'origin' => ListingOrigin::Chat,
+            'kind' => $this->kind($state),
         ]);
 
         $state['draft_id'] = $draft->id;
@@ -980,30 +1050,50 @@ class SupplierListingCollector
     }
 
     /**
+     * The draft attributes assembled from the kind: the common core plus
+     * the kind's own questionnaire fields.
+     *
      * @param  array<string, mixed>  $state
-     * @return array{title: ?string, category_id: ?int, brand_id: ?int, description: ?string, location_id: ?int, location_detail: ?string, price: ?string}
+     * @return array<string, mixed>
      */
     private function listingAttributes(array $state): array
     {
         $fields = $state['fields'];
+        $kind = $this->kind($state);
 
         // The title ends up in WhatsApp template parameters, which Meta
         // rejects over newlines and space runs — store it normalized.
         $title = WhatsappText::templateParameter((string) ($fields['title'] ?? ''));
 
-        return [
+        $common = [
+            'kind' => $kind,
             'title' => $title === '' ? null : Str::limit($title, 255, ''),
-            'category_id' => filled($fields['category'] ?? null)
-                ? Category::query()->where('name', $fields['category'])->value('id')
-                : null,
-            'brand_id' => filled($fields['brand'] ?? null)
-                ? Brand::query()->where('name', $fields['brand'])->value('id')
-                : null,
             'description' => $fields['description'] ?? null,
             'location_id' => $fields['location_id'] ?? null,
             'location_detail' => $fields['location_detail'] ?? null,
-            'price' => $fields['price'] ?? null,
         ];
+
+        return $common + match ($kind) {
+            ListingKind::Rental => [
+                'category_id' => filled($fields['category'] ?? null)
+                    ? Category::query()->where('name', $fields['category'])->value('id') : null,
+                'brand_id' => filled($fields['brand'] ?? null)
+                    ? Brand::query()->where('name', $fields['brand'])->value('id') : null,
+                'price' => $fields['price'] ?? null,
+            ],
+            ListingKind::Repair => [
+                'person_name' => $fields['person_name'] ?? null,
+                'services' => $fields['services'] ?? null,
+                'repair_place' => $fields['repair_place'] ?? null,
+                'price' => $fields['price'] ?? null,
+            ],
+            ListingKind::Driver => [
+                'person_name' => $fields['person_name'] ?? null,
+                'licence_type' => $fields['licence_type'] ?? null,
+                'experience_years' => $fields['experience_years'] ?? null,
+                'travels_to_other_cities' => $fields['travels_to_other_cities'] ?? null,
+            ],
+        };
     }
 
     /**
@@ -1076,7 +1166,7 @@ class SupplierListingCollector
      * @param  array<string, mixed>  $fields
      * @param  list<string>  $missing
      */
-    private function clarificationQuestion(array $fields, array $missing): string
+    private function clarificationQuestion(array $fields, array $missing, ListingKind $kind): string
     {
         // The named place did not resolve to the dictionary — the extractor
         // believes the location is filled, so its question would miss this.
@@ -1108,14 +1198,7 @@ class SupplierListingCollector
             return (string) $fields['clarifying_question'];
         }
 
-        $questions = [
-            'category' => 'Что именно вы предлагаете — какая техника?',
-            'description' => 'Опишите чуть подробнее ваше предложение.',
-            'location_id' => 'В каком городе, районе или селе это доступно?',
-            'price' => 'Какая цена или тариф?',
-        ];
-
-        return $questions[$missing[0]] ?? 'Уточните, пожалуйста, детали объявления.';
+        return $kind->fallbackQuestions()[$missing[0]] ?? 'Уточните, пожалуйста, детали объявления.';
     }
 
     private function matchesButton(InboundMessage $message, string $id, string $title): bool
@@ -1142,6 +1225,7 @@ class SupplierListingCollector
     private function normalizeState(BotSession $session): array
     {
         return array_merge([
+            'kind' => ListingKind::Rental->value,
             'phase' => 'collecting',
             'attempts' => 0,
             'unreadable' => 0,
@@ -1155,7 +1239,20 @@ class SupplierListingCollector
             'picked_location_wording' => null,
             'declined_location_wording' => null,
             'last_question' => null,
+            'button_prompts' => [],
+            'awaiting_document' => false,
         ], $session->state ?? []);
+    }
+
+    /**
+     * The listing kind of this dialog. Stored in the state at start();
+     * a session started before kinds existed falls back to rental.
+     *
+     * @param  array<string, mixed>  $state
+     */
+    private function kind(array $state): ListingKind
+    {
+        return ListingKind::fromNode($state['kind'] ?? null);
     }
 
     /**

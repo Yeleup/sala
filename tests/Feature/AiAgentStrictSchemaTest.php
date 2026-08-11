@@ -24,5 +24,7 @@ test('схема агента уходит в строгом режиме и ц�
     'извлечение объявления (ремонт)' => fn (): object => new ListingExtractionAgent(ListingKind::Repair),
     'извлечение объявления (водитель)' => fn (): object => new ListingExtractionAgent(ListingKind::Driver, ['Экскаватор']),
     'разбор поискового запроса' => fn (): object => new SearchQueryExtractionAgent,
+    'разбор поискового запроса (ремонт)' => fn (): object => new SearchQueryExtractionAgent(ListingKind::Repair),
+    'разбор поискового запроса (водитель)' => fn (): object => new SearchQueryExtractionAgent(ListingKind::Driver),
     'выбор одноимённого места' => fn (): object => new LocationChoiceAgent([7 => 'Абайский район, Карагандинская область', 9 => 'Абайский район, Шымкент']),
 ]);

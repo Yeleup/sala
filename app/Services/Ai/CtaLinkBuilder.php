@@ -2,6 +2,7 @@
 
 namespace App\Services\Ai;
 
+use App\Enums\ListingKind;
 use App\Models\Contact;
 use App\Models\Listing;
 use App\Models\Location;
@@ -52,13 +53,16 @@ class CtaLinkBuilder
      * ValidateSignatureExceptQuery), so the filter form and pagination
      * keep working on the same personal link.
      */
-    public function catalogUrl(Contact $contact, ?string $query = null, ?Location $location = null): string
+    public function catalogUrl(Contact $contact, ?string $query = null, ?Location $location = null, ?ListingKind $kind = null): string
     {
         $url = $this->signed('customer.listings.index', ['contact' => $contact->getKey()]);
 
         $prefill = http_build_query(array_filter([
             'q' => $query,
             'location_id' => $location?->getKey(),
+            // Rental is omitted on purpose: the rental branch's link keeps
+            // opening the full catalog exactly as before kinds existed.
+            'kind' => $kind !== null && $kind !== ListingKind::Rental ? $kind->value : null,
         ]));
 
         return $prefill === '' ? $url : $url.'&'.$prefill;

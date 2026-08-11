@@ -676,6 +676,16 @@ test('схема извлечения собирается из вида', funct
         ->not->toContain('price', 'brand');
 });
 
+test('промпт извлечения собирается из вида', function () {
+    $repair = (string) (new ListingExtractionAgent(ListingKind::Repair))->instructions();
+    $driver = (string) (new ListingExtractionAgent(ListingKind::Driver, ['Экскаватор']))->instructions();
+
+    expect($repair)->toContain('own_service')->toContain('цена за диагностику')
+        ->not->toContain('Доступные марки')->not->toContain('Доступные категории')
+        ->and($driver)->toContain('- Экскаватор')->toContain('tractor_operator')
+        ->not->toContain('Доступные марки');
+});
+
 test('a missing title never blocks confirmation and never spends an attempt', function () {
     ListingExtractionAgent::fake([fullExtraction(['title' => null])]);
     $session = collectorSession();

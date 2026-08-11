@@ -293,6 +293,21 @@ class SupplierListingCollector
             $draft = $this->ensureDraft($session, $state);
             $draft->update($this->listingAttributes($state));
             $this->syncMachineCategories($draft, $state);
+
+            // A driver's licence document is mandatory but is not a field:
+            // the summary goes out without the submit button and asks for
+            // the photo instead, for free — like a button prompt, it is not
+            // a clarification attempt.
+            if ($kind->requiresDocument() && $draft->documents()->doesntExist()) {
+                $state['phase'] = 'confirming';
+                $state['awaiting_document'] = true;
+                $this->persist($session, $state);
+                $this->sendConfirmation($session, $state);
+
+                return AiOutcome::InProgress;
+            }
+
+            $state['awaiting_document'] = false;
             $state['phase'] = 'confirming';
             $this->persist($session, $state);
             $this->sendConfirmation($session, $state);
@@ -769,6 +784,18 @@ class SupplierListingCollector
         $draft = $state['draft_id'] !== null ? Listing::find($state['draft_id']) : null;
 
         if ($this->matchesButton($message, self::BUTTON_SUBMIT, self::BUTTON_SUBMIT_TITLE)) {
+            // The submit button was never offered while the licence document
+            // is missing, but its title can be typed by hand: repeat the
+            // summary-plus-ask instead of letting an undocumented driver
+            // listing into moderation.
+            if ($this->kind($state)->requiresDocument() && ! ($draft?->documents()->exists() ?? false)) {
+                $state['awaiting_document'] = true;
+                $this->persist($session, $state);
+                $this->sendConfirmation($session, $state);
+
+                return AiOutcome::InProgress;
+            }
+
             $draft?->submitForModeration();
             $this->messenger->sendText($session->contact, 'Спасибо! Объявление отправлено на проверку модератору.');
 
@@ -867,6 +894,25 @@ class SupplierListingCollector
         }
 
         $draft = $this->ensureDraft($session, $state);
+
+        // The bot just asked for the licence document, so the next photo IS
+        // the document: stored on the non-public disk, never rendered to
+        // customers and never attached to extraction calls.
+        if (($state['awaiting_document'] ?? false) && $draft->documents()->doesntExist()) {
+            $path = "listings/{$draft->id}/documents/".uniqid('', true).'.jpg';
+            Storage::disk('local')->put($path, $download['contents']);
+
+            ListingMedia::create([
+                'listing_id' => $draft->id,
+                'type' => ListingMediaType::Document,
+                'disk' => 'local',
+                'path' => $path,
+            ]);
+
+            $state['awaiting_document'] = false;
+
+            return true;
+        }
 
         $path = "listings/{$draft->id}/photos/".uniqid('', true).'.jpg';
         Storage::disk('public')->put($path, $download['contents']);
@@ -971,6 +1017,10 @@ class SupplierListingCollector
     private function currentBotMessageSummary(array $state): ?string
     {
         if ($state['phase'] === 'confirming') {
+            if ($state['awaiting_document'] ?? false) {
+                return 'показал сводку и попросил прислать фото удостоверения';
+            }
+
             return 'показал сводку объявления с кнопками «Да, отправить» и «Исправить», спросил «Всё верно?»'
                 .($this->hasPhotos($state) ? '' : ' и попросил прислать фотографии');
         }
@@ -1287,6 +1337,24 @@ class SupplierListingCollector
             $summary,
             $place !== null ? 'Место: '.$place->label() : null,
         ]));
+
+        // The licence document is still missing: the summary goes out
+        // without the submit button — submitting is simply not offered
+        // until the document arrives — and asks for the photo instead of
+        // the optional-pictures line.
+        if ($state['awaiting_document'] ?? false) {
+            $body = implode("\n", array_filter([
+                $text,
+                'Остался обязательный шаг: пришлите фото удостоверения — без него объявление не выйдет. '
+                    .'Снимок увидит только наш оператор, в объявлении он не показывается.',
+            ]));
+
+            $this->messenger->sendButtons($session->contact, $body, [
+                ['id' => self::BUTTON_EDIT, 'title' => self::BUTTON_EDIT_TITLE],
+            ]);
+
+            return;
+        }
 
         $body = implode("\n", array_filter([
             $text,

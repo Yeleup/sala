@@ -163,6 +163,25 @@ function driverExtraction(array $overrides = []): array
     ], $overrides);
 }
 
+/**
+ * Черновик водителя для тестов документа: анкета заполнена фабрикой,
+ * статус — черновик.
+ */
+function driverDraft(): Listing
+{
+    return Listing::factory()->driver()->create();
+}
+
+/**
+ * Успешное скачивание присланного фото — по образцу фото-тестов интейка.
+ */
+function fakeMediaDownload(string $mediaId = 'wamid-doc'): void
+{
+    test()->mock(DereuMediaDownloader::class)
+        ->shouldReceive('download')->once()->with($mediaId)
+        ->andReturn(['contents' => 'JPEG-BYTES', 'mime_type' => 'image/jpeg']);
+}
+
 test('entering the AI block greets the supplier and keeps the turn', function () {
     $session = collectorSession();
 
@@ -901,6 +920,77 @@ test('кнопка «Да/Нет» водителя пишет булеву го
     'кнопка «Да»' => [new InboundMessage(replyId: 'kind_choice:travels_to_other_cities:yes', text: 'Да'), true],
     'текст «нет»' => [new InboundMessage(text: 'нет'), false],
 ]);
+
+test('водителю со всеми полями, но без документа, бот шлёт просьбу о фото, а не сводку с отправкой', function () {
+    ListingExtractionAgent::fake([driverExtraction()]);   // всё заполнено
+    $session = collectorSession(['kind' => 'driver']);
+    fakeCollectorMessenger()->shouldReceive('sendButtons')->once()
+        ->withArgs(fn ($to, string $text, array $buttons) => str_contains($text, 'фото удостоверения')
+            && count($buttons) === 1 && $buttons[0]['id'] === SupplierListingCollector::BUTTON_EDIT);
+
+    app(SupplierListingCollector::class)->resume($session, driverAiNode(), new InboundMessage(text: 'Иван, экскаватор, 8 лет, Алматы, выезжаю'));
+
+    expect($session->fresh()->state['awaiting_document'])->toBeTrue()
+        ->and($session->fresh()->state['attempts'])->toBe(0);   // просьба бесплатна
+});
+
+test('фотография в ответ на просьбу о документе становится непубличным документом', function () {
+    Storage::fake('local');
+    fakeMediaDownload();
+    ListingExtractionAgent::fake([driverExtraction()]);
+    $session = collectorSession(['kind' => 'driver', 'awaiting_document' => true,
+        'fields' => driverExtraction(), 'draft_id' => ($draft = driverDraft())->id]);
+    fakeCollectorMessenger()->shouldReceive('sendButtons')->once()
+        ->withArgs(fn ($to, $text, array $buttons) => count($buttons) === 2);   // полная сводка: документ есть
+
+    app(SupplierListingCollector::class)->resume($session, driverAiNode(),
+        new InboundMessage(mediaId: 'wamid-doc', mediaType: ListingMediaType::Photo));
+
+    expect($draft->fresh()->documents()->count())->toBe(1)
+        ->and($draft->fresh()->photos()->count())->toBe(0)
+        ->and($draft->fresh()->documents()->first()->disk)->toBe('local');
+});
+
+test('документ водителя не попадает во вложения AI-вызова', function () {
+    // photoAttachments() фильтрует по photos(): снимок удостоверения —
+    // непубличный документ, модель его видеть не должна.
+    ListingExtractionAgent::fake([driverExtraction()]);
+
+    $draft = driverDraft();
+    ListingMedia::factory()->create([
+        'listing_id' => $draft->id,
+        'type' => ListingMediaType::Document,
+        'disk' => 'local',
+    ]);
+    $session = collectorSession(['kind' => 'driver', 'draft_id' => $draft->id]);
+
+    fakeCollectorMessenger()->shouldReceive('sendButtons')->once();
+
+    app(SupplierListingCollector::class)->resume($session, driverAiNode(),
+        new InboundMessage(text: 'Ерлан, экскаватор, 8 лет, Шымкент, не выезжаю'));
+
+    ListingExtractionAgent::assertPrompted(fn ($prompt): bool => $prompt->attachments->count() === 0);
+});
+
+test('набранное руками «Да, отправить» без документа не отправляет водителя на модерацию', function () {
+    // Кнопки отправки в сообщении-просьбе нет, но её заголовок можно
+    // набрать текстом: бот повторяет сводку-просьбу, а не шлёт на проверку.
+    ListingExtractionAgent::fake()->preventStrayPrompts();
+    $draft = driverDraft();
+    $session = collectorSession(['kind' => 'driver', 'phase' => 'confirming', 'awaiting_document' => true,
+        'fields' => driverExtraction(), 'draft_id' => $draft->id]);
+
+    fakeCollectorMessenger()->shouldReceive('sendButtons')->once()
+        ->withArgs(fn ($to, string $text, array $buttons) => str_contains($text, 'фото удостоверения')
+            && count($buttons) === 1);
+
+    $outcome = app(SupplierListingCollector::class)
+        ->resume($session, driverAiNode(), new InboundMessage(text: 'Да, отправить'));
+
+    expect($outcome)->toBe(AiOutcome::InProgress)
+        ->and($draft->fresh()->status)->toBe(ListingStatus::Draft);
+    ListingExtractionAgent::assertNeverPrompted();
+});
 
 test('кнопочный ответ переживает следующее сообщение поставщика', function () {
     // Поля пересобираются с нуля каждый ход: без реаплая значение с кнопки

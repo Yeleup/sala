@@ -45,23 +45,6 @@ class Listing extends Model
      */
     public const int MAX_PHOTOS = 10;
 
-    /**
-     * The business fields a listing must carry to go live, mapped to the
-     * label the operator sees in the «чего не хватает» hint. This is the
-     * same set the supplier web form demands before submitting (see
-     * UpdateSupplierListingRequest), so a listing published straight from
-     * the admin is never thinner than one its supplier completed himself.
-     *
-     * @var array<string, string>
-     */
-    public const array PUBLICATION_FIELDS = [
-        'title' => 'название',
-        'category_id' => 'категория',
-        'description' => 'описание',
-        'location_id' => 'локация',
-        'price' => 'цена',
-    ];
-
     protected $attributes = [
         'status' => ListingStatus::Draft->value,
         'kind' => ListingKind::Rental->value,
@@ -245,20 +228,36 @@ class Listing extends Model
     }
 
     /**
+     * The business fields this listing must carry to go live, mapped to
+     * the label the operator sees in the «чего не хватает» hint. The set
+     * comes from the listing's kind: a driver's questionnaire has nothing
+     * in common with a rental's beyond the title and the location.
+     *
+     * @return array<string, string>
+     */
+    public function publicationFields(): array
+    {
+        return $this->kind->publicationFields();
+    }
+
+    /**
      * The labels of the publication fields left blank in the given set of
      * values, in the order the operator asks about them on a call. Takes
      * raw values rather than a record so the admin form can hint at what
      * is still missing while the operator is typing, by the same rule the
-     * publication itself enforces.
+     * publication itself enforces. A boolean is never blank: `false` in
+     * «готов выезжать» is an answer, not an omission.
      *
      * @param  array<string, mixed>  $values
      * @return list<string>
      */
-    public static function missingPublicationFields(array $values): array
+    public static function missingPublicationFields(ListingKind $kind, array $values): array
     {
         return array_values(array_filter(
-            self::PUBLICATION_FIELDS,
-            fn (string $label, string $field): bool => blank($values[$field] ?? null),
+            $kind->publicationFields(),
+            fn (string $label, string $field): bool => is_bool($values[$field] ?? null)
+                ? false
+                : blank($values[$field] ?? null),
             ARRAY_FILTER_USE_BOTH,
         ));
     }
@@ -268,7 +267,13 @@ class Listing extends Model
      */
     public function missingForPublication(): array
     {
-        return self::missingPublicationFields($this->only(array_keys(self::PUBLICATION_FIELDS)));
+        $missing = self::missingPublicationFields($this->kind, $this->only(array_keys($this->publicationFields())));
+
+        if ($this->kind->requiresDocument() && $this->documents()->doesntExist()) {
+            $missing[] = 'фото документа';
+        }
+
+        return $missing;
     }
 
     public function isReadyForPublication(): bool

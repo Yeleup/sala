@@ -2,6 +2,7 @@
 
 namespace App\Filament\Resources\Listings\Schemas;
 
+use App\Enums\ListingKind;
 use App\Enums\ListingMediaType;
 use App\Filament\Resources\Brands\Schemas\BrandForm;
 use App\Filament\Resources\Categories\Schemas\CategoryForm;
@@ -313,12 +314,17 @@ class ListingForm
      */
     private static function missingPublicationFields(Get $get): array
     {
+        // The form has no kind field yet, so $get('kind') is null and
+        // fromNode() falls back to rental — today's behaviour. The
+        // per-kind form is a separate task.
+        $kind = ListingKind::fromNode($get('kind'));
+
         $values = [];
 
-        foreach (array_keys(Listing::PUBLICATION_FIELDS) as $field) {
+        foreach (array_keys($kind->publicationFields()) as $field) {
             $values[$field] = $get($field);
         }
 
-        return Listing::missingPublicationFields($values);
+        return Listing::missingPublicationFields($kind, $values);
     }
 }

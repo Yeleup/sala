@@ -1,8 +1,12 @@
 <?php
 
+use App\Enums\LicenceType;
+use App\Enums\ListingKind;
+use App\Enums\ListingMediaType;
 use App\Enums\ListingStatus;
 use App\Http\Requests\UpdateSupplierListingRequest;
 use App\Models\Listing;
+use App\Models\ListingMedia;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Laravel\Ai\Embeddings;
@@ -89,11 +93,39 @@ test('чего именно не хватает для публикации, о�
         ->and(Listing::factory()->publishable()->create()->isReadyForPublication())->toBeTrue();
 });
 
+test('гейт публикации зависит от вида', function () {
+    $driver = Listing::factory()->create([
+        'kind' => ListingKind::Driver, 'title' => 'Машинист экскаватора',
+        'person_name' => 'Иван', 'licence_type' => LicenceType::TractorOperator,
+        'experience_years' => 8, 'location_id' => locationNamed('Алматы')->id,
+        'travels_to_other_cities' => true,
+    ]);
+
+    // Всё скалярное есть, документа нет — публиковать нельзя.
+    expect($driver->missingForPublication())->toBe(['фото документа']);
+
+    ListingMedia::create(['listing_id' => $driver->id, 'type' => ListingMediaType::Document,
+        'disk' => 'local', 'path' => 'x.jpg']);
+
+    expect($driver->fresh()->isReadyForPublication())->toBeTrue()
+        ->and($driver->fresh()->missingForPublication())->toBe([]);
+});
+
+test('false в булевом поле — это ответ, а не пробел', function () {
+    // blank(false) === true, поэтому наивный blank() потерял бы «не готов выезжать».
+    $missing = Listing::missingPublicationFields(ListingKind::Driver, [
+        'title' => 'т', 'person_name' => 'и', 'licence_type' => 'other',
+        'experience_years' => 1, 'location_id' => 5, 'travels_to_other_cities' => false,
+    ]);
+
+    expect($missing)->toBe([]);
+});
+
 test('публикация возможна только из черновика и отклонённого', function (string $state) {
     Listing::factory()->publishable()->{$state}()->create()->publish();
 })->with(['pendingModeration', 'published', 'archived'])->throws(LogicException::class);
 
-test('требования к публикации в админке те же, что у веб-формы поставщика', function () {
+test('требования к публикации аренды те же, что у веб-формы поставщика', function () {
     // Иначе оператор опубликует объявление тоньше, чем поставщик обязан
     // заполнить сам — и разъедутся два описания одного правила.
     $webFormRequired = collect((new UpdateSupplierListingRequest)->rules())
@@ -103,7 +135,7 @@ test('требования к публикации в админке те же, 
         ->values()
         ->all();
 
-    expect(collect(array_keys(Listing::PUBLICATION_FIELDS))->sort()->values()->all())
+    expect(collect(array_keys(ListingKind::Rental->publicationFields()))->sort()->values()->all())
         ->toBe($webFormRequired);
 });
 

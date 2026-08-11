@@ -897,8 +897,15 @@ class SupplierListingCollector
 
         // The bot just asked for the licence document, so the next photo IS
         // the document: stored on the non-public disk, never rendered to
-        // customers and never attached to extraction calls.
-        if (($state['awaiting_document'] ?? false) && $draft->documents()->doesntExist()) {
+        // customers and never attached to extraction calls. Only while the
+        // summary-plus-ask is the open question: a wording correction can
+        // drop a required field and detour the dialog back to clarifying
+        // with awaiting_document still set — a photo answering THAT question
+        // is ordinary listing material, and the document gets asked for
+        // again on the next full summary.
+        if ($state['phase'] === 'confirming'
+            && ($state['awaiting_document'] ?? false)
+            && $draft->documents()->doesntExist()) {
             $path = "listings/{$draft->id}/documents/".uniqid('', true).'.jpg';
             Storage::disk('local')->put($path, $download['contents']);
 

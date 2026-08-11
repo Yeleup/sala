@@ -938,7 +938,7 @@ test('фотография в ответ на просьбу о документ
     Storage::fake('local');
     fakeMediaDownload();
     ListingExtractionAgent::fake([driverExtraction()]);
-    $session = collectorSession(['kind' => 'driver', 'awaiting_document' => true,
+    $session = collectorSession(['kind' => 'driver', 'phase' => 'confirming', 'awaiting_document' => true,
         'fields' => driverExtraction(), 'draft_id' => ($draft = driverDraft())->id]);
     fakeCollectorMessenger()->shouldReceive('sendButtons')->once()
         ->withArgs(fn ($to, $text, array $buttons) => count($buttons) === 2);   // полная сводка: документ есть
@@ -949,6 +949,29 @@ test('фотография в ответ на просьбу о документ
     expect($draft->fresh()->documents()->count())->toBe(1)
         ->and($draft->fresh()->photos()->count())->toBe(0)
         ->and($draft->fresh()->documents()->first()->disk)->toBe('local');
+});
+
+test('фото на уточняющем крюке остаётся обычным снимком, а не документом', function () {
+    // awaiting_document переживает уход из confirming: поправка словами
+    // потеряла обязательное поле, и бот уже спрашивает другое. Фото здесь —
+    // ответ на вопрос, а не удостоверение: документ бот попросит заново
+    // на следующей полной сводке.
+    Storage::fake('public');
+    fakeMediaDownload('wamid-detour');
+    ListingExtractionAgent::fake([driverExtraction(['person_name' => null])]);
+    $draft = driverDraft();
+    $session = collectorSession(['kind' => 'driver', 'awaiting_document' => true,
+        'fields' => driverExtraction(), 'draft_id' => $draft->id]);
+
+    fakeCollectorMessenger()->shouldReceive('sendText')->once();   // уточняющий вопрос
+
+    app(SupplierListingCollector::class)->resume($session, driverAiNode(),
+        new InboundMessage(text: 'на фото мой экскаватор', mediaId: 'wamid-detour', mediaType: ListingMediaType::Photo));
+
+    expect($draft->fresh()->photos()->count())->toBe(1)
+        ->and($draft->fresh()->documents()->count())->toBe(0)
+        ->and($draft->fresh()->photos()->first()->disk)->toBe('public')
+        ->and($session->fresh()->state['awaiting_document'])->toBeTrue();
 });
 
 test('документ водителя не попадает во вложения AI-вызова', function () {

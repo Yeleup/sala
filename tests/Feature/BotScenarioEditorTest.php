@@ -5,6 +5,7 @@ use App\Filament\Pages\BotScenarioEditor;
 use App\Models\BotScenario;
 use App\Models\BotScenarioVersion;
 use App\Models\User;
+use App\Services\Bot\ScenarioDefinition;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Livewire\Livewire;
 
@@ -88,6 +89,40 @@ test('unknown keys are stripped from the saved draft while positions are kept', 
         ->and($draft['nodes'][1])->not->toHaveKey('evil')
         ->and($draft['nodes'][1]['x'])->toBe(300)
         ->and($draft['edges'])->toHaveCount(3);
+});
+
+test('ключ kind у AI-узла переживает сохранение схемы и попадает в отпечаток', function () {
+    BotScenario::factory()->create();
+
+    $definition = [
+        'nodes' => [
+            ['id' => 'start', 'type' => 'start', 'x' => 0, 'y' => 0],
+            ['id' => 'a', 'type' => 'ai', 'task' => 'collect_listing', 'kind' => 'driver', 'x' => 300, 'y' => 0],
+            ['id' => 'b', 'type' => 'ai', 'task' => 'collect_listing', 'x' => 300, 'y' => 200],
+        ],
+        'edges' => [],
+    ];
+
+    Livewire::test(BotScenarioEditor::class)->call('saveDraft', $definition);
+
+    $saved = collect(BotScenario::sole()->draft_definition['nodes']);
+    expect($saved->firstWhere('id', 'a')['kind'])->toBe('driver')
+        // Узел без вида нормализуется в rental — блоки до появления видов ведут себя как раньше.
+        ->and($saved->firstWhere('id', 'b')['kind'])->toBe('rental');
+
+    // Смена вида меняет отпечаток блока — как смена задачи: мягкий сброс сессий на нём.
+    $fingerprints = new ScenarioDefinition([]);
+    expect($fingerprints->nodeFingerprint($saved->firstWhere('id', 'a')))
+        ->not->toBe($fingerprints->nodeFingerprint($saved->firstWhere('id', 'b')));
+});
+
+test('конфиг редактора отдаёт список видов объявления для селекта AI-блока', function () {
+    BotScenario::factory()->create();
+
+    $kinds = Livewire::test(BotScenarioEditor::class)->instance()->editorConfig()['listingKinds'];
+
+    expect(array_column($kinds, 'value'))->toBe(['rental', 'repair', 'driver'])
+        ->and(collect($kinds)->firstWhere('value', 'driver')['label'])->toBe('Водитель / машинист');
 });
 
 test('publishing a valid graph applies the draft and bumps the version', function () {

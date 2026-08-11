@@ -5,6 +5,7 @@ use App\Ai\Agents\LocationChoiceAgent;
 use App\Enums\AiOperationType;
 use App\Enums\AiOutcome;
 use App\Enums\BotReplyKey;
+use App\Enums\ListingKind;
 use App\Enums\ListingMediaType;
 use App\Enums\ListingStatus;
 use App\Models\AiOperation;
@@ -576,7 +577,7 @@ test('the extractor category is normalized to the dictionary spelling', function
 });
 
 test('the extraction schema and prompt hard-limit the category to the dictionary', function () {
-    $agent = new ListingExtractionAgent(['Автокран', 'Экскаватор']);
+    $agent = new ListingExtractionAgent(ListingKind::Rental, ['Автокран', 'Экскаватор']);
 
     $categorySchema = $agent->schema(new JsonSchemaTypeFactory)['category']->toArray();
 
@@ -645,7 +646,7 @@ test('a brand outside the dictionary is dropped without a clarifying question', 
 });
 
 test('the extraction schema and prompt hard-limit the brand to the dictionary', function () {
-    $agent = new ListingExtractionAgent(['Автокран'], ['Hitachi', 'CAT']);
+    $agent = new ListingExtractionAgent(ListingKind::Rental, ['Автокран'], ['Hitachi', 'CAT']);
 
     $brandSchema = $agent->schema(new JsonSchemaTypeFactory)['brand']->toArray();
 
@@ -654,12 +655,25 @@ test('the extraction schema and prompt hard-limit the brand to the dictionary', 
 });
 
 test('an empty brand dictionary degrades the schema and tells the model to keep null', function () {
-    $agent = new ListingExtractionAgent(['Автокран']);
+    $agent = new ListingExtractionAgent(ListingKind::Rental, ['Автокран']);
 
     $brandSchema = $agent->schema(new JsonSchemaTypeFactory)['brand']->toArray();
 
     expect($brandSchema)->not->toHaveKey('enum')
         ->and((string) $agent->instructions())->toContain('справочник марок пуст');
+});
+
+test('схема извлечения собирается из вида', function () {
+    $schema = new JsonSchemaTypeFactory;
+
+    $rental = array_keys((new ListingExtractionAgent(ListingKind::Rental, ['Автокран'], ['Hitachi']))->schema($schema));
+    $repair = array_keys((new ListingExtractionAgent(ListingKind::Repair))->schema($schema));
+    $driver = array_keys((new ListingExtractionAgent(ListingKind::Driver, ['Экскаватор']))->schema($schema));
+
+    expect($rental)->toContain('category', 'brand', 'price')->not->toContain('services', 'licence_type')
+        ->and($repair)->toContain('person_name', 'services', 'repair_place', 'price')->not->toContain('category', 'brand')
+        ->and($driver)->toContain('person_name', 'machine_categories', 'licence_type', 'experience_years', 'travels_to_other_cities')
+        ->not->toContain('price', 'brand');
 });
 
 test('a missing title never blocks confirmation and never spends an attempt', function () {
@@ -706,7 +720,7 @@ test('an overlong extracted title is clipped to the column limit before saving',
 });
 
 test('the extraction schema carries a nullable title the model composes itself', function () {
-    $agent = new ListingExtractionAgent(['Автокран']);
+    $agent = new ListingExtractionAgent(ListingKind::Rental, ['Автокран']);
 
     $titleSchema = $agent->schema(new JsonSchemaTypeFactory)['title']->toArray();
 

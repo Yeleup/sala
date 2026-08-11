@@ -7,6 +7,7 @@ use App\Ai\Agents\LocationChoiceAgent;
 use App\Enums\AiOperationType;
 use App\Enums\AiOutcome;
 use App\Enums\BotReplyKey;
+use App\Enums\ListingKind;
 use App\Enums\ListingMediaType;
 use App\Enums\ListingOrigin;
 use App\Enums\UserIntent;
@@ -764,7 +765,7 @@ class SupplierListingCollector
         try {
             $fields = $this->audit->run(
                 AiOperationType::ListingExtraction,
-                fn (): array => (new ListingExtractionAgent($categories->pluck('name')->all(), $brands->pluck('name')->all()))
+                fn (): array => (new ListingExtractionAgent(ListingKind::Rental, $categories->pluck('name')->all(), $brands->pluck('name')->all()))
                     ->prompt($prompt, attachments: $this->photoAttachments($state))
                     ->toArray(),
                 [

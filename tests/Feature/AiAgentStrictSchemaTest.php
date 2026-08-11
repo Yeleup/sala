@@ -3,6 +3,7 @@
 use App\Ai\Agents\ListingExtractionAgent;
 use App\Ai\Agents\LocationChoiceAgent;
 use App\Ai\Agents\SearchQueryExtractionAgent;
+use App\Enums\ListingKind;
 use Illuminate\JsonSchema\JsonSchemaTypeFactory;
 use Laravel\Ai\Attributes\Strict;
 use Laravel\Ai\ObjectSchema;
@@ -19,7 +20,9 @@ test('схема агента уходит в строгом режиме и ц�
 
     expect($schema['required'] ?? [])->toEqualCanonicalizing(array_keys($schema['properties']));
 })->with([
-    'извлечение объявления' => fn (): object => new ListingExtractionAgent(['Автокран'], ['Hitachi']),
+    'извлечение объявления (аренда)' => fn (): object => new ListingExtractionAgent(ListingKind::Rental, ['Автокран'], ['Hitachi']),
+    'извлечение объявления (ремонт)' => fn (): object => new ListingExtractionAgent(ListingKind::Repair),
+    'извлечение объявления (водитель)' => fn (): object => new ListingExtractionAgent(ListingKind::Driver, ['Экскаватор']),
     'разбор поискового запроса' => fn (): object => new SearchQueryExtractionAgent,
     'выбор одноимённого места' => fn (): object => new LocationChoiceAgent([7 => 'Абайский район, Карагандинская область', 9 => 'Абайский район, Шымкент']),
 ]);

@@ -1,6 +1,5 @@
 <?php
 
-use App\Enums\ListingType;
 use App\Filament\Resources\Categories\Pages\ListCategories;
 use App\Models\Category;
 use App\Models\Listing;
@@ -26,29 +25,19 @@ test('таблица показывает справочник с числом �
         ->assertSee('Экскаватор');
 });
 
-test('оператор создаёт категорию с типом', function () {
+test('оператор создаёт категорию', function () {
     Livewire::test(ListCategories::class)
-        ->callAction('create', ['name' => 'Стропальщик', 'type' => ListingType::Service->value])
+        ->callAction('create', ['name' => 'Бетононасос'])
         ->assertHasNoActionErrors();
 
-    expect(Category::sole())
-        ->name->toBe('Стропальщик')
-        ->type->toBe(ListingType::Service);
-});
-
-test('без типа категория не создаётся', function () {
-    Livewire::test(ListCategories::class)
-        ->callAction('create', ['name' => 'Бетононасос', 'type' => null])
-        ->assertHasActionErrors(['type']);
-
-    expect(Category::count())->toBe(0);
+    expect(Category::sole())->name->toBe('Бетононасос');
 });
 
 test('дубль названия не проходит', function () {
     Category::factory()->create(['name' => 'Автокран']);
 
     Livewire::test(ListCategories::class)
-        ->callAction('create', ['name' => 'Автокран', 'type' => ListingType::Equipment->value])
+        ->callAction('create', ['name' => 'Автокран'])
         ->assertHasActionErrors(['name']);
 
     expect(Category::count())->toBe(1);
@@ -62,22 +51,6 @@ test('оператор переименовывает категорию', funct
         ->assertHasNoActionErrors();
 
     expect($category->refresh())->name->toBe('Автокран');
-});
-
-test('тип используемой категории не меняется', function () {
-    $category = Category::factory()->create(['name' => 'Кран']);
-    Listing::factory()->create(['category_id' => $category->id]);
-
-    Livewire::test(ListCategories::class)
-        ->callAction(TestAction::make('edit')->table($category), [
-            'name' => 'Автокран',
-            'type' => ListingType::Service->value,
-        ]);
-
-    // Название обновилось, а тип защищён: поле заблокировано в форме.
-    expect($category->refresh())
-        ->name->toBe('Автокран')
-        ->type->toBe(ListingType::Equipment);
 });
 
 test('категория без объявлений удаляется', function () {

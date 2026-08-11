@@ -197,16 +197,6 @@
                                     <option value="collect_listing">Сбор объявления поставщика</option>
                                     <option value="customer_search">Поиск для заказчика</option>
                                 </select>
-                                <template x-if="selected.task !== 'customer_search'">
-                                    <label class="bse-field" style="margin-top: 0.5rem;">
-                                        <span>Тип объявления в этой ветке</span>
-                                        <select class="bse-input" x-model="selected.listing_type">
-                                            <option value="">Определять автоматически</option>
-                                            <option value="equipment">Техника</option>
-                                            <option value="service">Услуга</option>
-                                        </select>
-                                    </label>
-                                </template>
                             </div>
                         </template>
 
@@ -975,7 +965,6 @@
 
                         if (type === 'ai') {
                             node.task = 'collect_listing'
-                            node.listing_type = ''
                         }
 
                         if (type === 'my_listings') {

@@ -30,9 +30,10 @@
                 <strong>{{ filled($listing->title) ? $listing->title : collect([$listing->category?->name ?: 'Без категории', $listing->brand?->name])->filter()->join(' ') }}</strong>
                 <x-supplier.status-badge :status="$listing->status" />
             </div>
-            <p class="muted" style="margin: 0.25rem 0 0;">
-                {{ collect([$listing->type->getLabel(), filled($listing->title) ? collect([$listing->category?->name, $listing->brand?->name])->filter()->join(' ') : null])->filter()->join(' · ') }}
-            </p>
+            @php($subtitle = filled($listing->title) ? collect([$listing->category?->name, $listing->brand?->name])->filter()->join(' ') : '')
+            @if ($subtitle)
+                <p class="muted" style="margin: 0.25rem 0 0;">{{ $subtitle }}</p>
+            @endif
 
             @if ($listing->description)
                 <p style="margin: 0.5rem 0 0;">{{ Str::limit($listing->description, 140) }}</p>

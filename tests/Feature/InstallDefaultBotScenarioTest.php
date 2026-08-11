@@ -17,16 +17,17 @@ test('the installer publishes the reference main dialog with every MVP branch', 
     $nodes = collect($scenario->published_definition['nodes']);
 
     expect($nodes->firstWhere('id', 'main_menu')['options'])->toHaveCount(3)
-        ->and($nodes->firstWhere('id', 'collect_equipment'))
-        ->toMatchArray(['task' => 'collect_listing', 'listing_type' => 'equipment'])
-        ->and($nodes->firstWhere('id', 'collect_service'))
-        ->toMatchArray(['task' => 'collect_listing', 'listing_type' => 'service'])
+        ->and($nodes->firstWhere('id', 'collect_listing')['task'])->toBe('collect_listing')
         ->and($nodes->firstWhere('id', 'customer_search')['task'])->toBe('customer_search')
         ->and($nodes->firstWhere('id', 'my_listings')['type'])->toBe('my_listings')
         ->and($definition->startNodeId())->toBe('start')
         // Повторное обращение ведёт сразу к меню, минуя приветствие.
         ->and($definition->target('start', ScenarioDefinition::OUTPUT_RETURNING))->toBe('main_menu')
-        ->and($definition->target('start', ScenarioDefinition::OUTPUT_CONTINUE))->toBe('greeting');
+        ->and($definition->target('start', ScenarioDefinition::OUTPUT_CONTINUE))->toBe('greeting')
+        // Каждая ветка меню подключена: поставщик попадает к сборщику сразу.
+        ->and($definition->target('main_menu', 'option:supplier'))->toBe('collect_listing')
+        ->and($definition->target('main_menu', 'option:customer'))->toBe('customer_search')
+        ->and($definition->target('main_menu', 'option:my'))->toBe('my_listings');
 });
 
 test('the installer publishes the flow scenarios next to the main dialog', function () {

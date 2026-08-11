@@ -27,16 +27,6 @@
                 @csrf
 
                 <div class="field">
-                    <label for="type">Тип</label>
-                    <select id="type" name="type">
-                        @foreach (\App\Enums\ListingType::cases() as $type)
-                            <option value="{{ $type->value }}" @selected(old('type', $listing->type->value) === $type->value)>{{ $type->getLabel() }}</option>
-                        @endforeach
-                    </select>
-                    @error('type') <p class="error">{{ $message }}</p> @enderror
-                </div>
-
-                <div class="field">
                     <label for="title">Название</label>
                     <input id="title" name="title" maxlength="255" value="{{ old('title', $listing->title) }}" placeholder="Например: Аренда автокрана 25 т">
                     @error('title') <p class="error">{{ $message }}</p> @enderror
@@ -46,22 +36,15 @@
                     <label for="category_id">Категория</label>
                     <select id="category_id" name="category_id">
                         <option value="" @selected(old('category_id', $listing->category_id) === null)>— выберите категорию —</option>
-                        @foreach (\App\Enums\ListingType::cases() as $categoryType)
-                            @if ($categories->where('type', $categoryType)->isNotEmpty())
-                                <optgroup label="{{ $categoryType->getLabel() }}">
-                                    @foreach ($categories->where('type', $categoryType) as $category)
-                                        <option value="{{ $category->id }}" @selected((int) old('category_id', $listing->category_id) === $category->id)>{{ $category->name }}</option>
-                                    @endforeach
-                                </optgroup>
-                            @endif
+                        @foreach ($categories as $category)
+                            <option value="{{ $category->id }}" @selected((int) old('category_id', $listing->category_id) === $category->id)>{{ $category->name }}</option>
                         @endforeach
                     </select>
-                    <p class="muted" style="margin: 0.25rem 0 0;">Категория должна соответствовать выбранному типу.</p>
                     @error('category_id') <p class="error">{{ $message }}</p> @enderror
                 </div>
 
                 @if ($brands->isNotEmpty())
-                    <div class="field" id="brand-field">
+                    <div class="field">
                         <label for="brand_id">Марка (необязательно)</label>
                         <select id="brand_id" name="brand_id">
                             <option value="" @selected(old('brand_id', $listing->brand_id) === null)>— без марки —</option>
@@ -69,7 +52,7 @@
                                 <option value="{{ $brand->id }}" @selected((int) old('brand_id', $listing->brand_id) === $brand->id)>{{ $brand->name }}</option>
                             @endforeach
                         </select>
-                        <p class="muted" style="margin: 0.25rem 0 0;">Производитель техники; у услуг марки нет.</p>
+                        <p class="muted" style="margin: 0.25rem 0 0;">Производитель техники.</p>
                         @error('brand_id') <p class="error">{{ $message }}</p> @enderror
                     </div>
                 @endif
@@ -144,27 +127,6 @@
             </form>
 
             <script>
-                (function () {
-                    const typeSelect = document.getElementById('type');
-                    const brandField = document.getElementById('brand-field');
-
-                    if (!brandField) {
-                        return;
-                    }
-
-                    function toggleBrandField() {
-                        const isService = typeSelect.value === @json(\App\Enums\ListingType::Service->value);
-                        brandField.style.display = isService ? 'none' : '';
-
-                        if (isService) {
-                            document.getElementById('brand_id').value = '';
-                        }
-                    }
-
-                    typeSelect.addEventListener('change', toggleBrandField);
-                    toggleBrandField();
-                })();
-
                 (function () {
                     const input = document.getElementById('photos');
                     const camera = document.getElementById('photos-camera');
@@ -326,16 +288,12 @@
             </script>
         @else
             <dl style="margin: 0;">
-                <dt>Тип</dt>
-                <dd>{{ $listing->type->getLabel() }}</dd>
                 <dt>Название</dt>
                 <dd>{{ $listing->title ?: '—' }}</dd>
                 <dt>Категория</dt>
                 <dd>{{ $listing->category?->name ?: '—' }}</dd>
-                @if ($listing->type === \App\Enums\ListingType::Equipment)
-                    <dt>Марка</dt>
-                    <dd>{{ $listing->brand?->name ?: '—' }}</dd>
-                @endif
+                <dt>Марка</dt>
+                <dd>{{ $listing->brand?->name ?: '—' }}</dd>
                 <dt>Описание</dt>
                 <dd>{{ $listing->description ?: '—' }}</dd>
                 <dt>Локация</dt>

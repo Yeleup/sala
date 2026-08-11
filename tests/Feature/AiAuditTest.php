@@ -131,7 +131,6 @@ describe('интеграция с коллектором', function () {
         categoryNamed('Трактор');
         locationNamed('г.Шымкент');
         ListingExtractionAgent::fake([[
-            'type' => 'equipment',
             'category' => 'Трактор',
             'description' => 'Трактор в аренду',
             'location' => 'Шымкент',
@@ -143,14 +142,14 @@ describe('интеграция с коллектором', function () {
         $session = BotSession::factory()->waitingAt('collect')->create([
             'state' => [
                 'phase' => 'collecting', 'attempts' => 0, 'transcript' => [],
-                'fields' => [], 'draft_id' => null, 'listing_type' => 'equipment',
+                'fields' => [], 'draft_id' => null,
             ],
         ]);
         test()->mock(DereuMessenger::class)->shouldReceive('sendButtons')->once();
 
         app(SupplierListingCollector::class)->resume(
             $session,
-            ['id' => 'collect', 'type' => 'ai', 'task' => 'collect_listing', 'listing_type' => 'equipment'],
+            ['id' => 'collect', 'type' => 'ai', 'task' => 'collect_listing'],
             new InboundMessage(text: 'Сдаю трактор в Шымкенте, 10000 тг/час'),
         );
 

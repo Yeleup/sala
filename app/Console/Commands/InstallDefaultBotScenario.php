@@ -12,7 +12,7 @@ use Illuminate\Console\Command;
 
 /**
  * Installs and publishes the reference MVP scenarios
- * (docs/modules/user-flows.md): the main dialog (supplier branches
+ * (docs/modules/user-flows.md): the main dialog (the supplier branch
  * through the AI collector, customer search, «Мои объявления» CTA) and
  * the two flow scenarios — the customer request notification and the
  * 30-day renewal poll. Refuses to overwrite an already published
@@ -92,7 +92,7 @@ class InstallDefaultBotScenario extends Command
             'nodes' => [
                 ['id' => 'start', 'type' => 'start', 'x' => 40, 'y' => 240],
                 ['id' => 'greeting', 'type' => 'text', 'x' => 260, 'y' => 240,
-                    'text' => 'Здравствуйте! Это сервис аренды спецтехники и услуг: разместите своё предложение или найдите технику и специалистов.'],
+                    'text' => 'Здравствуйте! Это сервис аренды спецтехники: разместите своё предложение или найдите технику.'],
                 ['id' => 'main_menu', 'type' => 'buttons', 'x' => 520, 'y' => 240,
                     'text' => 'Что вы хотите сделать?',
                     'options' => [
@@ -100,15 +100,8 @@ class InstallDefaultBotScenario extends Command
                         ['id' => 'customer', 'title' => 'Я заказчик'],
                         ['id' => 'my', 'title' => 'Мои объявления'],
                     ]],
-                ['id' => 'supplier_type', 'type' => 'buttons', 'x' => 800, 'y' => 80,
-                    'text' => 'Что вы предлагаете?',
-                    'options' => [
-                        ['id' => 'equipment', 'title' => 'Техника'],
-                        ['id' => 'service', 'title' => 'Услуга'],
-                    ]],
-                ['id' => 'collect_equipment', 'type' => 'ai', 'task' => 'collect_listing', 'listing_type' => 'equipment', 'x' => 1080, 'y' => 20],
-                ['id' => 'collect_service', 'type' => 'ai', 'task' => 'collect_listing', 'listing_type' => 'service', 'x' => 1080, 'y' => 150],
-                ['id' => 'after_collect', 'type' => 'text', 'x' => 1340, 'y' => 80,
+                ['id' => 'collect_listing', 'type' => 'ai', 'task' => 'collect_listing', 'x' => 800, 'y' => 80],
+                ['id' => 'after_collect', 'type' => 'text', 'x' => 1080, 'y' => 80,
                     'text' => 'Чтобы добавить ещё одно объявление или найти технику — просто напишите нам снова.'],
                 ['id' => 'customer_search', 'type' => 'ai', 'task' => 'customer_search', 'x' => 800, 'y' => 300],
                 ['id' => 'after_search', 'type' => 'text', 'x' => 1080, 'y' => 300,
@@ -121,13 +114,10 @@ class InstallDefaultBotScenario extends Command
                 // Повторное обращение: без приветствия — сразу меню действий.
                 ['from' => 'start', 'output' => 'returning', 'to' => 'main_menu'],
                 ['from' => 'greeting', 'output' => 'continue', 'to' => 'main_menu'],
-                ['from' => 'main_menu', 'output' => 'option:supplier', 'to' => 'supplier_type'],
+                ['from' => 'main_menu', 'output' => 'option:supplier', 'to' => 'collect_listing'],
                 ['from' => 'main_menu', 'output' => 'option:customer', 'to' => 'customer_search'],
                 ['from' => 'main_menu', 'output' => 'option:my', 'to' => 'my_listings'],
-                ['from' => 'supplier_type', 'output' => 'option:equipment', 'to' => 'collect_equipment'],
-                ['from' => 'supplier_type', 'output' => 'option:service', 'to' => 'collect_service'],
-                ['from' => 'collect_equipment', 'output' => 'continue', 'to' => 'after_collect'],
-                ['from' => 'collect_service', 'output' => 'continue', 'to' => 'after_collect'],
+                ['from' => 'collect_listing', 'output' => 'continue', 'to' => 'after_collect'],
                 ['from' => 'customer_search', 'output' => 'continue', 'to' => 'after_search'],
             ],
         ];

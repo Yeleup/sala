@@ -5,7 +5,6 @@ namespace App\Models;
 use App\Enums\ListingMediaType;
 use App\Enums\ListingOrigin;
 use App\Enums\ListingStatus;
-use App\Enums\ListingType;
 use App\Jobs\GenerateListingEmbedding;
 use Database\Factories\ListingFactory;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
@@ -21,11 +20,11 @@ use InvalidArgumentException;
 use LogicException;
 
 /**
- * A supplier's offer (equipment or a service). Drafted by the AI from
- * free-form supplier input; every business field except the type may stay
- * empty until the supplier completes it via the web interface.
+ * A supplier's offer. Drafted by the AI from free-form supplier input;
+ * every business field may stay empty until the supplier completes it via
+ * the web interface.
  */
-#[Fillable(['contact_id', 'origin', 'created_by_user_id', 'type', 'title', 'category_id', 'brand_id', 'description', 'location_id', 'location_detail', 'price', 'status', 'rejection_reason', 'moderated_by_user_id', 'moderated_at', 'expires_at', 'renewal_requested_at'])]
+#[Fillable(['contact_id', 'origin', 'created_by_user_id', 'title', 'category_id', 'brand_id', 'description', 'location_id', 'location_detail', 'price', 'status', 'rejection_reason', 'moderated_by_user_id', 'moderated_at', 'expires_at', 'renewal_requested_at'])]
 class Listing extends Model
 {
     /** @use HasFactory<ListingFactory> */
@@ -52,7 +51,6 @@ class Listing extends Model
      * @var array<string, string>
      */
     public const array PUBLICATION_FIELDS = [
-        'type' => 'тип',
         'title' => 'название',
         'category_id' => 'категория',
         'description' => 'описание',
@@ -68,7 +66,7 @@ class Listing extends Model
      * The searchable text fields whose change makes the semantic search
      * vector stale (see ListingEmbeddings::sourceText()).
      */
-    private const array EMBEDDING_SOURCE_FIELDS = ['status', 'type', 'title', 'category_id', 'brand_id', 'description', 'location_id', 'location_detail'];
+    private const array EMBEDDING_SOURCE_FIELDS = ['status', 'title', 'category_id', 'brand_id', 'description', 'location_id', 'location_detail'];
 
     /**
      * Media rows go away with the listing via the DB cascade, but the
@@ -381,12 +379,11 @@ class Listing extends Model
     }
 
     /**
-     * @return array{type: class-string<ListingType>, status: class-string<ListingStatus>, origin: class-string<ListingOrigin>, expires_at: 'datetime', renewal_requested_at: 'datetime', moderated_at: 'datetime'}
+     * @return array{status: class-string<ListingStatus>, origin: class-string<ListingOrigin>, expires_at: 'datetime', renewal_requested_at: 'datetime', moderated_at: 'datetime'}
      */
     protected function casts(): array
     {
         return [
-            'type' => ListingType::class,
             'status' => ListingStatus::class,
             'origin' => ListingOrigin::class,
             'expires_at' => 'datetime',

@@ -75,10 +75,9 @@ class BotScenarioFactory extends Factory
         return [
             'nodes' => [
                 ['id' => 'start', 'type' => 'start'],
-                ['id' => 'greeting', 'type' => 'text', 'text' => 'Здравствуйте! Это сервис аренды спецтехники и услуг.'],
+                ['id' => 'greeting', 'type' => 'text', 'text' => 'Здравствуйте! Это сервис аренды спецтехники.'],
                 ['id' => 'role_menu', 'type' => 'buttons', 'text' => 'Кто вы?', 'options' => [
-                    ['id' => 'supplier_equipment', 'title' => 'Поставщик техники'],
-                    ['id' => 'supplier_services', 'title' => 'Поставщик услуг'],
+                    ['id' => 'supplier', 'title' => 'Поставщик'],
                     ['id' => 'customer', 'title' => 'Заказчик'],
                 ]],
             ],

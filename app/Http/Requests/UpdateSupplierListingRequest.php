@@ -2,7 +2,6 @@
 
 namespace App\Http\Requests;
 
-use App\Enums\ListingType;
 use App\Models\Listing;
 use App\Models\ListingMedia;
 use App\Support\WhatsappText;
@@ -27,18 +26,11 @@ class UpdateSupplierListingRequest extends FormRequest
     }
 
     /**
-     * Services carry no brand: a brand left over from the equipment state
-     * of the form is dropped silently — the field is optional, so unlike
-     * the category it must never block the submission.
+     * The title ends up in WhatsApp template parameters, which Meta rejects
+     * over newlines and space runs — normalize before storing.
      */
     protected function prepareForValidation(): void
     {
-        if ($this->input('type') === ListingType::Service->value) {
-            $this->merge(['brand_id' => null]);
-        }
-
-        // The title ends up in WhatsApp template parameters, which Meta
-        // rejects over newlines and space runs — normalize before storing.
         if (is_string($this->input('title'))) {
             $this->merge(['title' => WhatsappText::templateParameter($this->input('title')) ?: null]);
         }
@@ -50,14 +42,8 @@ class UpdateSupplierListingRequest extends FormRequest
     public function rules(): array
     {
         return [
-            'type' => ['required', Rule::enum(ListingType::class)],
             'title' => ['required', 'string', 'max:255'],
-            'category_id' => [
-                'required',
-                'integer',
-                // A listing's category must carry the listing's type.
-                Rule::exists('categories', 'id')->where('type', (string) $this->input('type')),
-            ],
+            'category_id' => ['required', 'integer', Rule::exists('categories', 'id')],
             'brand_id' => ['nullable', 'integer', Rule::exists('brands', 'id')],
             'description' => ['required', 'string', 'max:2000'],
             'location_id' => ['required', 'integer', Rule::exists('locations', 'id')],
@@ -110,9 +96,8 @@ class UpdateSupplierListingRequest extends FormRequest
             'required' => 'Заполните поле «:attribute».',
             'string' => 'Поле «:attribute» должно быть текстом.',
             'max' => 'Поле «:attribute» слишком длинное (не более :max символов).',
-            'enum' => 'Выберите тип: техника или услуга.',
             'category_id.integer' => 'Выберите категорию из списка.',
-            'category_id.exists' => 'Категория не соответствует выбранному типу — выберите категорию из списка нужного типа.',
+            'category_id.exists' => 'Выберите категорию из списка.',
             'brand_id.integer' => 'Выберите марку из списка.',
             'brand_id.exists' => 'Выберите марку из списка.',
             'location_id.integer' => 'Выберите локацию из подсказок.',
@@ -129,7 +114,6 @@ class UpdateSupplierListingRequest extends FormRequest
     public function attributes(): array
     {
         return [
-            'type' => 'тип',
             'title' => 'название',
             'category_id' => 'категория',
             'brand_id' => 'марка',

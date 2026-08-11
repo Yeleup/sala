@@ -1450,14 +1450,14 @@ test('a fourth service question in a row walks the ordinary intake path', functi
         'subject' => null, 'location' => null, 'location_any' => false,
         'clarifying_question' => '', 'user_intent' => 'service_question',
     ]);
-    $session = searchSession(['last_question' => 'Что именно вам нужно — какая техника или услуга?']);
+    $session = searchSession(['last_question' => 'Что именно вам нужно — какая техника?']);
 
     $messenger = fakeSearchMessenger();
     $messenger->shouldReceive('sendText')->times(3)
         ->withArgs(fn (Contact $to, string $text) => str_contains($text, 'оператор'));
     // Три повтора текущего вопроса плюс он же как уточнение на четвёртом ходе.
     $messenger->shouldReceive('sendText')->times(4)
-        ->withArgs(fn (Contact $to, string $text) => $text === 'Что именно вам нужно — какая техника или услуга?');
+        ->withArgs(fn (Contact $to, string $text) => $text === 'Что именно вам нужно — какая техника?');
 
     $assistant = app(CustomerSearchAssistant::class);
     $question = new InboundMessage(text: 'ну я и спрашиваю, как это у вас устроено');

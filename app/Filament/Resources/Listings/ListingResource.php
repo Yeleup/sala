@@ -3,7 +3,6 @@
 namespace App\Filament\Resources\Listings;
 
 use App\Enums\ListingStatus;
-use App\Enums\ListingType;
 use App\Filament\Clusters\Marketplace\MarketplaceCluster;
 use App\Filament\Resources\Listings\Pages\CreateListing;
 use App\Filament\Resources\Listings\Pages\EditListing;
@@ -285,26 +284,6 @@ class ListingResource extends Resource
         $user = auth()->user();
 
         return $user instanceof User ? $user : null;
-    }
-
-    /**
-     * Services carry no brand. The brand field is hidden for «услуга» and
-     * hidden fields are not dehydrated, so the form data cannot be trusted
-     * to clear a stale brand — it must be dropped here on save.
-     *
-     * @param  array<string, mixed>  $data
-     * @return array<string, mixed>
-     */
-    public static function dropBrandForService(array $data): array
-    {
-        $type = $data['type'] ?? null;
-        $type = $type instanceof ListingType ? $type : ListingType::tryFrom((string) $type);
-
-        if ($type === ListingType::Service) {
-            $data['brand_id'] = null;
-        }
-
-        return $data;
     }
 
     public static function getPages(): array

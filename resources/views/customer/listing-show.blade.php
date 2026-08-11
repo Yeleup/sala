@@ -3,9 +3,13 @@
          из админки — возврат к объявлению. --}}
     <a class="back" href="{{ $backUrl }}">&larr; {{ $backLabel ?? 'Назад к каталогу' }}</a>
 
+    @php($meta = collect([$listing->category?->name, $listing->brand?->name])->filter()->unique()->implode(' · '))
+
     <header class="page-header">
         <h1>{{ $listing->displayName() ?: 'Объявление №'.$listing->id }}</h1>
-        <p>{{ collect([$listing->type->getLabel(), $listing->category?->name, $listing->brand?->name])->filter()->unique()->implode(' · ') }}</p>
+        @if ($meta)
+            <p>{{ $meta }}</p>
+        @endif
     </header>
 
     <div class="card">

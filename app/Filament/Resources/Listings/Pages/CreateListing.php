@@ -24,7 +24,7 @@ class CreateListing extends CreateRecord
         $data['origin'] = ListingOrigin::Operator;
         $data['created_by_user_id'] = auth()->id();
 
-        return ListingResource::dropBrandForService($data);
+        return $data;
     }
 
     /**
@@ -41,7 +41,6 @@ class CreateListing extends CreateRecord
     {
         return Arr::only($data, [
             'contact_id',
-            'type',
             'category_id',
             'brand_id',
             'location_id',

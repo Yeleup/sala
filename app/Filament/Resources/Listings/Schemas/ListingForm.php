@@ -3,7 +3,6 @@
 namespace App\Filament\Resources\Listings\Schemas;
 
 use App\Enums\ListingMediaType;
-use App\Enums\ListingType;
 use App\Filament\Resources\Brands\Schemas\BrandForm;
 use App\Filament\Resources\Categories\Schemas\CategoryForm;
 use App\Filament\Resources\Contacts\Schemas\ContactForm;
@@ -25,7 +24,6 @@ use Filament\Infolists\Components\TextEntry;
 use Filament\Notifications\Notification;
 use Filament\Schemas\Components\Group;
 use Filament\Schemas\Components\Utilities\Get;
-use Filament\Schemas\Components\Utilities\Set;
 use Filament\Schemas\Schema;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Collection;
@@ -135,20 +133,6 @@ class ListingForm
                         return Contact::create(Arr::except($data, 'existing_contact_id'))->getKey();
                     })
                     ->validationMessages(['required' => 'Выберите поставщика.']),
-                Select::make('type')
-                    ->label('Тип')
-                    ->options(ListingType::class)
-                    ->required()
-                    ->live()
-                    // Switching the type invalidates the picked category —
-                    // the dictionary types each category. The brand must be
-                    // cleared here too: hiding its field alone would keep a
-                    // stale brand on a listing switched to «услуга».
-                    ->afterStateUpdated(function (Set $set): void {
-                        $set('category_id', null);
-                        $set('brand_id', null);
-                    })
-                    ->validationMessages(['required' => 'Выберите тип объявления.']),
                 TextInput::make('title')
                     ->label('Название')
                     ->placeholder('Например: Аренда автокрана 25 т')
@@ -158,61 +142,28 @@ class ListingForm
                     ->live(onBlur: true),
                 Select::make('category_id')
                     ->label('Категория')
-                    ->relationship(
-                        'category',
-                        'name',
-                        modifyQueryUsing: fn (Builder $query, Get $get): Builder => $query
-                            ->when($get('type'), fn (Builder $query, mixed $type) => $query->where('type', $type)),
-                    )
+                    ->relationship('category', 'name')
                     ->searchable()
                     ->preload()
                     ->live()
                     ->placeholder('Без категории')
-                    ->helperText('Список зависит от выбранного типа.')
                     // The client names a trade the dictionary does not have
-                    // yet: adding it here beats abandoning the form. The
-                    // type is offered from the listing, but stays visible —
-                    // it is the category that types the listing, not the
-                    // other way round, so a correction here corrects both.
+                    // yet: adding it here beats abandoning the form.
                     // ignoreRecord stays off in all three dictionary modals
                     // below: the record around them is the listing, not the
                     // dictionary row being created.
-                    ->createOptionForm(fn (Get $get): array => [
-                        CategoryForm::nameField(ignoreRecord: false),
-                        Select::make('type')
-                            ->label('Тип')
-                            ->options(ListingType::class)
-                            ->default($get('type'))
-                            ->required()
-                            ->helperText('Тип категории задаёт и тип объявления.')
-                            ->validationMessages(['required' => 'Выберите тип категории.']),
-                    ])
+                    ->createOptionForm(fn (): array => [CategoryForm::nameField(ignoreRecord: false)])
                     ->createOptionModalHeading('Новая категория')
-                    ->createOptionUsing(function (array $data, Set $set): int {
-                        $category = Category::create($data);
-
-                        // The dictionary types the category and the category
-                        // types the listing — the same rule the AI collection
-                        // follows. Without this the listing could keep a type
-                        // its own category contradicts.
-                        $set('type', $category->type->value);
-
-                        if ($category->type === ListingType::Service) {
-                            $set('brand_id', null);
-                        }
-
-                        return $category->getKey();
-                    }),
+                    ->createOptionUsing(fn (array $data): int => Category::create($data)->getKey()),
                 Select::make('brand_id')
                     ->label('Марка')
                     ->relationship('brand', 'name')
                     ->searchable()
                     ->preload()
                     ->placeholder('Без марки')
-                    ->helperText('Марка есть только у техники.')
+                    ->helperText('Производитель техники.')
                     ->createOptionForm(fn (): array => [BrandForm::nameField(ignoreRecord: false)])
-                    ->createOptionModalHeading('Новая марка')
-                    ->visible(fn (Get $get): bool => self::isEquipment($get('type'))),
+                    ->createOptionModalHeading('Новая марка'),
                 Textarea::make('description')
                     ->label('Описание')
                     ->rows(4)
@@ -369,14 +320,5 @@ class ListingForm
         }
 
         return Listing::missingPublicationFields($values);
-    }
-
-    /**
-     * A live Select holds the raw option value while a hydrated record
-     * holds the cast enum — the visibility check must accept both.
-     */
-    private static function isEquipment(mixed $type): bool
-    {
-        return ($type instanceof ListingType ? $type : ListingType::tryFrom((string) $type)) === ListingType::Equipment;
     }
 }

@@ -4,7 +4,6 @@ namespace App\Filament\Resources\Listings\Tables;
 
 use App\Enums\ListingOrigin;
 use App\Enums\ListingStatus;
-use App\Enums\ListingType;
 use App\Filament\Resources\Listings\ListingResource;
 use App\Models\Listing;
 use Filament\Actions\ActionGroup;
@@ -49,10 +48,6 @@ class ListingsTable
                     ->label('Писал боту')
                     ->boolean()
                     ->state(fn (Listing $record): bool => (bool) $record->supplier?->hasEverWritten())
-                    ->toggleable(),
-                TextColumn::make('type')
-                    ->label('Тип')
-                    ->badge()
                     ->toggleable(),
                 TextColumn::make('title')
                     ->label('Название')
@@ -107,9 +102,6 @@ class ListingsTable
                 SelectFilter::make('status')
                     ->label('Статус')
                     ->options(ListingStatus::class),
-                SelectFilter::make('type')
-                    ->label('Тип')
-                    ->options(ListingType::class),
                 SelectFilter::make('category_id')
                     ->label('Категория')
                     ->relationship('category', 'name'),

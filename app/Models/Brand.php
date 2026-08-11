@@ -11,8 +11,7 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
 /**
  * An equipment brand (manufacturer) — an operator-managed dictionary.
  * The AI assistant and the web forms pick strictly from this list and
- * never invent new brands. Unlike the category, the brand is optional
- * and applies only to equipment listings — services carry none.
+ * never invent new brands. Unlike the category, the brand is optional.
  */
 #[Fillable(['name'])]
 class Brand extends Model

@@ -3,7 +3,6 @@
 namespace Database\Factories;
 
 use App\Enums\ListingStatus;
-use App\Enums\ListingType;
 use App\Models\Category;
 use App\Models\Contact;
 use App\Models\Listing;
@@ -24,7 +23,6 @@ class ListingFactory extends Factory
     {
         return [
             'contact_id' => Contact::factory(),
-            'type' => ListingType::Equipment,
             // Null by default: listings drafted before the title field
             // existed have none, and every display falls back to the
             // category name — tests opt into a title explicitly.
@@ -42,15 +40,6 @@ class ListingFactory extends Factory
             'rejection_reason' => null,
             'expires_at' => null,
         ];
-    }
-
-    public function service(): static
-    {
-        return $this->state(fn (): array => [
-            'type' => ListingType::Service,
-            'category_id' => Category::factory()->service(),
-            'description' => 'Бригада с допусками, выезд на объект в день обращения.',
-        ]);
     }
 
     /**

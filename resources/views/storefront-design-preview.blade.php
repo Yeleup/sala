@@ -183,7 +183,7 @@
 
             <header class="page-header">
                 <h1>Каталог объявлений</h1>
-                <p>Спецтехника и услуги — все опубликованные объявления.</p>
+                <p>Спецтехника — все опубликованные объявления.</p>
             </header>
 
             <div class="card">
@@ -225,7 +225,7 @@
                 <a class="thumb-link" href="#"><div class="thumb-placeholder">фото</div><span class="thumb-count">4 фото</span></a>
                 <div class="listing-body">
                     <h2 class="listing-title"><a class="title-link" href="#">Аренда автокрана 25 т</a></h2>
-                    <p class="listing-line muted">Техника · Автокран · XCMG</p>
+                    <p class="listing-line muted">Автокран · XCMG</p>
                     <p class="listing-line">Кран 25 тонн со стрелой 40 м, работаем по городу и области, опытный машинист.</p>
                     <p class="listing-line muted">г.Шымкент, центр</p>
                     <p class="listing-line listing-price">20000 тг/ч</p>
@@ -240,7 +240,7 @@
             <div class="card listing-card">
                 <div class="listing-body">
                     <h2 class="listing-title"><a class="title-link" href="#">Кран-манипулятор 5 т</a></h2>
-                    <p class="listing-line muted">Техника · Автокран</p>
+                    <p class="listing-line muted">Автокран</p>
                     <p class="listing-line">Борт 6 метров, перевозка и разгрузка в одной машине.</p>
                     <p class="listing-line muted">Каратауский район, г.Шымкент</p>
                     <p class="listing-line listing-price">15000 тг/ч</p>
@@ -267,7 +267,7 @@
         <main>
             <header class="page-header">
                 <h1>Каталог объявлений</h1>
-                <p>Спецтехника и услуги — все опубликованные объявления.</p>
+                <p>Спецтехника — все опубликованные объявления.</p>
             </header>
 
             <div class="card">
@@ -311,7 +311,7 @@
                 <a class="thumb-link" href="#"><div class="thumb-placeholder">фото</div><span class="thumb-count">4 фото</span></a>
                 <div class="listing-body">
                     <h2 class="listing-title"><a class="title-link" href="#">Аренда автокрана 25 т</a></h2>
-                    <p class="listing-line muted">Техника · Автокран · XCMG</p>
+                    <p class="listing-line muted">Автокран · XCMG</p>
                     <p class="listing-line muted">г.Шымкент, центр</p>
                     <p class="listing-line listing-price">20000 тг/ч</p>
                     <p class="listing-line muted">Поставщик: Асхат</p>
@@ -361,7 +361,7 @@
 
             <header class="page-header">
                 <h1>Аренда автокрана 25 т</h1>
-                <p>Техника · Автокран · XCMG</p>
+                <p>Автокран · XCMG</p>
             </header>
 
             <div class="card">
@@ -452,7 +452,7 @@
 
             <header class="page-header">
                 <h1>Аренда автокрана 25 т</h1>
-                <p>Техника · Автокран · XCMG</p>
+                <p>Автокран · XCMG</p>
             </header>
 
             <div class="card">
@@ -499,7 +499,7 @@
 
             <header class="page-header">
                 <h1>Кран-манипулятор 5 т</h1>
-                <p>Техника · Автокран</p>
+                <p>Автокран</p>
             </header>
 
             <div class="card">
@@ -545,7 +545,7 @@
                     <strong>Аренда автокрана 25 т</strong>
                     <span class="badge badge-green">Опубликовано</span>
                 </div>
-                <p class="muted" style="margin: 0.25rem 0 0;">Техника · Автокран XCMG</p>
+                <p class="muted" style="margin: 0.25rem 0 0;">Автокран XCMG</p>
                 <p style="margin: 0.5rem 0 0;">Кран 25 тонн со стрелой 40 м, работаем по городу и области.</p>
                 <p class="muted" style="margin: 0.5rem 0 0;">г.Шымкент, центр · 20000 тг/ч</p>
                 <p class="muted" style="margin: 0.5rem 0 0;">Опубликовано до 21.08.2026</p>
@@ -559,7 +559,6 @@
                     <strong>Экскаватор Hitachi</strong>
                     <span class="badge badge-amber">На модерации</span>
                 </div>
-                <p class="muted" style="margin: 0.25rem 0 0;">Техника</p>
                 <p class="muted" style="margin: 0.5rem 0 0;">Каратауский район, г.Шымкент · 25000 тг/ч</p>
             </article>
 
@@ -568,7 +567,6 @@
                     <strong>Без категории</strong>
                     <span class="badge badge-gray">Черновик</span>
                 </div>
-                <p class="muted" style="margin: 0.25rem 0 0;">Техника</p>
                 <p class="muted" style="margin: 0.5rem 0 0;">Локация и цена не указаны</p>
                 <div class="actions">
                     <a class="btn btn-primary" href="#">Редактировать</a>
@@ -577,10 +575,10 @@
 
             <article class="card">
                 <div class="meta">
-                    <strong>Услуги манипулятора</strong>
+                    <strong>Кран-манипулятор 7 т</strong>
                     <span class="badge badge-red">Отклонено</span>
                 </div>
-                <p class="muted" style="margin: 0.25rem 0 0;">Услуги</p>
+                <p class="muted" style="margin: 0.25rem 0 0;">Кран-манипулятор</p>
                 <p class="muted" style="margin: 0.5rem 0 0;">Локация и цена не указаны</p>
                 <p class="reason">Причина отклонения: Не указана цена — добавьте тариф.</p>
                 <div class="actions">
@@ -609,22 +607,17 @@
                 <p class="reason" style="margin: 0 0 1rem;">Причина отклонения: Не указана цена — добавьте тариф.</p>
 
                 <div class="field">
-                    <label>Тип</label>
-                    <select><option selected>Техника</option><option>Услуги</option></select>
-                </div>
-                <div class="field">
                     <label>Название</label>
                     <input value="Кран-манипулятор 5 т" placeholder="Например: Аренда автокрана 25 т">
                 </div>
                 <div class="field">
                     <label>Категория</label>
                     <select><option>— выберите категорию —</option><option selected>Краны-манипуляторы (КМУ)</option></select>
-                    <p class="muted" style="margin: 0.25rem 0 0;">Категория должна соответствовать выбранному типу.</p>
                 </div>
                 <div class="field">
                     <label>Марка (необязательно)</label>
                     <select><option selected>— без марки —</option><option>КАМАЗ</option></select>
-                    <p class="muted" style="margin: 0.25rem 0 0;">Производитель техники; у услуг марки нет.</p>
+                    <p class="muted" style="margin: 0.25rem 0 0;">Производитель техники.</p>
                 </div>
                 <div class="field">
                     <label>Описание</label>
@@ -701,8 +694,6 @@
 
             <div class="card">
                 <dl style="margin: 0;">
-                    <dt>Тип</dt>
-                    <dd>Техника</dd>
                     <dt>Название</dt>
                     <dd>Аренда автокрана 25 т</dd>
                     <dt>Категория</dt>

@@ -6,7 +6,6 @@ use App\Enums\AiTask;
 use App\Enums\BotNodeType;
 use App\Enums\BotReplyKey;
 use App\Enums\BotScenarioTrigger;
-use App\Enums\ListingType;
 use App\Enums\ScenarioAction;
 use App\Enums\ScenarioCondition;
 use App\Enums\ScenarioMessageChannel;
@@ -342,10 +341,6 @@ class BotScenarioEditor extends Page
 
             if ($clean['type'] === BotNodeType::AiInput->value) {
                 $clean['task'] = AiTask::fromNode($node['task'] ?? null)->value;
-
-                if (filled($node['listing_type'] ?? null) && ListingType::tryFrom((string) $node['listing_type']) !== null) {
-                    $clean['listing_type'] = (string) $node['listing_type'];
-                }
             }
 
             if ($clean['type'] === BotNodeType::Message->value) {

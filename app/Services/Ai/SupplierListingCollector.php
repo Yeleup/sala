@@ -9,7 +9,6 @@ use App\Enums\AiOutcome;
 use App\Enums\BotReplyKey;
 use App\Enums\ListingMediaType;
 use App\Enums\ListingOrigin;
-use App\Enums\ListingType;
 use App\Enums\UserIntent;
 use App\Models\BotSession;
 use App\Models\Brand;
@@ -128,7 +127,6 @@ class SupplierListingCollector
             'transcript' => [],
             'fields' => [],
             'draft_id' => null,
-            'listing_type' => $node['listing_type'] ?? null,
             'picked_location_id' => null,
             'picked_location_wording' => null,
             'declined_location_wording' => null,
@@ -149,7 +147,7 @@ class SupplierListingCollector
      */
     public function resume(BotSession $session, array $node, InboundMessage $message): AiOutcome
     {
-        $state = $this->normalizeState($session, $node);
+        $state = $this->normalizeState($session);
 
         if ($state['phase'] === 'confirming') {
             return $this->handleConfirmation($session, $state, $message, $node);
@@ -188,7 +186,7 @@ class SupplierListingCollector
             $this->persist($session, $state);
             $this->messenger->sendText(
                 $session->contact,
-                'Не удалось разобрать сообщение. Опишите технику или услугу текстом, голосом или фото.',
+                'Не удалось разобрать сообщение. Опишите технику текстом, голосом или фото.',
             );
 
             return AiOutcome::InProgress;
@@ -268,7 +266,7 @@ class SupplierListingCollector
      */
     private function advance(BotSession $session, array $state): AiOutcome
     {
-        $missing = $this->missingFields($state['fields'], $state);
+        $missing = $this->missingFields($state['fields']);
 
         if ($missing === []) {
             $draft = $this->ensureDraft($session, $state);
@@ -374,10 +372,10 @@ class SupplierListingCollector
     {
         $attributes = $this->listingAttributes($state);
 
-        // The type is always set, so it alone does not count as content;
-        // an existing draft does — it may already hold photos or audio.
+        // An existing draft counts as content on its own — it may already
+        // hold photos or audio even when no field got extracted.
         $hasContent = $state['draft_id'] !== null
-            || collect($attributes)->forget('type')->contains(fn (mixed $value): bool => filled($value));
+            || collect($attributes)->contains(fn (mixed $value): bool => filled($value));
 
         if (! $hasContent) {
             $this->persist($session, $state);
@@ -746,20 +744,9 @@ class SupplierListingCollector
      */
     private function extract(BotSession $session, array $state): ?array
     {
-        $expectedType = ListingType::tryFrom((string) ($state['listing_type'] ?? ''));
+        $categories = Category::query()->orderBy('name')->get();
 
-        // A branch with a fixed type offers only categories of that type;
-        // the auto branch offers the whole dictionary.
-        $categories = Category::query()
-            ->when($expectedType !== null, fn ($query) => $query->where('type', $expectedType))
-            ->orderBy('name')
-            ->get();
-
-        // Services carry no brand, so the service branch never sees the
-        // brand dictionary at all.
-        $brands = $expectedType === ListingType::Service
-            ? new Collection
-            : Brand::query()->orderBy('name')->get();
+        $brands = Brand::query()->orderBy('name')->get();
 
         $prompt = $state['transcript'] !== []
             ? implode("\n", $state['transcript'])
@@ -777,7 +764,7 @@ class SupplierListingCollector
         try {
             $fields = $this->audit->run(
                 AiOperationType::ListingExtraction,
-                fn (): array => (new ListingExtractionAgent($expectedType, $categories->pluck('name')->all(), $brands->pluck('name')->all()))
+                fn (): array => (new ListingExtractionAgent($categories->pluck('name')->all(), $brands->pluck('name')->all()))
                     ->prompt($prompt, attachments: $this->photoAttachments($state))
                     ->toArray(),
                 [
@@ -795,21 +782,8 @@ class SupplierListingCollector
             return null;
         }
 
-        $category = $this->canonicalCategory($fields['category'] ?? null, $categories);
-        $fields['category'] = $category?->name;
-
-        // The dictionary types the category, and the category types the
-        // listing: a resolved category fixes the type even when the model
-        // could not tell it (or contradicted the dictionary).
-        if ($category !== null) {
-            $fields['type'] = $category->type->value;
-        }
-
-        // The brand check runs after the type is settled: a category that
-        // resolved the listing into a service drops the brand with it.
-        $fields['brand'] = ($fields['type'] ?? null) === ListingType::Service->value
-            ? null
-            : $this->canonicalBrand($fields['brand'] ?? null, $brands)?->name;
+        $fields['category'] = $this->canonicalCategory($fields['category'] ?? null, $categories)?->name;
+        $fields['brand'] = $this->canonicalBrand($fields['brand'] ?? null, $brands)?->name;
 
         return $this->resolveLocation($fields, $state);
     }
@@ -970,26 +944,15 @@ class SupplierListingCollector
     }
 
     /**
-     * The type joins the required fields when the branch leaves it to the
-     * AI («Определять автоматически») — a listing must never silently
-     * default to «техника».
-     *
      * @param  array<string, mixed>  $fields
-     * @param  array<string, mixed>  $state
      * @return list<string>
      */
-    private function missingFields(array $fields, array $state): array
+    private function missingFields(array $fields): array
     {
-        $missing = array_values(array_filter(
+        return array_values(array_filter(
             self::REQUIRED_FIELDS,
             fn (string $field): bool => blank($fields[$field] ?? null),
         ));
-
-        if (blank($state['listing_type']) && blank($fields['type'] ?? null)) {
-            array_unshift($missing, 'type');
-        }
-
-        return $missing;
     }
 
     /**
@@ -1008,7 +971,6 @@ class SupplierListingCollector
         $draft = Listing::create([
             'contact_id' => $session->contact_id,
             'origin' => ListingOrigin::Chat,
-            'type' => $this->resolveType($state),
         ]);
 
         $state['draft_id'] = $draft->id;
@@ -1018,7 +980,7 @@ class SupplierListingCollector
 
     /**
      * @param  array<string, mixed>  $state
-     * @return array{type: string, title: ?string, category_id: ?int, brand_id: ?int, description: ?string, location_id: ?int, location_detail: ?string, price: ?string}
+     * @return array{title: ?string, category_id: ?int, brand_id: ?int, description: ?string, location_id: ?int, location_detail: ?string, price: ?string}
      */
     private function listingAttributes(array $state): array
     {
@@ -1029,12 +991,11 @@ class SupplierListingCollector
         $title = WhatsappText::templateParameter((string) ($fields['title'] ?? ''));
 
         return [
-            'type' => $this->resolveType($state)->value,
             'title' => $title === '' ? null : Str::limit($title, 255, ''),
             'category_id' => filled($fields['category'] ?? null)
                 ? Category::query()->where('name', $fields['category'])->value('id')
                 : null,
-            'brand_id' => $this->resolveType($state) === ListingType::Equipment && filled($fields['brand'] ?? null)
+            'brand_id' => filled($fields['brand'] ?? null)
                 ? Brand::query()->where('name', $fields['brand'])->value('id')
                 : null,
             'description' => $fields['description'] ?? null,
@@ -1042,16 +1003,6 @@ class SupplierListingCollector
             'location_detail' => $fields['location_detail'] ?? null,
             'price' => $fields['price'] ?? null,
         ];
-    }
-
-    /**
-     * @param  array<string, mixed>  $state
-     */
-    private function resolveType(array $state): ListingType
-    {
-        return ListingType::tryFrom((string) ($state['fields']['type'] ?? ''))
-            ?? ListingType::tryFrom((string) ($state['listing_type'] ?? ''))
-            ?? ListingType::Equipment;
     }
 
     /**
@@ -1126,12 +1077,6 @@ class SupplierListingCollector
      */
     private function clarificationQuestion(array $fields, array $missing): string
     {
-        // The type question outranks whatever the extractor suggested: the
-        // branch cannot finish while the listing type is unknown.
-        if (($missing[0] ?? null) === 'type') {
-            return 'Уточните: вы предлагаете технику в аренду или услугу (работу специалиста)?';
-        }
-
         // The named place did not resolve to the dictionary — the extractor
         // believes the location is filled, so its question would miss this.
         // Two cases are not «не нашли» at all: the name IS in the dictionary,
@@ -1163,7 +1108,7 @@ class SupplierListingCollector
         }
 
         $questions = [
-            'category' => 'Что именно вы предлагаете — какая техника или услуга?',
+            'category' => 'Что именно вы предлагаете — какая техника?',
             'description' => 'Опишите чуть подробнее ваше предложение.',
             'location_id' => 'В каком городе, районе или селе это доступно?',
             'price' => 'Какая цена или тариф?',
@@ -1191,10 +1136,9 @@ class SupplierListingCollector
      * Restore state defaults so a mid-dialog code change or a missing row
      * cannot crash the collector.
      *
-     * @param  array<string, mixed>  $node
      * @return array<string, mixed>
      */
-    private function normalizeState(BotSession $session, array $node): array
+    private function normalizeState(BotSession $session): array
     {
         return array_merge([
             'phase' => 'collecting',
@@ -1206,7 +1150,6 @@ class SupplierListingCollector
             'transcript' => [],
             'fields' => [],
             'draft_id' => null,
-            'listing_type' => $node['listing_type'] ?? null,
             'picked_location_id' => null,
             'picked_location_wording' => null,
             'declined_location_wording' => null,

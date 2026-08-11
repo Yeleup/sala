@@ -1,7 +1,7 @@
 <x-customer.layout title="Каталог объявлений">
     <header class="page-header">
         <h1>Каталог объявлений</h1>
-        <p>Спецтехника и услуги — все опубликованные объявления.</p>
+        <p>Спецтехника — все опубликованные объявления.</p>
     </header>
 
     <form method="GET" action="{{ url()->current() }}" class="card">
@@ -19,14 +19,8 @@
                 <label for="category_id">Категория</label>
                 <select id="category_id" name="category_id">
                     <option value="">— все категории —</option>
-                    @foreach (\App\Enums\ListingType::cases() as $categoryType)
-                        @if ($categories->where('type', $categoryType)->isNotEmpty())
-                            <optgroup label="{{ $categoryType->getLabel() }}">
-                                @foreach ($categories->where('type', $categoryType) as $category)
-                                    <option value="{{ $category->id }}" @selected($filters['category']?->id === $category->id)>{{ $category->name }}</option>
-                                @endforeach
-                            </optgroup>
-                        @endif
+                    @foreach ($categories as $category)
+                        <option value="{{ $category->id }}" @selected($filters['category']?->id === $category->id)>{{ $category->name }}</option>
                     @endforeach
                 </select>
             </div>
@@ -66,9 +60,10 @@
             @endif
             <div class="listing-body">
                 <h2 class="listing-title"><a class="title-link" href="{{ $detailUrls[$listing->id] }}">{{ $listing->displayName() ?: 'Объявление №'.$listing->id }}</a></h2>
-                <p class="listing-line muted">
-                    {{ collect([$listing->type->getLabel(), $listing->category?->name, $listing->brand?->name])->filter()->unique()->implode(' · ') }}
-                </p>
+                @php($meta = collect([$listing->category?->name, $listing->brand?->name])->filter()->unique()->implode(' · '))
+                @if ($meta)
+                    <p class="listing-line muted">{{ $meta }}</p>
+                @endif
                 @if ($listing->description)
                     <p class="listing-line">{{ \Illuminate\Support\Str::limit($listing->description, 140) }}</p>
                 @endif

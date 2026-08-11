@@ -19,7 +19,7 @@ test('схема агента уходит в строгом режиме и ц�
 
     expect($schema['required'] ?? [])->toEqualCanonicalizing(array_keys($schema['properties']));
 })->with([
-    'извлечение объявления' => fn (): object => new ListingExtractionAgent(null, ['Автокран'], ['Hitachi']),
+    'извлечение объявления' => fn (): object => new ListingExtractionAgent(['Автокран'], ['Hitachi']),
     'разбор поискового запроса' => fn (): object => new SearchQueryExtractionAgent,
     'выбор одноимённого места' => fn (): object => new LocationChoiceAgent([7 => 'Абайский район, Карагандинская область', 9 => 'Абайский район, Шымкент']),
 ]);

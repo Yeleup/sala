@@ -57,9 +57,9 @@ function connectedDereuCompany(array $attributes = []): \App\Models\DereuCompany
  * Категория из операторского справочника (создаётся при первом обращении) —
  * для объявлений в тестах: `'category_id' => categoryNamed('Автокран')->id`.
  */
-function categoryNamed(string $name, \App\Enums\ListingType $type = \App\Enums\ListingType::Equipment): \App\Models\Category
+function categoryNamed(string $name): \App\Models\Category
 {
-    return \App\Models\Category::query()->firstOrCreate(['name' => $name], ['type' => $type]);
+    return \App\Models\Category::query()->firstOrCreate(['name' => $name]);
 }
 
 /**

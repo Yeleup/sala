@@ -354,7 +354,7 @@ test('republication with only a text tweak keeps the fingerprinted step alive', 
 
 test('the AI block text stays out of the compatibility fingerprint', function () {
     $definition = new App\Services\Bot\ScenarioDefinition([]);
-    $node = ['id' => 'collect', 'type' => 'ai', 'task' => 'collect_listing', 'listing_type' => 'equipment'];
+    $node = ['id' => 'collect', 'type' => 'ai', 'task' => 'collect_listing'];
 
     expect($definition->nodeFingerprint($node + ['text' => 'Что сдаёте?']))
         ->toBe($definition->nodeFingerprint($node));

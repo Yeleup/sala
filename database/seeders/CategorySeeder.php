@@ -2,7 +2,6 @@
 
 namespace Database\Seeders;
 
-use App\Enums\ListingType;
 use App\Models\Category;
 use Illuminate\Database\Seeder;
 
@@ -94,7 +93,7 @@ class CategorySeeder extends Seeder
     public function run(): void
     {
         foreach (self::EQUIPMENT_CATEGORIES as $name) {
-            Category::query()->firstOrCreate(['name' => $name], ['type' => ListingType::Equipment]);
+            Category::query()->firstOrCreate(['name' => $name]);
         }
     }
 }

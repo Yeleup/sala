@@ -335,7 +335,7 @@ class CustomerSearchAssistant
             $this->persist($session, $state);
             $this->sendDeadEnd(
                 $session,
-                sprintf('По запросу ничего не нашлось. Попробуйте описать иначе — вид техники или услуги и город, %s.', self::QUERY_EXAMPLE),
+                sprintf('По запросу ничего не нашлось. Попробуйте описать иначе — вид техники и город, %s.', self::QUERY_EXAMPLE),
             );
 
             return AiOutcome::InProgress;
@@ -870,8 +870,8 @@ class CustomerSearchAssistant
         }
 
         return $missing[0] === 'subject'
-            ? 'Что именно вам нужно — какая техника или услуга?'
-            : 'В каком городе или районе нужна техника или услуга?';
+            ? 'Что именно вам нужно — какая техника?'
+            : 'В каком городе или районе нужна техника?';
     }
 
     /**

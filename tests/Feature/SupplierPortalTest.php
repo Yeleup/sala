@@ -1,7 +1,6 @@
 <?php
 
 use App\Enums\ListingStatus;
-use App\Enums\ListingType;
 use App\Models\Contact;
 use App\Models\Listing;
 use App\Models\ListingMedia;
@@ -25,7 +24,6 @@ function portalLinks(): CtaLinkBuilder
 function supplierListingPayload(Listing $listing, array $overrides = []): array
 {
     return array_merge([
-        'type' => $listing->type->value,
         'title' => $listing->title ?? 'Аренда автокрана 25 т',
         'category_id' => $listing->category_id,
         'description' => $listing->description,
@@ -200,10 +198,9 @@ describe('редактирование', function () {
         $listing = Listing::factory()->create();
 
         $response = $this->post(portalLinks()->updateUrl($listing), [
-            'type' => ListingType::Service->value,
-            'title' => 'Услуги сварщиков',
-            'category_id' => categoryNamed('Сварщик', ListingType::Service)->id,
-            'description' => 'Бригада сварщиков с допусками.',
+            'title' => 'Аренда автокрана 25 т',
+            'category_id' => categoryNamed('Автокран')->id,
+            'description' => 'Автокран 25 тонн, стрела 28 м.',
             'location_id' => locationNamed('г.Алматы')->id,
             'location_detail' => 'Ауэзовский район',
             'price' => '5000 тг/ч',
@@ -212,9 +209,8 @@ describe('редактирование', function () {
         $response->assertRedirect();
         expect($listing->refresh())
             ->status->toBe(ListingStatus::PendingModeration)
-            ->type->toBe(ListingType::Service)
-            ->title->toBe('Услуги сварщиков')
-            ->category->name->toBe('Сварщик')
+            ->title->toBe('Аренда автокрана 25 т')
+            ->category->name->toBe('Автокран')
             ->location->name->toBe('г.Алматы')
             ->location_detail->toBe('Ауэзовский район')
             ->price->toBe('5000 тг/ч');
@@ -224,7 +220,6 @@ describe('редактирование', function () {
         $listing = Listing::factory()->rejected()->create();
 
         $this->post(portalLinks()->updateUrl($listing), [
-            'type' => $listing->type->value,
             'title' => 'Аренда автокрана',
             'category_id' => $listing->category_id,
             'description' => $listing->description,
@@ -251,7 +246,6 @@ describe('редактирование', function () {
         $listing = Listing::factory()->create(['title' => null, 'category_id' => null, 'price' => null]);
 
         $response = $this->post(portalLinks()->updateUrl($listing), [
-            'type' => $listing->type->value,
             'title' => '',
             'category_id' => '',
             'description' => $listing->description,
@@ -267,7 +261,6 @@ describe('редактирование', function () {
         $listing = Listing::factory()->create();
 
         $response = $this->post(portalLinks()->updateUrl($listing), [
-            'type' => $listing->type->value,
             'category_id' => 999999,
             'description' => $listing->description,
             'location_id' => $listing->location_id,
@@ -282,7 +275,6 @@ describe('редактирование', function () {
         $listing = Listing::factory()->create();
 
         $response = $this->post(portalLinks()->updateUrl($listing), [
-            'type' => $listing->type->value,
             'category_id' => $listing->category_id,
             'description' => $listing->description,
             'location_id' => 999999,
@@ -290,21 +282,6 @@ describe('редактирование', function () {
         ]);
 
         $response->assertSessionHasErrors(['location_id']);
-        expect($listing->refresh())->status->toBe(ListingStatus::Draft);
-    });
-
-    test('категория чужого типа не принимается', function () {
-        $listing = Listing::factory()->create();
-
-        $response = $this->post(portalLinks()->updateUrl($listing), [
-            'type' => ListingType::Service->value,
-            'category_id' => categoryNamed('Автокран')->id,
-            'description' => $listing->description,
-            'location_id' => $listing->location_id,
-            'price' => '10000 тг/ч',
-        ]);
-
-        $response->assertSessionHasErrors(['category_id']);
         expect($listing->refresh())->status->toBe(ListingStatus::Draft);
     });
 
@@ -340,21 +317,6 @@ describe('редактирование', function () {
 
         $response->assertSessionHasErrors(['brand_id']);
         expect($listing->refresh())->status->toBe(ListingStatus::Draft);
-    });
-
-    test('смена типа на услугу молча сбрасывает марку', function () {
-        $listing = Listing::factory()->create(['brand_id' => brandNamed('Hitachi')->id]);
-
-        $response = $this->post(portalLinks()->updateUrl($listing), supplierListingPayload($listing, [
-            'type' => ListingType::Service->value,
-            'category_id' => categoryNamed('Сварщик', ListingType::Service)->id,
-            'brand_id' => $listing->brand_id,
-        ]));
-
-        $response->assertSessionDoesntHaveErrors();
-        expect($listing->refresh())
-            ->status->toBe(ListingStatus::PendingModeration)
-            ->brand_id->toBeNull();
     });
 
     test('форма показывает выбор марки, когда справочник заполнен', function () {

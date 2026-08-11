@@ -196,7 +196,6 @@ class ScenarioDefinition
         return md5(json_encode([
             'type' => $node['type'] ?? null,
             'task' => $node['task'] ?? null,
-            'listing_type' => $node['listing_type'] ?? null,
             'options' => array_map(
                 fn (array $option): array => ['id' => $option['id'] ?? null, 'title' => $option['title'] ?? null],
                 $this->options($node),

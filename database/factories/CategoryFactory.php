@@ -2,7 +2,6 @@
 
 namespace Database\Factories;
 
-use App\Enums\ListingType;
 use App\Models\Category;
 use Illuminate\Database\Eloquent\Factories\Factory;
 
@@ -20,12 +19,6 @@ class CategoryFactory extends Factory
     {
         return [
             'name' => ucfirst(fake()->unique()->words(2, true)),
-            'type' => ListingType::Equipment,
         ];
-    }
-
-    public function service(): static
-    {
-        return $this->state(fn (): array => ['type' => ListingType::Service]);
     }
 }

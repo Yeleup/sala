@@ -2,14 +2,12 @@
 
 namespace App\Filament\Resources\Categories\Tables;
 
-use App\Enums\ListingType;
 use App\Models\Category;
 use Filament\Actions\Action;
 use Filament\Actions\EditAction;
 use Filament\Notifications\Notification;
 use Filament\Support\Icons\Heroicon;
 use Filament\Tables\Columns\TextColumn;
-use Filament\Tables\Filters\SelectFilter;
 use Filament\Tables\Table;
 
 class CategoriesTable
@@ -22,9 +20,6 @@ class CategoriesTable
                     ->label('Название')
                     ->searchable()
                     ->sortable(),
-                TextColumn::make('type')
-                    ->label('Тип')
-                    ->badge(),
                 TextColumn::make('listings_count')
                     ->label('Объявлений')
                     ->counts('listings')
@@ -33,11 +28,6 @@ class CategoriesTable
                     ->label('Создана')
                     ->dateTime('d.m.Y H:i')
                     ->sortable(),
-            ])
-            ->filters([
-                SelectFilter::make('type')
-                    ->label('Тип')
-                    ->options(ListingType::class),
             ])
             ->recordActions([
                 EditAction::make(),

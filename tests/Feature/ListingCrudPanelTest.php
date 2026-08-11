@@ -3,7 +3,6 @@
 use App\Enums\ListingMediaType;
 use App\Enums\ListingOrigin;
 use App\Enums\ListingStatus;
-use App\Enums\ListingType;
 use App\Filament\Resources\Listings\ListingResource;
 use App\Filament\Resources\Listings\Pages\CreateListing;
 use App\Filament\Resources\Listings\Pages\EditListing;
@@ -43,7 +42,6 @@ test('оператор создаёт объявление за поставщи
     Livewire::test(CreateListing::class)
         ->fillForm([
             'contact_id' => $supplier->id,
-            'type' => ListingType::Equipment->value,
             'title' => 'Аренда автокрана 25 т',
             'category_id' => $category->id,
             'description' => 'Кран 25 тонн, стрела 28 м',
@@ -66,10 +64,7 @@ test('объявление, заведённое оператором, поме�
     $this->actingAs($operator);
 
     Livewire::test(CreateListing::class)
-        ->fillForm([
-            'contact_id' => Contact::factory()->create()->id,
-            'type' => ListingType::Equipment->value,
-        ])
+        ->fillForm(['contact_id' => Contact::factory()->create()->id])
         ->call('create')
         ->assertHasNoFormErrors();
 
@@ -141,7 +136,6 @@ test('«создать ещё» оставляет поставщика и об�
     $component = Livewire::test(CreateListing::class)
         ->fillForm([
             'contact_id' => $supplier->id,
-            'type' => ListingType::Equipment->value,
             'title' => 'Экскаватор Hitachi ZX200',
             'category_id' => $category->id,
             'description' => 'Гусеничный, ковш 1 куб',
@@ -154,7 +148,6 @@ test('«создать ещё» оставляет поставщика и об�
     // Общее у парка одной компании остаётся набранным...
     $component->assertFormSet([
         'contact_id' => $supplier->id,
-        'type' => ListingType::Equipment,
         'category_id' => $category->id,
         'location_id' => $location->id,
         'price' => '15000 тг/ч',
@@ -211,42 +204,20 @@ test('пустое поле локации открывается верхом �
 describe('справочники пополняются прямо из формы объявления', function () {
     test('категория заводится из формы и сразу подставляется', function () {
         $component = Livewire::test(CreateListing::class)
-            ->fillForm(['type' => ListingType::Equipment->value])
             ->callAction(
                 TestAction::make('createOption')->schemaComponent('category_id'),
-                ['name' => 'Ямобур', 'type' => ListingType::Equipment->value],
+                ['name' => 'Ямобур'],
             );
 
         $category = Category::sole();
-        expect($category)->name->toBe('Ямобур')->type->toBe(ListingType::Equipment);
+        expect($category->name)->toBe('Ямобур');
         $component->assertFormSet(['category_id' => $category->id]);
-    });
-
-    test('заведённая категория-услуга переводит объявление в услуги и снимает марку', function () {
-        $component = Livewire::test(CreateListing::class)
-            ->fillForm([
-                'type' => ListingType::Equipment->value,
-                'brand_id' => brandNamed('Hitachi')->id,
-            ])
-            ->callAction(
-                TestAction::make('createOption')->schemaComponent('category_id'),
-                ['name' => 'Сварщик', 'type' => ListingType::Service->value],
-            );
-
-        // Справочник типизирует категорию, а категория — объявление: иначе
-        // у объявления остался бы тип, которому его же категория противоречит.
-        $component->assertFormSet([
-            'type' => ListingType::Service,
-            'brand_id' => null,
-            'category_id' => Category::sole()->id,
-        ]);
     });
 
     test('модалка предупреждает о похожей категории, но завести не мешает', function () {
         categoryNamed('Экскаватор');
 
         $component = Livewire::test(CreateListing::class)
-            ->fillForm(['type' => ListingType::Equipment->value])
             ->mountAction(TestAction::make('createOption')->schemaComponent('category_id'))
             ->fillForm(['name' => 'Эксковатор'])
             ->assertSchemaComponentExists('name', checkComponentUsing: fn (Component $field): bool => str_contains(
@@ -257,7 +228,7 @@ describe('справочники пополняются прямо из форм
         // Предупреждение, а не запрет: «Автокран» и «Автовышка» тоже похожи,
         // а различить их может только оператор на звонке.
         $component
-            ->fillForm(['name' => 'Экскаватор-погрузчик', 'type' => ListingType::Equipment->value])
+            ->fillForm(['name' => 'Экскаватор-погрузчик'])
             ->callMountedAction()
             ->assertHasNoActionErrors();
 
@@ -268,7 +239,6 @@ describe('справочники пополняются прямо из форм
         brandNamed('Hitachi');
 
         Livewire::test(CreateListing::class)
-            ->fillForm(['type' => ListingType::Equipment->value])
             ->mountAction(TestAction::make('createOption')->schemaComponent('brand_id'))
             ->fillForm(['name' => 'HITACHI'])
             ->assertSchemaComponentExists('name', checkComponentUsing: fn (Component $field): bool => str_contains(
@@ -298,10 +268,9 @@ describe('справочники пополняются прямо из форм
         categoryNamed('Автокран');
 
         Livewire::test(CreateListing::class)
-            ->fillForm(['type' => ListingType::Equipment->value])
             ->callAction(
                 TestAction::make('createOption')->schemaComponent('category_id'),
-                ['name' => 'Автокран', 'type' => ListingType::Equipment->value],
+                ['name' => 'Автокран'],
             )
             ->assertHasActionErrors(['name']);
 
@@ -310,7 +279,6 @@ describe('справочники пополняются прямо из форм
 
     test('марка заводится из формы и сразу подставляется', function () {
         $component = Livewire::test(CreateListing::class)
-            ->fillForm(['type' => ListingType::Equipment->value])
             ->callAction(
                 TestAction::make('createOption')->schemaComponent('brand_id'),
                 ['name' => 'Komatsu'],
@@ -360,13 +328,12 @@ describe('справочники пополняются прямо из форм
         $listing = Listing::factory()->create();
 
         Livewire::test(EditListing::class, ['record' => $listing->id])
-            ->fillForm(['type' => ListingType::Equipment->value])
             ->callAction(TestAction::make('createOption')->schemaComponent($component), $data)
             ->assertHasNoActionErrors();
 
         expect($model::where('name', $name)->exists())->toBeTrue();
     })->with([
-        'категория' => ['category_id', ['name' => 'Ямобур', 'type' => 'equipment'], Category::class, 'Ямобур'],
+        'категория' => ['category_id', ['name' => 'Ямобур'], Category::class, 'Ямобур'],
         'марка' => ['brand_id', ['name' => 'Komatsu'], Brand::class, 'Komatsu'],
     ]);
 
@@ -455,10 +422,9 @@ describe('справочники пополняются прямо из форм
         $listing = Listing::factory()->create();
 
         Livewire::test(EditListing::class, ['record' => $listing->id])
-            ->fillForm(['type' => ListingType::Equipment->value])
             ->callAction(
                 TestAction::make('createOption')->schemaComponent('category_id'),
-                ['name' => 'Автокран', 'type' => ListingType::Equipment->value],
+                ['name' => 'Автокран'],
             )
             ->assertHasActionErrors(['name']);
     });
@@ -487,11 +453,11 @@ describe('справочники пополняются прямо из форм
     });
 });
 
-test('без поставщика и типа объявление не создаётся', function () {
+test('без поставщика объявление не создаётся', function () {
     Livewire::test(CreateListing::class)
         ->fillForm(['description' => 'Без обязательных полей'])
         ->call('create')
-        ->assertHasFormErrors(['contact_id', 'type']);
+        ->assertHasFormErrors(['contact_id']);
 
     expect(Listing::count())->toBe(0);
 });
@@ -618,23 +584,6 @@ test('оператор задаёт объявлению марку из спр�
         ->assertHasNoFormErrors();
 
     expect($listing->refresh())->brand->name->toBe('Hitachi');
-});
-
-test('смена типа на услугу убирает марку с объявления', function () {
-    $listing = Listing::factory()->create(['brand_id' => Brand::factory()->create()->id]);
-    $serviceCategory = Category::factory()->service()->create();
-
-    Livewire::test(EditListing::class, ['record' => $listing->id])
-        ->fillForm([
-            'type' => ListingType::Service->value,
-            'category_id' => $serviceCategory->id,
-        ])
-        ->call('save')
-        ->assertHasNoFormErrors();
-
-    expect($listing->refresh())
-        ->type->toBe(ListingType::Service)
-        ->brand_id->toBeNull();
 });
 
 test('оператор добавляет фото объявлению через форму', function () {

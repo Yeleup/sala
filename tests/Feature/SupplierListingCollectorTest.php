@@ -7,7 +7,6 @@ use App\Enums\AiOutcome;
 use App\Enums\BotReplyKey;
 use App\Enums\ListingMediaType;
 use App\Enums\ListingStatus;
-use App\Enums\ListingType;
 use App\Models\AiOperation;
 use App\Models\BotReplyText;
 use App\Models\BotSession;
@@ -34,7 +33,7 @@ uses(RefreshDatabase::class);
  */
 function supplierAiNode(): array
 {
-    return ['id' => 'collect', 'type' => 'ai', 'task' => 'collect_listing', 'listing_type' => 'equipment'];
+    return ['id' => 'collect', 'type' => 'ai', 'task' => 'collect_listing'];
 }
 
 /**
@@ -49,7 +48,6 @@ function collectorSession(array $state = []): BotSession
             'transcript' => [],
             'fields' => [],
             'draft_id' => null,
-            'listing_type' => 'equipment',
         ], $state),
     ]);
 }
@@ -81,7 +79,6 @@ function fullExtraction(array $overrides = []): array
     locationNamed('г.Шымкент');
 
     return array_merge([
-        'type' => 'equipment',
         'title' => 'Аренда трактора с водителем',
         'category' => 'Трактор',
         'brand' => null,
@@ -147,7 +144,6 @@ test('a complete description creates a draft and asks for confirmation', functio
         ->and(Listing::sole())
         ->contact_id->toBe($session->contact_id)
         ->status->toBe(ListingStatus::Draft)
-        ->type->toBe(ListingType::Equipment)
         ->title->toBe('Аренда трактора с водителем')
         ->category->name->toBe('Трактор')
         ->location->name->toBe('г.Шымкент')
@@ -580,12 +576,12 @@ test('the extractor category is normalized to the dictionary spelling', function
 });
 
 test('the extraction schema and prompt hard-limit the category to the dictionary', function () {
-    $agent = new ListingExtractionAgent(null, ['Автокран', 'Сварщик']);
+    $agent = new ListingExtractionAgent(['Автокран', 'Экскаватор']);
 
     $categorySchema = $agent->schema(new JsonSchemaTypeFactory)['category']->toArray();
 
-    expect($categorySchema['enum'])->toContain('Автокран')->toContain('Сварщик')
-        ->and((string) $agent->instructions())->toContain('- Автокран')->toContain('- Сварщик');
+    expect($categorySchema['enum'])->toContain('Автокран')->toContain('Экскаватор')
+        ->and((string) $agent->instructions())->toContain('- Автокран')->toContain('- Экскаватор');
 });
 
 test('the location choice schema and prompt hard-limit the answer to the offered places', function () {
@@ -648,27 +644,8 @@ test('a brand outside the dictionary is dropped without a clarifying question', 
         ->and(Listing::sole()->brand_id)->toBeNull();
 });
 
-test('a service listing never carries a brand even when the extractor returned one', function () {
-    brandNamed('Hitachi');
-    categoryNamed('Сварщик', ListingType::Service);
-    ListingExtractionAgent::fake([
-        fullExtraction(['type' => null, 'category' => 'Сварщик', 'brand' => 'Hitachi', 'summary' => 'Сварщик, Шымкент']),
-    ]);
-    $session = collectorSession(['listing_type' => null]);
-
-    fakeCollectorMessenger()->shouldReceive('sendButtons')->once();
-
-    $node = ['id' => 'collect', 'type' => 'ai', 'task' => 'collect_listing'];
-    app(SupplierListingCollector::class)
-        ->resume($session, $node, new InboundMessage(text: 'Сварщик с выездом, Шымкент, 10000 тг/час'));
-
-    expect(Listing::sole())
-        ->type->toBe(ListingType::Service)
-        ->brand_id->toBeNull();
-});
-
 test('the extraction schema and prompt hard-limit the brand to the dictionary', function () {
-    $agent = new ListingExtractionAgent(null, ['Автокран'], ['Hitachi', 'CAT']);
+    $agent = new ListingExtractionAgent(['Автокран'], ['Hitachi', 'CAT']);
 
     $brandSchema = $agent->schema(new JsonSchemaTypeFactory)['brand']->toArray();
 
@@ -677,7 +654,7 @@ test('the extraction schema and prompt hard-limit the brand to the dictionary', 
 });
 
 test('an empty brand dictionary degrades the schema and tells the model to keep null', function () {
-    $agent = new ListingExtractionAgent(null, ['Автокран']);
+    $agent = new ListingExtractionAgent(['Автокран']);
 
     $brandSchema = $agent->schema(new JsonSchemaTypeFactory)['brand']->toArray();
 
@@ -729,69 +706,13 @@ test('an overlong extracted title is clipped to the column limit before saving',
 });
 
 test('the extraction schema carries a nullable title the model composes itself', function () {
-    $agent = new ListingExtractionAgent(null, ['Автокран']);
+    $agent = new ListingExtractionAgent(['Автокран']);
 
     $titleSchema = $agent->schema(new JsonSchemaTypeFactory)['title']->toArray();
 
     expect($titleSchema)->not->toHaveKey('enum')
         ->and((string) $agent->instructions())->toContain('короткое название объявления')
         ->and((string) $agent->instructions())->toContain('не спрашивай у поставщика');
-});
-
-test('an undetermined type in the auto branch asks about it instead of defaulting to equipment', function () {
-    // Без категории тип вывести не из чего: категория определила бы тип сама.
-    ListingExtractionAgent::fake([
-        fullExtraction(['type' => null, 'category' => null, 'clarifying_question' => 'Какая цена?']),
-    ]);
-    $session = collectorSession(['listing_type' => null]);
-
-    fakeCollectorMessenger()->shouldReceive('sendText')->once()
-        ->withArgs(fn (Contact $to, string $text) => str_contains($text, 'технику в аренду или услугу'));
-
-    $node = ['id' => 'collect', 'type' => 'ai', 'task' => 'collect_listing'];
-    $outcome = app(SupplierListingCollector::class)
-        ->resume($session, $node, new InboundMessage(text: 'Сдаю в Шымкенте, 10000 тг/час'));
-
-    expect($outcome)->toBe(AiOutcome::InProgress)
-        ->and($session->fresh()->state['attempts'])->toBe(1)
-        ->and(Listing::count())->toBe(0);
-});
-
-test('in the auto branch a resolved category determines the type without asking', function () {
-    categoryNamed('Сварщик', ListingType::Service);
-    ListingExtractionAgent::fake([
-        fullExtraction(['type' => null, 'category' => 'Сварщик', 'summary' => 'Сварщик, Шымкент, 10000 тг/час']),
-    ]);
-    $session = collectorSession(['listing_type' => null]);
-
-    fakeCollectorMessenger()->shouldReceive('sendButtons')->once();
-
-    $node = ['id' => 'collect', 'type' => 'ai', 'task' => 'collect_listing'];
-    $outcome = app(SupplierListingCollector::class)
-        ->resume($session, $node, new InboundMessage(text: 'Сварщик с выездом, Шымкент, 10000 тг/час'));
-
-    expect($outcome)->toBe(AiOutcome::InProgress)
-        ->and(Listing::sole())
-        ->type->toBe(ListingType::Service)
-        ->category->name->toBe('Сварщик');
-});
-
-test('a fixed-type branch does not accept a category of the other type', function () {
-    categoryNamed('Сварщик', ListingType::Service);
-    ListingExtractionAgent::fake([
-        fullExtraction(['category' => 'Сварщик', 'clarifying_question' => 'Что именно за техника?']),
-    ]);
-    $session = collectorSession(); // ветка «техника»
-
-    fakeCollectorMessenger()->shouldReceive('sendText')->once()
-        ->withArgs(fn (Contact $to, string $text) => $text === 'Что именно за техника?');
-
-    $outcome = app(SupplierListingCollector::class)
-        ->resume($session, supplierAiNode(), new InboundMessage(text: 'Предлагаю услуги сварщика в Шымкенте'));
-
-    expect($outcome)->toBe(AiOutcome::InProgress)
-        ->and($session->fresh()->state['fields']['category'])->toBeNull()
-        ->and(Listing::count())->toBe(0);
 });
 
 test('an ambiguous location sends a pick list without spending an attempt', function () {
@@ -1230,7 +1151,7 @@ test('an explicit refusal saves the partial draft and releases the supplier', fu
 
 test('a refusal with nothing collected releases the supplier without mentioning a draft', function () {
     ListingExtractionAgent::fake([[
-        'type' => null, 'title' => null, 'category' => null, 'brand' => null,
+        'title' => null, 'category' => null, 'brand' => null,
         'description' => null, 'location' => null, 'location_detail' => null,
         'price' => null, 'clarifying_question' => '', 'summary' => null,
         'user_intent' => 'abandoned',

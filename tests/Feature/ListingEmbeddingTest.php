@@ -114,7 +114,7 @@ test('джоба пропускает объявление, ушедшее из 
         ->and(AiOperation::query()->count())->toBe(0);
 });
 
-test('текст для эмбеддинга включает тип, название, категорию, марку, описание и локацию, но не цену', function () {
+test('текст для эмбеддинга включает название, категорию, марку, описание и локацию, но не цену', function () {
     $listing = Listing::factory()->published()->create([
         'title' => 'Аренда автокрана 25 т',
         'category_id' => categoryNamed('Автокран')->id,
@@ -128,7 +128,6 @@ test('текст для эмбеддинга включает тип, назва
     $text = app(ListingEmbeddings::class)->sourceText($listing);
 
     expect($text)
-        ->toContain('Техника')
         ->toContain('Название: Аренда автокрана 25 т')
         ->toContain('Автокран')
         ->toContain('Kato')

@@ -2,10 +2,8 @@
 
 namespace App\Filament\Resources\Categories\Schemas;
 
-use App\Enums\ListingType;
 use App\Models\Category;
 use App\Services\Dictionaries\SimilarNameLookup;
-use Filament\Forms\Components\Select;
 use Filament\Forms\Components\TextInput;
 use Filament\Schemas\Components\Utilities\Get;
 use Filament\Schemas\Schema;
@@ -19,17 +17,6 @@ class CategoryForm
         return $schema
             ->components([
                 self::nameField(),
-                Select::make('type')
-                    ->label('Тип')
-                    ->options(ListingType::class)
-                    ->required()
-                    // Changing the type would break listings that already
-                    // carry this category — same protection as deletion.
-                    ->disabled(fn (?Category $record): bool => $record?->listings()->exists() ?? false)
-                    ->helperText(fn (?Category $record): ?string => ($record?->listings()->exists() ?? false)
-                        ? 'Тип нельзя менять: категория используется в объявлениях.'
-                        : null)
-                    ->validationMessages(['required' => 'Выберите тип категории.']),
             ]);
     }
 

@@ -2,9 +2,12 @@
 
 namespace App\Models;
 
+use App\Enums\LicenceType;
+use App\Enums\ListingKind;
 use App\Enums\ListingMediaType;
 use App\Enums\ListingOrigin;
 use App\Enums\ListingStatus;
+use App\Enums\RepairPlace;
 use App\Jobs\GenerateListingEmbedding;
 use Database\Factories\ListingFactory;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
@@ -13,6 +16,7 @@ use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\HasOne;
 use Illuminate\Support\Facades\Storage;
@@ -24,7 +28,7 @@ use LogicException;
  * every business field may stay empty until the supplier completes it via
  * the web interface.
  */
-#[Fillable(['contact_id', 'origin', 'created_by_user_id', 'title', 'category_id', 'brand_id', 'description', 'location_id', 'location_detail', 'price', 'status', 'rejection_reason', 'moderated_by_user_id', 'moderated_at', 'expires_at', 'renewal_requested_at'])]
+#[Fillable(['contact_id', 'origin', 'created_by_user_id', 'kind', 'title', 'category_id', 'brand_id', 'description', 'location_id', 'location_detail', 'price', 'person_name', 'services', 'experience_years', 'repair_place', 'travels_to_other_cities', 'licence_type', 'document_verified_at', 'document_verified_by', 'status', 'rejection_reason', 'moderated_by_user_id', 'moderated_at', 'expires_at', 'renewal_requested_at'])]
 class Listing extends Model
 {
     /** @use HasFactory<ListingFactory> */
@@ -60,6 +64,7 @@ class Listing extends Model
 
     protected $attributes = [
         'status' => ListingStatus::Draft->value,
+        'kind' => ListingKind::Rental->value,
     ];
 
     /**
@@ -132,6 +137,18 @@ class Listing extends Model
         return $this->belongsTo(Brand::class);
     }
 
+    /** @return BelongsToMany<Category, $this> Machines a driver operates. */
+    public function machineCategories(): BelongsToMany
+    {
+        return $this->belongsToMany(Category::class);
+    }
+
+    /** @return BelongsTo<User, $this> The operator who verified the driver's document. */
+    public function documentVerifier(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'document_verified_by');
+    }
+
     /** @return BelongsTo<Location, $this> */
     public function location(): BelongsTo
     {
@@ -175,6 +192,12 @@ class Listing extends Model
     public function audioMessages(): HasMany
     {
         return $this->media()->where('type', ListingMediaType::Audio);
+    }
+
+    /** @return HasMany<ListingMedia, $this> The non-public licence document. */
+    public function documents(): HasMany
+    {
+        return $this->media()->where('type', ListingMediaType::Document);
     }
 
     /** @return HasMany<CustomerRequest, $this> */
@@ -379,16 +402,21 @@ class Listing extends Model
     }
 
     /**
-     * @return array{status: class-string<ListingStatus>, origin: class-string<ListingOrigin>, expires_at: 'datetime', renewal_requested_at: 'datetime', moderated_at: 'datetime'}
+     * @return array{status: class-string<ListingStatus>, origin: class-string<ListingOrigin>, kind: class-string<ListingKind>, repair_place: class-string<RepairPlace>, licence_type: class-string<LicenceType>, travels_to_other_cities: 'boolean', expires_at: 'datetime', renewal_requested_at: 'datetime', moderated_at: 'datetime', document_verified_at: 'datetime'}
      */
     protected function casts(): array
     {
         return [
             'status' => ListingStatus::class,
             'origin' => ListingOrigin::class,
+            'kind' => ListingKind::class,
+            'repair_place' => RepairPlace::class,
+            'licence_type' => LicenceType::class,
+            'travels_to_other_cities' => 'boolean',
             'expires_at' => 'datetime',
             'renewal_requested_at' => 'datetime',
             'moderated_at' => 'datetime',
+            'document_verified_at' => 'datetime',
         ];
     }
 }

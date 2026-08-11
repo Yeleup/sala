@@ -2,7 +2,10 @@
 
 namespace Database\Factories;
 
+use App\Enums\LicenceType;
+use App\Enums\ListingKind;
 use App\Enums\ListingStatus;
+use App\Enums\RepairPlace;
 use App\Models\Category;
 use App\Models\Contact;
 use App\Models\Listing;
@@ -49,6 +52,43 @@ class ListingFactory extends Factory
     public function publishable(): static
     {
         return $this->state(fn (): array => ['title' => 'Аренда автокрана 25 т']);
+    }
+
+    /**
+     * A repair master's questionnaire, filled. Explicit texts, no random
+     * description: matcher tests must not depend on factory randomness.
+     * The rental-only fields go empty — a repair has no category or price.
+     */
+    public function repair(): static
+    {
+        return $this->state(fn (): array => [
+            'kind' => ListingKind::Repair,
+            'person_name' => 'Сервис «Мотор»',
+            'services' => 'Диагностика, ремонт двигателя, гидравлика, электрика.',
+            'repair_place' => RepairPlace::Both,
+            'category_id' => null,
+            'description' => 'Ремонтируем спецтехнику: двигатель, гидравлика, электрика.',
+            'price' => null,
+        ]);
+    }
+
+    /**
+     * A driver's questionnaire, filled — except the machine categories,
+     * which live on the machineCategories() pivot and are attached by the
+     * test itself. Explicit description, no price: a driver has none.
+     */
+    public function driver(): static
+    {
+        return $this->state(fn (): array => [
+            'kind' => ListingKind::Driver,
+            'person_name' => 'Серик',
+            'licence_type' => LicenceType::TractorOperator,
+            'experience_years' => 8,
+            'travels_to_other_cities' => true,
+            'category_id' => null,
+            'description' => 'Машинист экскаватора, стаж 8 лет.',
+            'price' => null,
+        ]);
     }
 
     public function pendingModeration(): static

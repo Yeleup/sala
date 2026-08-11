@@ -1015,6 +1015,41 @@ test('набранное руками «Да, отправить» без док
     ListingExtractionAgent::assertNeverPrompted();
 });
 
+test('фолбэк-сводка водителя собирается из полей анкеты', function () {
+    // Повтор сводки после вопроса про сервис — удобный способ дернуть
+    // sendConfirmation; модельной summary нет, текст собирает buildSummary().
+    $session = collectorSession(['kind' => 'driver', 'phase' => 'confirming', 'awaiting_document' => true,
+        'fields' => driverExtraction(['summary' => null, 'travels_to_other_cities' => true])]);
+
+    $messenger = fakeCollectorMessenger();
+    $messenger->shouldReceive('sendText')->once();   // ответ на вопрос про сервис
+    $messenger->shouldReceive('sendButtons')->once()
+        ->withArgs(fn ($to, string $text) => str_contains($text, 'Ерлан')
+            && str_contains($text, 'Экскаватор')
+            && str_contains($text, 'Стаж 8 лет')
+            && str_contains($text, 'Тракторист-машинист')
+            && str_contains($text, 'готов выезжать в другие города'));
+    ListingExtractionAgent::fake([driverExtraction(['summary' => null, 'user_intent' => 'service_question'])]);
+
+    app(SupplierListingCollector::class)->resume($session, driverAiNode(), new InboundMessage(text: 'это платно?'));
+});
+
+test('фолбэк-сводка ремонта — имя, услуги, место работы и цена диагностики', function () {
+    $session = collectorSession(['kind' => 'repair', 'phase' => 'confirming',
+        'fields' => repairExtraction(['summary' => null, 'repair_place' => 'both', 'price' => '5000 тг'])]);
+
+    $messenger = fakeCollectorMessenger();
+    $messenger->shouldReceive('sendText')->once();   // ответ на вопрос про сервис
+    $messenger->shouldReceive('sendButtons')->once()
+        ->withArgs(fn ($to, string $text) => str_contains($text, 'Аскар')
+            && str_contains($text, 'ремонт гидравлики')
+            && str_contains($text, 'И так, и так')
+            && str_contains($text, 'диагностика 5000 тг'));
+    ListingExtractionAgent::fake([repairExtraction(['summary' => null, 'user_intent' => 'service_question'])]);
+
+    app(SupplierListingCollector::class)->resume($session, repairAiNode(), new InboundMessage(text: 'это платно?'));
+});
+
 test('кнопочный ответ переживает следующее сообщение поставщика', function () {
     // Поля пересобираются с нуля каждый ход: без реаплая значение с кнопки
     // исчезло бы при первом же ответе словами на другой вопрос.

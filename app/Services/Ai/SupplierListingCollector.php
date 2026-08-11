@@ -7,9 +7,11 @@ use App\Ai\Agents\LocationChoiceAgent;
 use App\Enums\AiOperationType;
 use App\Enums\AiOutcome;
 use App\Enums\BotReplyKey;
+use App\Enums\LicenceType;
 use App\Enums\ListingKind;
 use App\Enums\ListingMediaType;
 use App\Enums\ListingOrigin;
+use App\Enums\RepairPlace;
 use App\Enums\UserIntent;
 use App\Models\BotSession;
 use App\Models\Brand;
@@ -1325,7 +1327,9 @@ class SupplierListingCollector
     private function sendConfirmation(BotSession $session, array $state): void
     {
         $fields = $state['fields'];
-        $summary = filled($fields['summary'] ?? null) ? $fields['summary'] : $this->buildSummary($fields);
+        $summary = filled($fields['summary'] ?? null)
+            ? $fields['summary']
+            : $this->buildSummary($fields, $this->kind($state));
 
         // The summary repeats the supplier's own wording of the place, and
         // that wording is exactly what several dictionary places can share.
@@ -1383,13 +1387,30 @@ class SupplierListingCollector
     /**
      * @param  array<string, mixed>  $fields
      */
-    private function buildSummary(array $fields): string
+    private function buildSummary(array $fields, ListingKind $kind): string
     {
-        $offer = collect([$fields['category'] ?? null, $fields['brand'] ?? null])->filter()->implode(' ');
-
-        return collect([$offer, $fields['location'] ?? null, $fields['price'] ?? null])
-            ->filter()
-            ->implode(', ');
+        return match ($kind) {
+            ListingKind::Rental => collect([
+                collect([$fields['category'] ?? null, $fields['brand'] ?? null])->filter()->implode(' '),
+                $fields['location'] ?? null,
+                $fields['price'] ?? null,
+            ])->filter()->implode(', '),
+            ListingKind::Repair => collect([
+                $fields['person_name'] ?? null,
+                $fields['services'] ?? null,
+                filled($fields['repair_place'] ?? null) ? RepairPlace::from($fields['repair_place'])->label() : null,
+                $fields['location'] ?? null,
+                filled($fields['price'] ?? null) ? 'диагностика '.$fields['price'] : null,
+            ])->filter()->implode(', '),
+            ListingKind::Driver => collect([
+                $fields['person_name'] ?? null,
+                implode(', ', (array) ($fields['machine_categories'] ?? [])) ?: null,
+                filled($fields['experience_years'] ?? null) ? 'Стаж '.$fields['experience_years'].' лет' : null,
+                filled($fields['licence_type'] ?? null) ? LicenceType::from($fields['licence_type'])->label() : null,
+                $fields['location'] ?? null,
+                ($fields['travels_to_other_cities'] ?? null) === true ? 'готов выезжать в другие города' : null,
+            ])->filter()->implode(', '),
+        };
     }
 
     /**

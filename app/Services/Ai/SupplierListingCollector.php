@@ -57,6 +57,14 @@ class SupplierListingCollector
     private const int MAX_LOCATION_LISTS = 2;
 
     /**
+     * How many times the same enumerable-field button question may go out
+     * before the field falls back to the ordinary clarification path. A
+     * button press spends no clarification attempt, so a supplier who keeps
+     * answering past the buttons would otherwise get them forever.
+     */
+    private const int MAX_BUTTON_PROMPTS = 2;
+
+    /**
      * Questions about the service answered in a row before the collector
      * stops treating a message as one. The abuse case is not a person
      * asking four times but a stuck classification: the question is pulled
@@ -82,6 +90,8 @@ class SupplierListingCollector
     private const int MAX_PHOTO_ATTACHMENTS = 5;
 
     public const string LOCATION_ROW_PREFIX = 'listing_location:';
+
+    public const string KIND_CHOICE_PREFIX = 'kind_choice:';
 
     public const string BUTTON_SUBMIT = 'listing_submit';
 
@@ -127,6 +137,7 @@ class SupplierListingCollector
             'declined_location_wording' => null,
             'last_question' => null,
             'button_prompts' => [],
+            'button_answers' => [],
             'awaiting_document' => false,
         ];
         $session->save();
@@ -152,6 +163,10 @@ class SupplierListingCollector
 
         if ($state['phase'] === 'locating') {
             return $this->handleLocating($session, $state, $message, $node);
+        }
+
+        if ($state['phase'] === 'choosing') {
+            return $this->handleChoosing($session, $state, $message, $node);
         }
 
         return $this->handleCollecting($session, $state, $message, $node);
@@ -249,6 +264,14 @@ class SupplierListingCollector
             $state['service_questions'] = 0;
         }
 
+        // The extraction rebuilds the fields from scratch each turn, which
+        // would erase a value picked with a button. Reapply the picks
+        // underneath: a value the model got out of the words wins — the
+        // supplier may have changed their mind in words.
+        foreach (($state['button_answers'] ?? []) as $field => $value) {
+            $fields[$field] = $fields[$field] ?? $value;
+        }
+
         $state['fields'] = $fields;
 
         return $this->advance($session, $state);
@@ -314,6 +337,28 @@ class SupplierListingCollector
 
                 return AiOutcome::InProgress;
             }
+        }
+
+        // An enumerated field with few fixed options is asked with buttons,
+        // not with a text question: the press costs no clarification attempt
+        // and cannot misspell. Bounded per field — past the limit the field
+        // walks the ordinary clarification path below.
+        foreach ($kind->buttonFields() as $field => $prompt) {
+            if (! in_array($field, $missing, true)) {
+                continue;
+            }
+
+            if (($state['button_prompts'][$field] ?? 0) >= self::MAX_BUTTON_PROMPTS) {
+                continue;
+            }
+
+            $state['button_prompts'][$field] = ($state['button_prompts'][$field] ?? 0) + 1;
+            $state['phase'] = 'choosing';
+            $state['button_field'] = $field;
+            $this->persist($session, $state);
+            $this->sendButtonPrompt($session, $field, $prompt);
+
+            return AiOutcome::InProgress;
         }
 
         if ($state['attempts'] >= $kind->maxClarifications()) {
@@ -439,6 +484,19 @@ class SupplierListingCollector
             );
 
             return;
+        }
+
+        if ($state['phase'] === 'choosing') {
+            $field = (string) ($state['button_field'] ?? '');
+            $prompt = $this->kind($state)->buttonFields()[$field] ?? null;
+
+            // The re-send does not count against MAX_BUTTON_PROMPTS: a
+            // question about the service must not burn the button step.
+            if ($prompt !== null) {
+                $this->sendButtonPrompt($session, $field, $prompt);
+
+                return;
+            }
         }
 
         $question = trim((string) ($state['last_question'] ?? ''));
@@ -610,6 +668,95 @@ class SupplierListingCollector
             'Нашли несколько подходящих мест — уточните, какое из них ваше.',
             'Выбрать место',
             $rows,
+        );
+    }
+
+    /**
+     * The supplier answers an enumerable-field button question — by the
+     * button or by typing its title (the scenario-wide convention). The
+     * answer lands in the fields directly, with no model call and no spent
+     * attempt; any other reply is treated as further details.
+     *
+     * @param  array<string, mixed>  $state
+     * @param  array<string, mixed>  $node
+     */
+    private function handleChoosing(BotSession $session, array $state, InboundMessage $message, array $node): AiOutcome
+    {
+        $field = (string) ($state['button_field'] ?? '');
+        $options = $this->kind($state)->buttonFields()[$field]['options'] ?? [];
+        $value = $this->matchButtonChoice($options, $field, $message);
+
+        if ($value !== null) {
+            // yes/no options are the questionnaire's boolean fields: store
+            // the same bool the extraction would produce from words.
+            $answer = match ($value) {
+                'yes' => true,
+                'no' => false,
+                default => $value,
+            };
+
+            // The extraction rebuilds the fields from scratch each turn, so
+            // the answer is also kept aside to reapply — like a location pick.
+            $state['fields'][$field] = $answer;
+            $state['button_answers'][$field] = $answer;
+            $state['phase'] = 'collecting';
+            unset($state['button_field']);
+
+            return $this->advance($session, $state);
+        }
+
+        return $this->handleCollecting($session, $state, $message, $node);
+    }
+
+    /**
+     * @param  array<string, string>  $options
+     */
+    private function matchButtonChoice(array $options, string $field, InboundMessage $message): ?string
+    {
+        if ($options === []) {
+            return null;
+        }
+
+        $replyId = (string) $message->replyId;
+
+        if (str_starts_with($replyId, self::KIND_CHOICE_PREFIX)) {
+            $parts = explode(':', Str::after($replyId, self::KIND_CHOICE_PREFIX), 2);
+
+            return count($parts) === 2 && $parts[0] === $field && array_key_exists($parts[1], $options)
+                ? $parts[1]
+                : null;
+        }
+
+        $text = mb_strtolower(trim((string) $message->text));
+
+        if ($text === '') {
+            return null;
+        }
+
+        foreach ($options as $value => $title) {
+            if (mb_strtolower($title) === $text) {
+                return (string) $value;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * @param  array{question: string, options: array<string, string>}  $prompt
+     */
+    private function sendButtonPrompt(BotSession $session, string $field, array $prompt): void
+    {
+        $this->messenger->sendButtons(
+            $session->contact,
+            $prompt['question'],
+            collect($prompt['options'])
+                ->map(fn (string $title, string $value): array => [
+                    'id' => self::KIND_CHOICE_PREFIX.$field.':'.$value,
+                    'title' => $title,
+                ])
+                ->values()
+                ->all(),
         );
     }
 
@@ -830,6 +977,14 @@ class SupplierListingCollector
 
         if ($state['phase'] === 'locating') {
             return 'прислал список одноимённых мест и попросил выбрать нужное';
+        }
+
+        if ($state['phase'] === 'choosing') {
+            $question = $this->kind($state)->buttonFields()[$state['button_field'] ?? '']['question'] ?? '';
+
+            if ($question !== '') {
+                return 'задал вопрос с кнопками: «'.$question.'»';
+            }
         }
 
         $question = trim((string) ($state['last_question'] ?? ''));
@@ -1240,6 +1395,7 @@ class SupplierListingCollector
             'declined_location_wording' => null,
             'last_question' => null,
             'button_prompts' => [],
+            'button_answers' => [],
             'awaiting_document' => false,
         ], $session->state ?? []);
     }

@@ -840,6 +840,118 @@ test('null в категориях техники не стирает ранее
         ->and($draft->machineCategories()->pluck('name')->all())->toBe(['Экскаватор']);
 });
 
+test('перечислимое поле добирается кнопками и не тратит попытку', function () {
+    ListingExtractionAgent::fake([repairExtraction(['repair_place' => null])]);
+    $session = collectorSession(['kind' => 'repair']);
+    fakeCollectorMessenger()->shouldReceive('sendButtons')->once()
+        ->withArgs(fn ($to, string $text, array $buttons) => str_contains($text, 'Где вы выполняете ремонт')
+            && count($buttons) === 3 && $buttons[0]['id'] === 'kind_choice:repair_place:own_service');
+
+    app(SupplierListingCollector::class)->resume($session, repairAiNode(), new InboundMessage(text: 'чиню гидравлику, Алматы, я Иван'));
+
+    $state = $session->fresh()->state;
+    expect($state['attempts'])->toBe(0)
+        ->and($state['phase'])->toBe('choosing')
+        ->and($state['button_prompts']['repair_place'])->toBe(1);
+});
+
+test('нажатие кнопки заполняет поле и ведёт дальше без вызова модели', function () {
+    ListingExtractionAgent::fake()->preventStrayPrompts();
+    // Анкета полна во всём, кроме кнопочного поля: место уже разрешено в
+    // справочник, поэтому после нажатия остаётся только сводка.
+    $session = collectorSession(['kind' => 'repair', 'phase' => 'choosing', 'button_field' => 'repair_place',
+        'fields' => repairExtraction(['repair_place' => null, 'location_id' => locationNamed('г.Алматы')->id]),
+        'button_prompts' => ['repair_place' => 1]]);
+    fakeCollectorMessenger()->shouldReceive('sendButtons')->once();   // сводка
+
+    app(SupplierListingCollector::class)->resume($session, repairAiNode(),
+        new InboundMessage(replyId: 'kind_choice:repair_place:both', text: 'И так, и так'));
+
+    expect($session->fresh()->state['fields']['repair_place'])->toBe('both')
+        ->and($session->fresh()->state['phase'])->toBe('confirming');
+    ListingExtractionAgent::assertNeverPrompted();
+});
+
+test('кнопочный вопрос уходит максимум дважды, потом обычный путь недостающего поля', function () {
+    ListingExtractionAgent::fake([repairExtraction(['repair_place' => null])]);
+    $session = collectorSession(['kind' => 'repair', 'button_prompts' => ['repair_place' => 2]]);
+    fakeCollectorMessenger()->shouldReceive('sendText')->once();      // текстовый вопрос, тратит попытку
+
+    app(SupplierListingCollector::class)->resume($session, repairAiNode(), new InboundMessage(text: 'ещё делаю сварку'));
+
+    expect($session->fresh()->state['attempts'])->toBe(1);
+});
+
+test('кнопка «Да/Нет» водителя пишет булеву готовность выезжать', function (InboundMessage $press, bool $expected) {
+    // Ответ хранится тем же bool, каким его пишет извлечение: «нет» — это
+    // ответ false, а не пропуск поля. Текст, совпавший с заголовком кнопки,
+    // равен нажатию — сценарная конвенция, как у списка мест.
+    ListingExtractionAgent::fake()->preventStrayPrompts();
+    $session = collectorSession(['kind' => 'driver', 'phase' => 'choosing', 'button_field' => 'travels_to_other_cities',
+        'fields' => driverExtraction(['travels_to_other_cities' => null, 'location_id' => locationNamed('г.Шымкент')->id]),
+        'button_prompts' => ['travels_to_other_cities' => 1]]);
+    fakeCollectorMessenger()->shouldReceive('sendButtons')->once();   // сводка
+
+    app(SupplierListingCollector::class)->resume($session, driverAiNode(), $press);
+
+    expect($session->fresh()->state['fields']['travels_to_other_cities'])->toBe($expected)
+        ->and($session->fresh()->state['phase'])->toBe('confirming');
+    ListingExtractionAgent::assertNeverPrompted();
+})->with([
+    'кнопка «Да»' => [new InboundMessage(replyId: 'kind_choice:travels_to_other_cities:yes', text: 'Да'), true],
+    'текст «нет»' => [new InboundMessage(text: 'нет'), false],
+]);
+
+test('кнопочный ответ переживает следующее сообщение поставщика', function () {
+    // Поля пересобираются с нуля каждый ход: без реаплая значение с кнопки
+    // исчезло бы при первом же ответе словами на другой вопрос.
+    ListingExtractionAgent::fake([repairExtraction(['repair_place' => null])]);
+    $session = collectorSession(['kind' => 'repair', 'phase' => 'choosing', 'button_field' => 'repair_place',
+        'transcript' => ['чиню гидравлику, Алматы'],
+        'fields' => repairExtraction(['repair_place' => null, 'person_name' => null, 'location_id' => locationNamed('г.Алматы')->id]),
+        'button_prompts' => ['repair_place' => 1]]);
+
+    $messenger = fakeCollectorMessenger();
+    $messenger->shouldReceive('sendText')->once();      // вопрос про имя
+    $messenger->shouldReceive('sendButtons')->once()
+        ->withArgs(fn ($to, string $text) => str_contains($text, 'Всё верно?'));
+
+    $collector = app(SupplierListingCollector::class);
+    $collector->resume($session, repairAiNode(), new InboundMessage(replyId: 'kind_choice:repair_place:own_service', text: 'В своём сервисе'));
+    $outcome = $collector->resume($session->fresh(), repairAiNode(), new InboundMessage(text: 'Аскар'));
+
+    expect($outcome)->toBe(AiOutcome::InProgress)
+        ->and($session->fresh()->state['phase'])->toBe('confirming')
+        ->and($session->fresh()->state['fields']['repair_place'])->toBe('own_service');
+});
+
+test('вопрос про сервис на кнопочном шаге повторяет кнопки, не тратя счётчик', function () {
+    ListingExtractionAgent::fake([repairExtraction(['repair_place' => null, 'user_intent' => 'service_question'])]);
+    $session = collectorSession(['kind' => 'repair', 'phase' => 'choosing', 'button_field' => 'repair_place',
+        'transcript' => ['чиню гидравлику, Алматы'],
+        'fields' => repairExtraction(['repair_place' => null, 'location_id' => locationNamed('г.Алматы')->id]),
+        'button_prompts' => ['repair_place' => 1]]);
+
+    $messenger = fakeCollectorMessenger();
+    $messenger->shouldReceive('sendText')->once()
+        ->withArgs(fn ($to, string $text) => str_contains($text, 'оператор'));
+    $messenger->shouldReceive('sendButtons')->once()
+        ->withArgs(fn ($to, string $text, array $buttons) => str_contains($text, 'Где вы выполняете ремонт')
+            && count($buttons) === 3);
+
+    $outcome = app(SupplierListingCollector::class)
+        ->resume($session, repairAiNode(), new InboundMessage(text: 'а это платно?'));
+
+    // Ни попытка, ни счётчик кнопочных вопросов на вопрос не тратятся.
+    expect($outcome)->toBe(AiOutcome::InProgress)
+        ->and($session->fresh()->state)
+        ->toMatchArray(['phase' => 'choosing', 'attempts' => 0, 'button_prompts' => ['repair_place' => 1]]);
+    // Короткий ответ читается против кнопочного вопроса — он в контексте модели.
+    ListingExtractionAgent::assertPrompted(
+        fn ($prompt): bool => $prompt->contains('задал вопрос с кнопками: «Где вы выполняете ремонт?»'),
+    );
+});
+
 test('a missing title never blocks confirmation and never spends an attempt', function () {
     ListingExtractionAgent::fake([fullExtraction(['title' => null])]);
     $session = collectorSession();

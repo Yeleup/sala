@@ -70,6 +70,10 @@
         .title-link:hover { color: #1d4ed8; text-decoration: underline; }
         .listing-line { margin: 0.25rem 0; font-size: 0.875rem; overflow-wrap: anywhere; }
         .listing-price { color: #1d4ed8; font-weight: 700; font-size: 0.9375rem; }
+        /* Мастер и водитель — люди: имя открывает карточку строкой над названием. */
+        .listing-person { margin: 0 0 0.125rem; font-size: 0.8125rem; font-weight: 700; color: #475569; overflow-wrap: anywhere; }
+        /* Бейдж проверенного документа водителя — зелёная пилюля в теле карточки. */
+        .card-badge { display: inline-block; white-space: nowrap; background: #d1fae5; color: #065f46; font-size: 0.75rem; font-weight: 600; padding: 0.125rem 0.625rem; border-radius: 9999px; margin: 0.25rem 0; }
         .gallery { --gallery-peek: 1.5rem; margin: 0 0 0.875rem; }
         .gallery-frame { position: relative; overflow: hidden; background: #eef2f7; margin: calc(var(--card-pad) * -1) calc(var(--card-pad) * -1) 0; border-radius: calc(var(--card-radius) - 1px) calc(var(--card-radius) - 1px) 0 0; box-shadow: inset 0 -1px 0 #e2e8f0; }
         .gallery-stage { display: flex; gap: 0.375rem; overflow-x: auto; overflow-y: hidden; scroll-snap-type: x mandatory; overscroll-behavior-x: contain; }
@@ -176,7 +180,7 @@
 <body>
 
 <div class="preview-section">
-    <h2>Каталог заказчика — desktop (после «Выбрать»: баннер успеха, у карточки бейдж)</h2>
+    <h2>Каталог заказчика — desktop (после «Выбрать»: баннер успеха, у карточки бейдж; карточки аренды, мастера и водителя)</h2>
     <div class="viewport viewport-desktop">
         <main>
             <div class="flash">Заявка отправлена поставщику. Его ответ придёт вам в WhatsApp.</div>
@@ -252,6 +256,45 @@
                 </div>
             </div>
 
+            {{-- Карточка мастера по ремонту: имя над названием, услуги, где
+                 ремонтирует, цена подписана «Диагностика». --}}
+            <div class="card listing-card">
+                <a class="thumb-link" href="#"><div class="thumb-placeholder">фото</div></a>
+                <div class="listing-body">
+                    <p class="listing-person">Сервис «Мотор»</p>
+                    <h2 class="listing-title"><a class="title-link" href="#">Ремонт двигателей и гидравлики</a></h2>
+                    <p class="listing-line">Диагностика, ремонт двигателя, гидравлика, электрика.</p>
+                    <p class="listing-line muted">И так, и так</p>
+                    <p class="listing-line">Ремонтируем спецтехнику любых марок, выезд по городу и области.</p>
+                    <p class="listing-line muted">г.Шымкент, центр</p>
+                    <p class="listing-line listing-price">Диагностика: 5000 тг</p>
+                    <p class="listing-line muted">Поставщик: Азамат</p>
+                    <div class="actions">
+                        <button class="btn btn-primary">Выбрать</button>
+                        <a class="btn btn-secondary" href="#">Подробнее</a>
+                    </div>
+                </div>
+            </div>
+
+            {{-- Карточка водителя: техника, стаж «со слов», бейдж проверенного
+                 документа; строки цены нет. --}}
+            <div class="card listing-card">
+                <div class="listing-body">
+                    <p class="listing-person">Серик</p>
+                    <h2 class="listing-title"><a class="title-link" href="#">Машинист экскаватора</a></h2>
+                    <p class="listing-line muted">Экскаватор, Самосвал</p>
+                    <p class="listing-line">Стаж 8 лет (со слов исполнителя)</p>
+                    <div class="card-badge">✅ Документ проверен</div>
+                    <p class="listing-line">Машинист экскаватора, стаж 8 лет, работал на карьере.</p>
+                    <p class="listing-line muted">г.Шымкент</p>
+                    <p class="listing-line muted">Поставщик: Серик</p>
+                    <div class="actions">
+                        <button class="btn btn-primary">Выбрать</button>
+                        <a class="btn btn-secondary" href="#">Подробнее</a>
+                    </div>
+                </div>
+            </div>
+
             <nav class="pager">
                 <span class="pager-link disabled">&larr; Назад</span>
                 <span class="muted">Страница 1 из 2</span>
@@ -262,7 +305,7 @@
 </div>
 
 <div class="preview-section">
-    <h2>Каталог заказчика — mobile 375px (фильтры в одну колонку)</h2>
+    <h2>Каталог заказчика — mobile 375px (фильтры в одну колонку; карточки аренды, мастера и водителя)</h2>
     <div class="viewport viewport-mobile">
         <main>
             <header class="page-header">
@@ -315,6 +358,40 @@
                     <p class="listing-line muted">г.Шымкент, центр</p>
                     <p class="listing-line listing-price">20000 тг/ч</p>
                     <p class="listing-line muted">Поставщик: Асхат</p>
+                    <div class="actions">
+                        <button class="btn btn-primary">Выбрать</button>
+                        <a class="btn btn-secondary" href="#">Подробнее</a>
+                    </div>
+                </div>
+            </div>
+
+            {{-- Карточка мастера по ремонту в узкой колонке. --}}
+            <div class="card listing-card">
+                <div class="listing-body">
+                    <p class="listing-person">Сервис «Мотор»</p>
+                    <h2 class="listing-title"><a class="title-link" href="#">Ремонт двигателей и гидравлики</a></h2>
+                    <p class="listing-line">Диагностика, ремонт двигателя, гидравлика, электрика.</p>
+                    <p class="listing-line muted">И так, и так</p>
+                    <p class="listing-line muted">г.Шымкент, центр</p>
+                    <p class="listing-line listing-price">Диагностика: 5000 тг</p>
+                    <p class="listing-line muted">Поставщик: Азамат</p>
+                    <div class="actions">
+                        <button class="btn btn-primary">Выбрать</button>
+                        <a class="btn btn-secondary" href="#">Подробнее</a>
+                    </div>
+                </div>
+            </div>
+
+            {{-- Карточка водителя в узкой колонке: бейдж документа, цены нет. --}}
+            <div class="card listing-card">
+                <div class="listing-body">
+                    <p class="listing-person">Серик</p>
+                    <h2 class="listing-title"><a class="title-link" href="#">Машинист экскаватора</a></h2>
+                    <p class="listing-line muted">Экскаватор, Самосвал</p>
+                    <p class="listing-line">Стаж 8 лет (со слов исполнителя)</p>
+                    <div class="card-badge">✅ Документ проверен</div>
+                    <p class="listing-line muted">г.Шымкент</p>
+                    <p class="listing-line muted">Поставщик: Серик</p>
                     <div class="actions">
                         <button class="btn btn-primary">Выбрать</button>
                         <a class="btn btn-secondary" href="#">Подробнее</a>
@@ -484,6 +561,33 @@
                 <p class="listing-line muted">г.Шымкент, центр</p>
                 <p class="listing-line listing-price">20000 тг/ч</p>
                 <p class="listing-line muted">Поставщик: Асхат</p>
+
+                <div class="actions"><button class="btn btn-primary">Выбрать</button></div>
+            </div>
+        </main>
+    </div>
+</div>
+
+<div class="preview-section">
+    <h2>Страница объявления водителя, mobile 375px (удостоверение, стаж «со слов», готовность выезжать, бейдж проверенного документа; строки цены нет)</h2>
+    <div class="viewport viewport-mobile">
+        <main>
+            <a class="back" href="#">&larr; Назад к каталогу</a>
+
+            <header class="page-header">
+                <h1>Машинист экскаватора</h1>
+            </header>
+
+            <div class="card">
+                <p class="listing-person">Серик</p>
+                <p class="listing-line muted">Экскаватор, Самосвал</p>
+                <p class="listing-line">Удостоверение: Тракторист-машинист</p>
+                <p class="listing-line">Стаж 8 лет (со слов исполнителя)</p>
+                <p class="listing-line">Готов выезжать в другие города</p>
+                <div class="card-badge">✅ Документ проверен</div>
+                <p class="listing-line prewrap">Машинист экскаватора, стаж 8 лет, работал на карьере и в городской застройке.</p>
+                <p class="listing-line muted">г.Шымкент</p>
+                <p class="listing-line muted">Поставщик: Серик</p>
 
                 <div class="actions"><button class="btn btn-primary">Выбрать</button></div>
             </div>

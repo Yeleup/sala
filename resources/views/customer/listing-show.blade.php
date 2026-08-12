@@ -61,13 +61,44 @@
             </div>
         @endif
 
+        {{-- Every line guards itself: the moderator preview renders this page for a half-empty draft too. --}}
+        @if ($listing->kind !== \App\Enums\ListingKind::Rental && $listing->person_name)
+            <p class="listing-person">{{ $listing->person_name }}</p>
+        @endif
+        @if ($listing->kind === \App\Enums\ListingKind::Repair)
+            @if ($listing->services)
+                <p class="listing-line">{{ $listing->services }}</p>
+            @endif
+            @if ($listing->repair_place)
+                <p class="listing-line muted">{{ $listing->repair_place->label() }}</p>
+            @endif
+        @elseif ($listing->kind === \App\Enums\ListingKind::Driver)
+            @if ($listing->machineCategories->isNotEmpty())
+                <p class="listing-line muted">{{ $listing->machineCategories->pluck('name')->implode(', ') }}</p>
+            @endif
+            @if ($listing->licence_type)
+                <p class="listing-line">Удостоверение: {{ $listing->licence_type->label() }}</p>
+            @endif
+            @if ($listing->experience_years !== null)
+                <p class="listing-line">Стаж {{ $listing->experience_years }} лет (со слов исполнителя)</p>
+            @endif
+            @if ($listing->travels_to_other_cities === true)
+                <p class="listing-line">Готов выезжать в другие города</p>
+            @endif
+            @if ($listing->document_verified_at)
+                <div class="card-badge">✅ Документ проверен</div>
+            @endif
+        @endif
         @if ($listing->description)
             <p class="listing-line prewrap">{{ $listing->description }}</p>
         @endif
         @if ($listing->locationLine())
             <p class="listing-line muted">{{ $listing->locationLine() }}</p>
         @endif
-        @if ($listing->price)
+        {{-- A driver has no price line at all; a repair price is the diagnostics fee. --}}
+        @if ($listing->price && $listing->kind === \App\Enums\ListingKind::Repair)
+            <p class="listing-line listing-price">Диагностика: {{ $listing->price }}</p>
+        @elseif ($listing->price && $listing->kind !== \App\Enums\ListingKind::Driver)
             <p class="listing-line listing-price">{{ $listing->price }}</p>
         @endif
         @if ($listing->supplier->displayName())

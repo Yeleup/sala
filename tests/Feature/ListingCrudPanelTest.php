@@ -497,12 +497,12 @@ test('все действия строки собраны в одно меню �
         ]);
 });
 
-test('любую колонку можно выключить, а четыре редких выключены сразу', function () {
+test('любую колонку можно выключить, а редкие выключены сразу', function () {
     $columns = Livewire::test(ListListings::class)->instance()->getTable()->getColumns();
 
     expect(collect($columns)->reject(fn ($column) => $column->isToggleable())->keys())->toBeEmpty()
         ->and(collect($columns)->filter(fn ($column) => $column->isToggledHiddenByDefault())->keys()->all())
-        ->toEqualCanonicalizing(['id', 'brand.name', 'origin', 'created_at']);
+        ->toEqualCanonicalizing(['id', 'brand.name', 'person_name', 'origin', 'created_at']);
 });
 
 test('статус показан иконкой, а подсказка называет его и срок актуальности', function () {

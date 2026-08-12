@@ -2,8 +2,10 @@
 
 namespace App\Filament\Resources\Listings\Schemas;
 
+use App\Enums\LicenceType;
 use App\Enums\ListingKind;
 use App\Enums\ListingMediaType;
+use App\Enums\RepairPlace;
 use App\Filament\Resources\Brands\Schemas\BrandForm;
 use App\Filament\Resources\Categories\Schemas\CategoryForm;
 use App\Filament\Resources\Contacts\Schemas\ContactForm;
@@ -21,6 +23,7 @@ use Filament\Forms\Components\Repeater;
 use Filament\Forms\Components\Select;
 use Filament\Forms\Components\Textarea;
 use Filament\Forms\Components\TextInput;
+use Filament\Forms\Components\Toggle;
 use Filament\Infolists\Components\TextEntry;
 use Filament\Notifications\Notification;
 use Filament\Schemas\Components\Group;
@@ -49,14 +52,14 @@ class ListingForm
                 // only publication is gated.
                 TextEntry::make('publication_readiness')
                     ->label('Готовность к публикации')
-                    ->state(function (Get $get): string {
-                        $missing = self::missingPublicationFields($get);
+                    ->state(function (Get $get, ?Listing $record): string {
+                        $missing = self::missingPublicationFields($get, $record);
 
                         return $missing === []
                             ? 'Все поля заполнены — объявление можно публиковать.'
                             : 'Не хватает для публикации: '.implode(', ', $missing).'.';
                     })
-                    ->color(fn (Get $get): string => self::missingPublicationFields($get) === [] ? 'success' : 'warning')
+                    ->color(fn (Get $get, ?Listing $record): string => self::missingPublicationFields($get, $record) === [] ? 'success' : 'warning')
                     ->columnSpanFull(),
                 TextEntry::make('status')
                     ->label('Статус')
@@ -72,6 +75,21 @@ class ListingForm
                     ->color('danger')
                     ->visible(fn (?Listing $record): bool => filled($record?->rejection_reason))
                     ->columnSpanFull(),
+                // The kind decides the questionnaire below. It is chosen
+                // once, at creation: switching the kind of an existing
+                // listing would leave the other kind's half-filled fields
+                // behind as dirt in the record.
+                Select::make('kind')
+                    ->label('Вид')
+                    ->options(collect(ListingKind::cases())->mapWithKeys(
+                        fn (ListingKind $kind): array => [$kind->value => $kind->label()],
+                    )->all())
+                    ->default(ListingKind::Rental->value)
+                    ->required()
+                    ->selectablePlaceholder(false)
+                    ->live()
+                    ->disabledOn('edit')
+                    ->helperText(fn (string $operation): ?string => $operation === 'edit' ? 'Вид задаётся при создании.' : null),
                 Select::make('contact_id')
                     ->label('Поставщик')
                     ->relationship('supplier', 'phone')
@@ -141,6 +159,14 @@ class ListingForm
                     // Text fields refresh the readiness hint on blur, not
                     // on every keystroke — one round trip per field.
                     ->live(onBlur: true),
+                TextInput::make('person_name')
+                    ->label(fn (Get $get): string => self::kindOf($get) === ListingKind::Repair ? 'Имя или название сервиса' : 'Имя')
+                    ->placeholder(fn (Get $get): string => self::kindOf($get) === ListingKind::Repair
+                        ? 'Например: Сервис «Мотор» или Асхат'
+                        : 'Например: Серик')
+                    ->maxLength(255)
+                    ->live(onBlur: true)
+                    ->visible(fn (Get $get): bool => self::kindOf($get) !== ListingKind::Rental),
                 Select::make('category_id')
                     ->label('Категория')
                     ->relationship('category', 'name')
@@ -148,6 +174,7 @@ class ListingForm
                     ->preload()
                     ->live()
                     ->placeholder('Без категории')
+                    ->visible(fn (Get $get): bool => self::kindOf($get) === ListingKind::Rental)
                     // The client names a trade the dictionary does not have
                     // yet: adding it here beats abandoning the form.
                     // ignoreRecord stays off in all three dictionary modals
@@ -164,7 +191,23 @@ class ListingForm
                     ->placeholder('Без марки')
                     ->helperText('Производитель техники.')
                     ->createOptionForm(fn (): array => [BrandForm::nameField(ignoreRecord: false)])
-                    ->createOptionModalHeading('Новая марка'),
+                    ->createOptionModalHeading('Новая марка')
+                    ->visible(fn (Get $get): bool => self::kindOf($get) === ListingKind::Rental),
+                Textarea::make('services')
+                    ->label('Услуги')
+                    ->placeholder('Например: диагностика, ремонт двигателя, гидравлика, электрика')
+                    ->rows(3)
+                    ->maxLength(2000)
+                    ->live(onBlur: true)
+                    ->visible(fn (Get $get): bool => self::kindOf($get) === ListingKind::Repair)
+                    ->columnSpanFull(),
+                Select::make('repair_place')
+                    ->label('Где ремонтирует')
+                    ->options(collect(RepairPlace::cases())->mapWithKeys(
+                        fn (RepairPlace $place): array => [$place->value => $place->label()],
+                    )->all())
+                    ->live()
+                    ->visible(fn (Get $get): bool => self::kindOf($get) === ListingKind::Repair),
                 Textarea::make('description')
                     ->label('Описание')
                     ->rows(4)
@@ -202,10 +245,38 @@ class ListingForm
                     ->placeholder('Например: центр, мкр Нурсат')
                     ->maxLength(255),
                 TextInput::make('price')
-                    ->label('Цена/Тариф')
+                    // For a repair the price field carries one number the
+                    // customer compares by — what the diagnostics visit costs.
+                    ->label(fn (Get $get): string => self::kindOf($get) === ListingKind::Repair ? 'Цена за диагностику' : 'Цена/Тариф')
                     ->placeholder('Например: 10000 тг/ч')
                     ->maxLength(255)
-                    ->live(onBlur: true),
+                    ->live(onBlur: true)
+                    ->visible(fn (Get $get): bool => self::kindOf($get) !== ListingKind::Driver),
+                Select::make('machine_categories')
+                    ->label('Техника, на которой работает')
+                    ->relationship('machineCategories', 'name')
+                    ->multiple()
+                    ->searchable()
+                    ->preload()
+                    ->visible(fn (Get $get): bool => self::kindOf($get) === ListingKind::Driver),
+                Select::make('licence_type')
+                    ->label('Тип удостоверения')
+                    ->options(collect(LicenceType::cases())->mapWithKeys(
+                        fn (LicenceType $type): array => [$type->value => $type->label()],
+                    )->all())
+                    ->live()
+                    ->visible(fn (Get $get): bool => self::kindOf($get) === ListingKind::Driver),
+                TextInput::make('experience_years')
+                    ->label('Стаж, лет')
+                    ->numeric()
+                    ->minValue(0)
+                    ->maxValue(80)
+                    ->live(onBlur: true)
+                    ->visible(fn (Get $get): bool => self::kindOf($get) === ListingKind::Driver),
+                Toggle::make('travels_to_other_cities')
+                    ->label('Готов выезжать в другие города')
+                    ->live()
+                    ->visible(fn (Get $get): bool => self::kindOf($get) === ListingKind::Driver),
                 Repeater::make('photos')
                     ->label('Фотографии')
                     ->relationship()
@@ -232,6 +303,24 @@ class ListingForm
                     ->addActionLabel('Добавить фото')
                     ->reorderable(false)
                     ->columnSpanFull(),
+                // The driver's licence document lives on the non-public
+                // disk and never renders to customers — the operator views
+                // it through the authenticated document route.
+                TextEntry::make('document')
+                    ->label('Документ водителя')
+                    ->state('Открыть документ')
+                    ->url(fn (?Listing $record): ?string => $record === null ? null : route('moderation.listings.document', $record))
+                    ->openUrlInNewTab()
+                    ->visible(fn (Get $get, ?Listing $record): bool => self::kindOf($get) === ListingKind::Driver
+                        && $record !== null
+                        && $record->documents()->exists()),
+                // A virtual field: EditListing turns it into the
+                // document_verified_at/by audit columns on save.
+                Toggle::make('document_verified')
+                    ->label('Документ проверен')
+                    ->helperText('Отметка фиксирует, кто и когда сверил снимок удостоверения с анкетой.')
+                    ->hiddenOn('create')
+                    ->visible(fn (Get $get): bool => self::kindOf($get) === ListingKind::Driver),
                 // Audio the supplier sent is not editable, but its
                 // transcription is what the operator moderates by.
                 TextEntry::make('audioMessages.transcription')
@@ -306,18 +395,25 @@ class ListingForm
     }
 
     /**
+     * The kind driving the questionnaire, read off the live form state.
+     * fromNode() falls back to rental, so a create form freshly opened
+     * behaves as a rental one until the operator picks otherwise.
+     */
+    private static function kindOf(Get $get): ListingKind
+    {
+        return ListingKind::fromNode($get('kind'));
+    }
+
+    /**
      * The publication fields still blank in the form as it stands right
      * now — the same rule Listing::publish() enforces, read off the live
      * form state instead of the saved record.
      *
      * @return list<string>
      */
-    private static function missingPublicationFields(Get $get): array
+    private static function missingPublicationFields(Get $get, ?Listing $record): array
     {
-        // The form has no kind field yet, so $get('kind') is null and
-        // fromNode() falls back to rental — today's behaviour. The
-        // per-kind form is a separate task.
-        $kind = ListingKind::fromNode($get('kind'));
+        $kind = self::kindOf($get);
 
         $values = [];
 
@@ -325,6 +421,14 @@ class ListingForm
             $values[$field] = $get($field);
         }
 
-        return Listing::missingPublicationFields($kind, $values);
+        $missing = Listing::missingPublicationFields($kind, $values);
+
+        // The licence document arrives only in the chat with the bot —
+        // the form cannot attach it, so the saved record is the source.
+        if ($kind->requiresDocument() && ! $record?->documents()->exists()) {
+            $missing[] = 'фото документа';
+        }
+
+        return $missing;
     }
 }

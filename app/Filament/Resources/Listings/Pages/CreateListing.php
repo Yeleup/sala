@@ -40,6 +40,7 @@ class CreateListing extends CreateRecord
     protected function preserveFormDataWhenCreatingAnother(array $data): array
     {
         return Arr::only($data, [
+            'kind',
             'contact_id',
             'category_id',
             'brand_id',

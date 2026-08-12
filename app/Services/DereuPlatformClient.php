@@ -99,6 +99,21 @@ class DereuPlatformClient
             ->json('synced');
     }
 
+    /**
+     * Mark an inbound message read and optionally show the «typing…»
+     * indicator — the live-operator cue while the bot prepares a reply.
+     * A read receipt is not a message: nothing is billed and no delivery
+     * status events come back for it.
+     */
+    public function markMessageRead(string $externalId, string $wamid, bool $typingIndicator = false): void
+    {
+        $this->request()
+            ->post("/platform/companies/{$externalId}/messages/{$wamid}/read", [
+                'typing_indicator' => $typingIndicator,
+            ])
+            ->throw();
+    }
+
     protected function request(): PendingRequest
     {
         $platformKey = config('services.dereu.platform_key');

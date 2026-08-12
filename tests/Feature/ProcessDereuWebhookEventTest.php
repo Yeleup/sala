@@ -7,6 +7,8 @@ use App\Services\Bot\BotEngine;
 use App\Services\Bot\InboundMessage;
 use App\Services\DereuMessenger;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Http\Client\Request;
+use Illuminate\Support\Facades\Http;
 
 uses(RefreshDatabase::class);
 
@@ -153,6 +155,7 @@ test('an event of our own company is processed', function () {
     config()->set('services.dereu.external_id', 'org_test');
     connectedDereuCompany(['dereu_company_id' => 'co_ours']);
     test()->mock(BotEngine::class)->shouldReceive('handle')->once();
+    Http::fake();
 
     runDereuWebhookJob(inboundMessageEvent(overrides: ['company_id' => 'co_ours']));
 
@@ -253,4 +256,46 @@ test('non-message events are ignored', function () {
     runDereuWebhookJob($event);
 
     expect(Contact::count())->toBe(0);
+});
+
+test('an inbound message is marked read with a typing indicator before the engine replies', function () {
+    config()->set('services.dereu.external_id', 'org_test');
+    config()->set('services.dereu.platform_key', 'plat_test.secret');
+    config()->set('services.dereu.base_url', 'https://api.dereu.test/api/v1');
+    connectedDereuCompany(['dereu_company_id' => 'co_ours']);
+    test()->mock(BotEngine::class)->shouldReceive('handle')->once();
+    Http::fake(['api.dereu.test/*' => Http::response(['success' => true])]);
+
+    $event = inboundMessageEvent(overrides: ['company_id' => 'co_ours']);
+
+    runDereuWebhookJob($event);
+
+    Http::assertSent(fn (Request $request) => $request->url() === 'https://api.dereu.test/api/v1/platform/companies/org_test/messages/'.$event->wamid.'/read'
+        && $request->hasHeader('Authorization', 'Bearer plat_test.secret')
+        && $request['typing_indicator'] === true);
+    expect($event->fresh()->processed_at)->not->toBeNull();
+});
+
+test('a failed read receipt does not cost the message its processing', function () {
+    config()->set('services.dereu.external_id', 'org_test');
+    config()->set('services.dereu.platform_key', 'plat_test.secret');
+    config()->set('services.dereu.base_url', 'https://api.dereu.test/api/v1');
+    connectedDereuCompany(['dereu_company_id' => 'co_ours']);
+    test()->mock(BotEngine::class)->shouldReceive('handle')->once();
+    Http::fake(['api.dereu.test/*' => Http::response(['error' => 'meta_unavailable'], 502)]);
+
+    $event = inboundMessageEvent(overrides: ['company_id' => 'co_ours']);
+
+    runDereuWebhookJob($event);
+
+    expect($event->fresh()->processed_at)->not->toBeNull();
+});
+
+test('no read receipt is attempted when no Dereu company is connected', function () {
+    test()->mock(BotEngine::class)->shouldReceive('handle')->once();
+    Http::fake();
+
+    runDereuWebhookJob(inboundMessageEvent());
+
+    Http::assertNothingSent();
 });

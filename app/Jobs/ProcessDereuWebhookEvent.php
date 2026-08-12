@@ -5,13 +5,14 @@ namespace App\Jobs;
 use App\Enums\ChannelDirection;
 use App\Enums\ChannelMessageStatus;
 use App\Models\ChannelMessage;
-use App\Services\Ai\Audit\AiAuditState;
 use App\Models\Contact;
 use App\Models\DereuCompany;
 use App\Models\DereuWebhookEvent;
+use App\Services\Ai\Audit\AiAuditState;
 use App\Services\Bot\BotEngine;
 use App\Services\Bot\InboundMessage;
 use App\Services\DereuMessenger;
+use App\Services\DereuPlatformClient;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
 use Illuminate\Queue\Middleware\WithoutOverlapping;
@@ -70,7 +71,7 @@ class ProcessDereuWebhookEvent implements ShouldQueue
         ];
     }
 
-    public function handle(BotEngine $engine): void
+    public function handle(BotEngine $engine, DereuPlatformClient $platform): void
     {
         $event = $this->event->fresh();
 
@@ -119,6 +120,8 @@ class ProcessDereuWebhookEvent implements ShouldQueue
         // audit (scoped state — resets between jobs).
         app(AiAuditState::class)->channelMessageId = $entry->id;
 
+        $this->showTypingIndicator($platform, $event);
+
         $engine->handle($contact, InboundMessage::fromWebhookEvent($event));
 
         $event->update(['processed_at' => now()]);
@@ -140,6 +143,30 @@ class ProcessDereuWebhookEvent implements ShouldQueue
                 'status' => ChannelMessageStatus::Received,
             ],
         );
+    }
+
+    /**
+     * Best effort: mark the inbound message read and show «typing…» while
+     * the engine prepares the reply. The indicator dies with the reply (or
+     * on its own in ~25 seconds), and a failure here must never cost the
+     * message its processing — the receipt is UX, the reply is the job.
+     */
+    private function showTypingIndicator(DereuPlatformClient $platform, DereuWebhookEvent $event): void
+    {
+        $company = DereuCompany::current();
+
+        if ($company === null || blank($event->wamid)) {
+            return;
+        }
+
+        try {
+            $platform->markMessageRead($company->external_id, $event->wamid, typingIndicator: true);
+        } catch (Throwable $e) {
+            Log::warning('Failed to mark an inbound message read / show typing.', [
+                'event_id' => $event->event_id,
+                'error' => $e->getMessage(),
+            ]);
+        }
     }
 
     /**

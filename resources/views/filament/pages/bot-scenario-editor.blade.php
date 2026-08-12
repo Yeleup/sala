@@ -197,6 +197,16 @@
                                     <option value="collect_listing">Сбор объявления поставщика</option>
                                     <option value="customer_search">Поиск для заказчика</option>
                                 </select>
+
+                                <label class="bse-field" style="margin-top: 0.5rem;">
+                                    <span>Вид объявления</span>
+                                    <select class="bse-input" x-model="selected.kind">
+                                        <template x-for="kind in config.listingKinds" :key="kind.value">
+                                            <option x-bind:value="kind.value" x-text="kind.label"></option>
+                                        </template>
+                                    </select>
+                                    <p class="bse-note">Определяет анкету ветки: какие поля собирает AI у поставщика и среди каких объявлений ищет для заказчика.</p>
+                                </label>
                             </div>
                         </template>
 
@@ -433,7 +443,9 @@
         <script>
             document.addEventListener('alpine:init', () => {
                 Alpine.data('botScenarioEditor', (initial, config) => ({
-                    nodes: (initial.nodes ?? []).map((n) => ({ text: '', options: [], ...n })),
+                    // AI-блоки, сохранённые до появления видов, показываются как «Аренда» —
+                    // сервер при сохранении нормализует отсутствующий вид так же.
+                    nodes: (initial.nodes ?? []).map((n) => ({ text: '', options: [], ...(n.type === 'ai' ? { kind: 'rental' } : {}), ...n })),
                     edges: initial.edges ?? [],
                     config: config ?? { runBased: false, templates: [], variables: [], conditions: [], actions: [], fallbacks: [], fallbacksUrl: '' },
                     pan: { x: 40, y: 20 },
@@ -965,6 +977,7 @@
 
                         if (type === 'ai') {
                             node.task = 'collect_listing'
+                            node.kind = 'rental'
                         }
 
                         if (type === 'my_listings') {

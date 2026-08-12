@@ -8,6 +8,10 @@
         {{-- The personal link's signature covers only the path and expiry, so the form can change every filter freely. --}}
         <input type="hidden" name="expires" value="{{ $expires }}">
         <input type="hidden" name="signature" value="{{ $signature }}">
+        {{-- The kind filter has no visible control (out of scope): the bot's deep link sets it, the form only carries it forward. --}}
+        @if ($filters['kind'])
+            <input type="hidden" name="kind" value="{{ $filters['kind']->value }}">
+        @endif
 
         <div class="field">
             <label for="q">Поиск</label>
@@ -59,10 +63,33 @@
                 </a>
             @endif
             <div class="listing-body">
+                {{-- A repair master and a driver are people, not machines: the name opens the card. --}}
+                @if ($listing->kind !== \App\Enums\ListingKind::Rental && $listing->person_name)
+                    <p class="listing-person">{{ $listing->person_name }}</p>
+                @endif
                 <h2 class="listing-title"><a class="title-link" href="{{ $detailUrls[$listing->id] }}">{{ $listing->displayName() ?: 'Объявление №'.$listing->id }}</a></h2>
-                @php($meta = collect([$listing->category?->name, $listing->brand?->name])->filter()->unique()->implode(' · '))
-                @if ($meta)
-                    <p class="listing-line muted">{{ $meta }}</p>
+                @if ($listing->kind === \App\Enums\ListingKind::Repair)
+                    @if ($listing->services)
+                        <p class="listing-line">{{ $listing->services }}</p>
+                    @endif
+                    @if ($listing->repair_place)
+                        <p class="listing-line muted">{{ $listing->repair_place->label() }}</p>
+                    @endif
+                @elseif ($listing->kind === \App\Enums\ListingKind::Driver)
+                    @if ($listing->machineCategories->isNotEmpty())
+                        <p class="listing-line muted">{{ $listing->machineCategories->pluck('name')->implode(', ') }}</p>
+                    @endif
+                    @if ($listing->experience_years !== null)
+                        <p class="listing-line">Стаж {{ $listing->experience_years }} лет (со слов исполнителя)</p>
+                    @endif
+                    @if ($listing->document_verified_at)
+                        <div class="card-badge">✅ Документ проверен</div>
+                    @endif
+                @else
+                    @php($meta = collect([$listing->category?->name, $listing->brand?->name])->filter()->unique()->implode(' · '))
+                    @if ($meta)
+                        <p class="listing-line muted">{{ $meta }}</p>
+                    @endif
                 @endif
                 @if ($listing->description)
                     <p class="listing-line">{{ \Illuminate\Support\Str::limit($listing->description, 140) }}</p>
@@ -70,7 +97,10 @@
                 @if ($listing->locationLine())
                     <p class="listing-line muted">{{ $listing->locationLine() }}</p>
                 @endif
-                @if ($listing->price)
+                {{-- A driver has no price line at all; a repair price is the diagnostics fee. --}}
+                @if ($listing->price && $listing->kind === \App\Enums\ListingKind::Repair)
+                    <p class="listing-line listing-price">Диагностика: {{ $listing->price }}</p>
+                @elseif ($listing->price && $listing->kind !== \App\Enums\ListingKind::Driver)
                     <p class="listing-line listing-price">{{ $listing->price }}</p>
                 @endif
                 @if ($listing->supplier->displayName())
@@ -87,6 +117,7 @@
                         @csrf
                         {{-- The current filter state rides along so the confirmation returns to the same catalog page. --}}
                         <input type="hidden" name="q" value="{{ $filters['q'] }}">
+                        <input type="hidden" name="kind" value="{{ $filters['kind']?->value }}">
                         <input type="hidden" name="category_id" value="{{ $filters['category']?->id }}">
                         <input type="hidden" name="location_id" value="{{ $filters['location']?->id }}">
                         <input type="hidden" name="sort" value="{{ $filters['sort'] }}">

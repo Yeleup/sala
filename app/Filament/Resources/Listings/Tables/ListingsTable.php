@@ -2,6 +2,7 @@
 
 namespace App\Filament\Resources\Listings\Tables;
 
+use App\Enums\ListingKind;
 use App\Enums\ListingOrigin;
 use App\Enums\ListingStatus;
 use App\Filament\Resources\Listings\ListingResource;
@@ -49,12 +50,25 @@ class ListingsTable
                     ->boolean()
                     ->state(fn (Listing $record): bool => (bool) $record->supplier?->hasEverWritten())
                     ->toggleable(),
+                TextColumn::make('kind')
+                    ->label('Вид')
+                    ->badge()
+                    ->formatStateUsing(fn (ListingKind $state): string => $state->label())
+                    ->toggleable(),
                 TextColumn::make('title')
                     ->label('Название')
                     ->searchable()
                     ->limit(40)
                     ->placeholder('—')
                     ->toggleable(),
+                // The repair master's or driver's name. Off by default:
+                // the columns already overflow a laptop screen, and the
+                // search still reaches it.
+                TextColumn::make('person_name')
+                    ->label('Имя / сервис')
+                    ->searchable()
+                    ->placeholder('—')
+                    ->toggleable(isToggledHiddenByDefault: true),
                 TextColumn::make('category.name')
                     ->label('Категория')
                     ->searchable()
@@ -102,6 +116,11 @@ class ListingsTable
                 SelectFilter::make('status')
                     ->label('Статус')
                     ->options(ListingStatus::class),
+                SelectFilter::make('kind')
+                    ->label('Вид')
+                    ->options(collect(ListingKind::cases())->mapWithKeys(
+                        fn (ListingKind $kind): array => [$kind->value => $kind->label()],
+                    )->all()),
                 SelectFilter::make('category_id')
                     ->label('Категория')
                     ->relationship('category', 'name'),

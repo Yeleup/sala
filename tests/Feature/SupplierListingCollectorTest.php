@@ -5,8 +5,11 @@ use App\Ai\Agents\LocationChoiceAgent;
 use App\Enums\AiOperationType;
 use App\Enums\AiOutcome;
 use App\Enums\BotReplyKey;
+use App\Enums\LicenceType;
+use App\Enums\ListingKind;
 use App\Enums\ListingMediaType;
 use App\Enums\ListingStatus;
+use App\Enums\RepairPlace;
 use App\Models\AiOperation;
 use App\Models\BotReplyText;
 use App\Models\BotSession;
@@ -34,6 +37,22 @@ uses(RefreshDatabase::class);
 function supplierAiNode(): array
 {
     return ['id' => 'collect', 'type' => 'ai', 'task' => 'collect_listing'];
+}
+
+/**
+ * @return array<string, mixed>
+ */
+function repairAiNode(): array
+{
+    return supplierAiNode() + ['kind' => 'repair'];
+}
+
+/**
+ * @return array<string, mixed>
+ */
+function driverAiNode(): array
+{
+    return supplierAiNode() + ['kind' => 'driver'];
 }
 
 /**
@@ -89,6 +108,78 @@ function fullExtraction(array $overrides = []): array
         'clarifying_question' => '',
         'summary' => 'Трактор, Шымкент, 10000 тг/ч',
     ], $overrides);
+}
+
+/**
+ * Ответ экстрактора для анкеты ремонта: цены и категории в ней нет,
+ * зато есть имя, услуги и место работы мастера.
+ *
+ * @param  array<string, mixed>  $overrides
+ * @return array<string, mixed>
+ */
+function repairExtraction(array $overrides = []): array
+{
+    locationNamed('г.Алматы');
+
+    return array_merge([
+        'title' => 'Ремонт гидравлики спецтехники',
+        'person_name' => 'Аскар',
+        'services' => 'диагностика, ремонт гидравлики',
+        'repair_place' => 'travels',
+        'description' => 'Ремонт гидравлики с выездом',
+        'location' => 'Алматы',
+        'location_detail' => null,
+        'price' => null,
+        'clarifying_question' => '',
+        'summary' => 'Ремонт гидравлики, с выездом, Алматы',
+    ], $overrides);
+}
+
+/**
+ * Ответ экстрактора для анкеты водителя. Категории техники — из
+ * операторского справочника, как и у аренды; готовность выезжать —
+ * false, потому что «нет» — это ответ, а не пропуск поля.
+ *
+ * @param  array<string, mixed>  $overrides
+ * @return array<string, mixed>
+ */
+function driverExtraction(array $overrides = []): array
+{
+    categoryNamed('Экскаватор');
+    locationNamed('г.Шымкент');
+
+    return array_merge([
+        'title' => 'Машинист экскаватора',
+        'person_name' => 'Ерлан',
+        'machine_categories' => ['Экскаватор'],
+        'licence_type' => 'tractor_operator',
+        'experience_years' => 8,
+        'travels_to_other_cities' => false,
+        'description' => 'Машинист экскаватора со стажем 8 лет',
+        'location' => 'Шымкент',
+        'location_detail' => null,
+        'clarifying_question' => '',
+        'summary' => 'Машинист экскаватора, стаж 8 лет, Шымкент',
+    ], $overrides);
+}
+
+/**
+ * Черновик водителя для тестов документа: анкета заполнена фабрикой,
+ * статус — черновик.
+ */
+function driverDraft(): Listing
+{
+    return Listing::factory()->driver()->create();
+}
+
+/**
+ * Успешное скачивание присланного фото — по образцу фото-тестов интейка.
+ */
+function fakeMediaDownload(string $mediaId = 'wamid-doc'): void
+{
+    test()->mock(DereuMediaDownloader::class)
+        ->shouldReceive('download')->once()->with($mediaId)
+        ->andReturn(['contents' => 'JPEG-BYTES', 'mime_type' => 'image/jpeg']);
 }
 
 test('entering the AI block greets the supplier and keeps the turn', function () {
@@ -576,7 +667,7 @@ test('the extractor category is normalized to the dictionary spelling', function
 });
 
 test('the extraction schema and prompt hard-limit the category to the dictionary', function () {
-    $agent = new ListingExtractionAgent(['Автокран', 'Экскаватор']);
+    $agent = new ListingExtractionAgent(ListingKind::Rental, ['Автокран', 'Экскаватор']);
 
     $categorySchema = $agent->schema(new JsonSchemaTypeFactory)['category']->toArray();
 
@@ -645,7 +736,7 @@ test('a brand outside the dictionary is dropped without a clarifying question', 
 });
 
 test('the extraction schema and prompt hard-limit the brand to the dictionary', function () {
-    $agent = new ListingExtractionAgent(['Автокран'], ['Hitachi', 'CAT']);
+    $agent = new ListingExtractionAgent(ListingKind::Rental, ['Автокран'], ['Hitachi', 'CAT']);
 
     $brandSchema = $agent->schema(new JsonSchemaTypeFactory)['brand']->toArray();
 
@@ -654,12 +745,359 @@ test('the extraction schema and prompt hard-limit the brand to the dictionary', 
 });
 
 test('an empty brand dictionary degrades the schema and tells the model to keep null', function () {
-    $agent = new ListingExtractionAgent(['Автокран']);
+    $agent = new ListingExtractionAgent(ListingKind::Rental, ['Автокран']);
 
     $brandSchema = $agent->schema(new JsonSchemaTypeFactory)['brand']->toArray();
 
     expect($brandSchema)->not->toHaveKey('enum')
         ->and((string) $agent->instructions())->toContain('справочник марок пуст');
+});
+
+test('схема извлечения собирается из вида', function () {
+    $schema = new JsonSchemaTypeFactory;
+
+    $rental = array_keys((new ListingExtractionAgent(ListingKind::Rental, ['Автокран'], ['Hitachi']))->schema($schema));
+    $repair = array_keys((new ListingExtractionAgent(ListingKind::Repair))->schema($schema));
+    $driver = array_keys((new ListingExtractionAgent(ListingKind::Driver, ['Экскаватор']))->schema($schema));
+
+    expect($rental)->toContain('category', 'brand', 'price')->not->toContain('services', 'licence_type')
+        ->and($repair)->toContain('person_name', 'services', 'repair_place', 'price')->not->toContain('category', 'brand')
+        ->and($driver)->toContain('person_name', 'machine_categories', 'licence_type', 'experience_years', 'travels_to_other_cities')
+        ->not->toContain('price', 'brand');
+});
+
+test('промпт извлечения собирается из вида', function () {
+    $repair = (string) (new ListingExtractionAgent(ListingKind::Repair))->instructions();
+    $driver = (string) (new ListingExtractionAgent(ListingKind::Driver, ['Экскаватор']))->instructions();
+
+    expect($repair)->toContain('own_service')->toContain('цена за диагностику')
+        ->not->toContain('Доступные марки')->not->toContain('Доступные категории')
+        ->and($driver)->toContain('- Экскаватор')->toContain('tractor_operator')
+        ->not->toContain('Доступные марки');
+});
+
+test('вид узла попадает в состояние и в черновик, приветствие — своё', function () {
+    $session = collectorSession();
+    fakeCollectorMessenger()->shouldReceive('sendText')->once()
+        ->withArgs(fn ($to, string $text) => str_contains($text, 'на какой технике'));
+
+    app(SupplierListingCollector::class)->start($session, driverAiNode());
+
+    expect($session->fresh()->state['kind'])->toBe('driver');
+});
+
+test('у ремонта сбор завершается без цены и категории', function () {
+    // person_name, services, repair_place и location заполнены; price=null —
+    // для анкеты ремонта этого достаточно: уходит сводка, а не вопрос.
+    ListingExtractionAgent::fake([repairExtraction()]);
+    $session = collectorSession(['kind' => 'repair']);
+    fakeCollectorMessenger()->shouldReceive('sendButtons')->once();
+
+    $outcome = app(SupplierListingCollector::class)
+        ->resume($session, repairAiNode(), new InboundMessage(text: 'ремонтирую гидравлику, выезжаю, Алматы'));
+
+    expect($outcome)->toBe(AiOutcome::InProgress)
+        ->and($session->fresh()->state['phase'])->toBe('confirming')
+        ->and(Listing::sole())
+        ->kind->toBe(ListingKind::Repair)
+        ->person_name->toBe('Аскар')
+        ->services->toBe('диагностика, ремонт гидравлики')
+        ->repair_place->toBe(RepairPlace::Travels)
+        ->price->toBeNull();
+});
+
+test('лимит уточнений у водителя — шесть', function () {
+    ListingExtractionAgent::fake([driverExtraction(['person_name' => null])]);
+    $session = collectorSession(['kind' => 'driver', 'attempts' => 5]);
+    fakeCollectorMessenger()->shouldReceive('sendText')->once();      // ещё вопрос, не веб-форма
+
+    app(SupplierListingCollector::class)->resume($session, driverAiNode(), new InboundMessage(text: 'стаж 8 лет'));
+
+    expect($session->fresh()->state['attempts'])->toBe(6);
+});
+
+test('полное описание водителя заполняет поля вида и привязывает технику', function () {
+    ListingExtractionAgent::fake([driverExtraction()]);
+    $session = collectorSession(['kind' => 'driver']);
+
+    fakeCollectorMessenger()->shouldReceive('sendButtons')->once();
+
+    $outcome = app(SupplierListingCollector::class)->resume(
+        $session,
+        driverAiNode(),
+        new InboundMessage(text: 'Ерлан, машинист экскаватора, стаж 8 лет, Шымкент, не выезжаю'),
+    );
+
+    // «Не готов выезжать» — это ответ false, а не пропущенное поле:
+    // анкета считается полной и уходит на подтверждение.
+    expect($outcome)->toBe(AiOutcome::InProgress)
+        ->and($session->fresh()->state['phase'])->toBe('confirming')
+        ->and(Listing::sole())
+        ->kind->toBe(ListingKind::Driver)
+        ->person_name->toBe('Ерлан')
+        ->licence_type->toBe(LicenceType::TractorOperator)
+        ->experience_years->toBe(8)
+        ->travels_to_other_cities->toBeFalse()
+        ->and(Listing::sole()->machineCategories()->pluck('name')->all())->toBe(['Экскаватор']);
+});
+
+test('null в категориях техники не стирает ранее привязанную технику', function () {
+    // Поля пересобираются с нуля каждый ход: если на очередном ходе модель
+    // не вернула категории, привязанная раньше техника должна уцелеть.
+    ListingExtractionAgent::fake([driverExtraction(['machine_categories' => null, 'person_name' => null])]);
+
+    $draft = Listing::factory()->driver()->create();
+    $draft->machineCategories()->attach(categoryNamed('Экскаватор'));
+    $session = collectorSession(['kind' => 'driver', 'draft_id' => $draft->id, 'attempts' => 6]);
+
+    fakeCollectorMessenger()->shouldReceive('sendCtaUrl')->once();
+
+    $outcome = app(SupplierListingCollector::class)
+        ->resume($session, driverAiNode(), new InboundMessage(text: 'не помню'));
+
+    expect($outcome)->toBe(AiOutcome::Completed)
+        ->and($draft->machineCategories()->pluck('name')->all())->toBe(['Экскаватор']);
+});
+
+test('перечислимое поле добирается кнопками и не тратит попытку', function () {
+    ListingExtractionAgent::fake([repairExtraction(['repair_place' => null])]);
+    $session = collectorSession(['kind' => 'repair']);
+    fakeCollectorMessenger()->shouldReceive('sendButtons')->once()
+        ->withArgs(fn ($to, string $text, array $buttons) => str_contains($text, 'Где вы выполняете ремонт')
+            && count($buttons) === 3 && $buttons[0]['id'] === 'kind_choice:repair_place:own_service');
+
+    app(SupplierListingCollector::class)->resume($session, repairAiNode(), new InboundMessage(text: 'чиню гидравлику, Алматы, я Иван'));
+
+    $state = $session->fresh()->state;
+    expect($state['attempts'])->toBe(0)
+        ->and($state['phase'])->toBe('choosing')
+        ->and($state['button_prompts']['repair_place'])->toBe(1);
+});
+
+test('нажатие кнопки заполняет поле и ведёт дальше без вызова модели', function () {
+    ListingExtractionAgent::fake()->preventStrayPrompts();
+    // Анкета полна во всём, кроме кнопочного поля: место уже разрешено в
+    // справочник, поэтому после нажатия остаётся только сводка.
+    $session = collectorSession(['kind' => 'repair', 'phase' => 'choosing', 'button_field' => 'repair_place',
+        'fields' => repairExtraction(['repair_place' => null, 'location_id' => locationNamed('г.Алматы')->id]),
+        'button_prompts' => ['repair_place' => 1]]);
+    fakeCollectorMessenger()->shouldReceive('sendButtons')->once();   // сводка
+
+    app(SupplierListingCollector::class)->resume($session, repairAiNode(),
+        new InboundMessage(replyId: 'kind_choice:repair_place:both', text: 'И так, и так'));
+
+    expect($session->fresh()->state['fields']['repair_place'])->toBe('both')
+        ->and($session->fresh()->state['phase'])->toBe('confirming');
+    ListingExtractionAgent::assertNeverPrompted();
+});
+
+test('кнопочный вопрос уходит максимум дважды, потом обычный путь недостающего поля', function () {
+    ListingExtractionAgent::fake([repairExtraction(['repair_place' => null])]);
+    $session = collectorSession(['kind' => 'repair', 'button_prompts' => ['repair_place' => 2]]);
+    fakeCollectorMessenger()->shouldReceive('sendText')->once();      // текстовый вопрос, тратит попытку
+
+    app(SupplierListingCollector::class)->resume($session, repairAiNode(), new InboundMessage(text: 'ещё делаю сварку'));
+
+    expect($session->fresh()->state['attempts'])->toBe(1);
+});
+
+test('кнопка «Да/Нет» водителя пишет булеву готовность выезжать', function (InboundMessage $press, bool $expected) {
+    // Ответ хранится тем же bool, каким его пишет извлечение: «нет» — это
+    // ответ false, а не пропуск поля. Текст, совпавший с заголовком кнопки,
+    // равен нажатию — сценарная конвенция, как у списка мест.
+    ListingExtractionAgent::fake()->preventStrayPrompts();
+    $session = collectorSession(['kind' => 'driver', 'phase' => 'choosing', 'button_field' => 'travels_to_other_cities',
+        'fields' => driverExtraction(['travels_to_other_cities' => null, 'location_id' => locationNamed('г.Шымкент')->id]),
+        'button_prompts' => ['travels_to_other_cities' => 1]]);
+    fakeCollectorMessenger()->shouldReceive('sendButtons')->once();   // сводка
+
+    app(SupplierListingCollector::class)->resume($session, driverAiNode(), $press);
+
+    expect($session->fresh()->state['fields']['travels_to_other_cities'])->toBe($expected)
+        ->and($session->fresh()->state['phase'])->toBe('confirming');
+    ListingExtractionAgent::assertNeverPrompted();
+})->with([
+    'кнопка «Да»' => [new InboundMessage(replyId: 'kind_choice:travels_to_other_cities:yes', text: 'Да'), true],
+    'текст «нет»' => [new InboundMessage(text: 'нет'), false],
+]);
+
+test('водителю со всеми полями, но без документа, бот шлёт просьбу о фото, а не сводку с отправкой', function () {
+    ListingExtractionAgent::fake([driverExtraction()]);   // всё заполнено
+    $session = collectorSession(['kind' => 'driver']);
+    fakeCollectorMessenger()->shouldReceive('sendButtons')->once()
+        ->withArgs(fn ($to, string $text, array $buttons) => str_contains($text, 'фото удостоверения')
+            && count($buttons) === 1 && $buttons[0]['id'] === SupplierListingCollector::BUTTON_EDIT);
+
+    app(SupplierListingCollector::class)->resume($session, driverAiNode(), new InboundMessage(text: 'Иван, экскаватор, 8 лет, Алматы, выезжаю'));
+
+    expect($session->fresh()->state['awaiting_document'])->toBeTrue()
+        ->and($session->fresh()->state['attempts'])->toBe(0);   // просьба бесплатна
+});
+
+test('фотография в ответ на просьбу о документе становится непубличным документом', function () {
+    Storage::fake('local');
+    fakeMediaDownload();
+    ListingExtractionAgent::fake([driverExtraction()]);
+    $session = collectorSession(['kind' => 'driver', 'phase' => 'confirming', 'awaiting_document' => true,
+        'fields' => driverExtraction(), 'draft_id' => ($draft = driverDraft())->id]);
+    fakeCollectorMessenger()->shouldReceive('sendButtons')->once()
+        ->withArgs(fn ($to, $text, array $buttons) => count($buttons) === 2);   // полная сводка: документ есть
+
+    app(SupplierListingCollector::class)->resume($session, driverAiNode(),
+        new InboundMessage(mediaId: 'wamid-doc', mediaType: ListingMediaType::Photo));
+
+    expect($draft->fresh()->documents()->count())->toBe(1)
+        ->and($draft->fresh()->photos()->count())->toBe(0)
+        ->and($draft->fresh()->documents()->first()->disk)->toBe('local');
+});
+
+test('фото на уточняющем крюке остаётся обычным снимком, а не документом', function () {
+    // awaiting_document переживает уход из confirming: поправка словами
+    // потеряла обязательное поле, и бот уже спрашивает другое. Фото здесь —
+    // ответ на вопрос, а не удостоверение: документ бот попросит заново
+    // на следующей полной сводке.
+    Storage::fake('public');
+    fakeMediaDownload('wamid-detour');
+    ListingExtractionAgent::fake([driverExtraction(['person_name' => null])]);
+    $draft = driverDraft();
+    $session = collectorSession(['kind' => 'driver', 'awaiting_document' => true,
+        'fields' => driverExtraction(), 'draft_id' => $draft->id]);
+
+    fakeCollectorMessenger()->shouldReceive('sendText')->once();   // уточняющий вопрос
+
+    app(SupplierListingCollector::class)->resume($session, driverAiNode(),
+        new InboundMessage(text: 'на фото мой экскаватор', mediaId: 'wamid-detour', mediaType: ListingMediaType::Photo));
+
+    expect($draft->fresh()->photos()->count())->toBe(1)
+        ->and($draft->fresh()->documents()->count())->toBe(0)
+        ->and($draft->fresh()->photos()->first()->disk)->toBe('public')
+        ->and($session->fresh()->state['awaiting_document'])->toBeTrue();
+});
+
+test('документ водителя не попадает во вложения AI-вызова', function () {
+    // photoAttachments() фильтрует по photos(): снимок удостоверения —
+    // непубличный документ, модель его видеть не должна.
+    ListingExtractionAgent::fake([driverExtraction()]);
+
+    $draft = driverDraft();
+    ListingMedia::factory()->create([
+        'listing_id' => $draft->id,
+        'type' => ListingMediaType::Document,
+        'disk' => 'local',
+    ]);
+    $session = collectorSession(['kind' => 'driver', 'draft_id' => $draft->id]);
+
+    fakeCollectorMessenger()->shouldReceive('sendButtons')->once();
+
+    app(SupplierListingCollector::class)->resume($session, driverAiNode(),
+        new InboundMessage(text: 'Ерлан, экскаватор, 8 лет, Шымкент, не выезжаю'));
+
+    ListingExtractionAgent::assertPrompted(fn ($prompt): bool => $prompt->attachments->count() === 0);
+});
+
+test('набранное руками «Да, отправить» без документа не отправляет водителя на модерацию', function () {
+    // Кнопки отправки в сообщении-просьбе нет, но её заголовок можно
+    // набрать текстом: бот повторяет сводку-просьбу, а не шлёт на проверку.
+    ListingExtractionAgent::fake()->preventStrayPrompts();
+    $draft = driverDraft();
+    $session = collectorSession(['kind' => 'driver', 'phase' => 'confirming', 'awaiting_document' => true,
+        'fields' => driverExtraction(), 'draft_id' => $draft->id]);
+
+    fakeCollectorMessenger()->shouldReceive('sendButtons')->once()
+        ->withArgs(fn ($to, string $text, array $buttons) => str_contains($text, 'фото удостоверения')
+            && count($buttons) === 1);
+
+    $outcome = app(SupplierListingCollector::class)
+        ->resume($session, driverAiNode(), new InboundMessage(text: 'Да, отправить'));
+
+    expect($outcome)->toBe(AiOutcome::InProgress)
+        ->and($draft->fresh()->status)->toBe(ListingStatus::Draft);
+    ListingExtractionAgent::assertNeverPrompted();
+});
+
+test('фолбэк-сводка водителя собирается из полей анкеты', function () {
+    // Повтор сводки после вопроса про сервис — удобный способ дернуть
+    // sendConfirmation; модельной summary нет, текст собирает buildSummary().
+    $session = collectorSession(['kind' => 'driver', 'phase' => 'confirming', 'awaiting_document' => true,
+        'fields' => driverExtraction(['summary' => null, 'travels_to_other_cities' => true])]);
+
+    $messenger = fakeCollectorMessenger();
+    $messenger->shouldReceive('sendText')->once();   // ответ на вопрос про сервис
+    $messenger->shouldReceive('sendButtons')->once()
+        ->withArgs(fn ($to, string $text) => str_contains($text, 'Ерлан')
+            && str_contains($text, 'Экскаватор')
+            && str_contains($text, 'Стаж 8 лет')
+            && str_contains($text, 'Тракторист-машинист')
+            && str_contains($text, 'готов выезжать в другие города'));
+    ListingExtractionAgent::fake([driverExtraction(['summary' => null, 'user_intent' => 'service_question'])]);
+
+    app(SupplierListingCollector::class)->resume($session, driverAiNode(), new InboundMessage(text: 'это платно?'));
+});
+
+test('фолбэк-сводка ремонта — имя, услуги, место работы и цена диагностики', function () {
+    $session = collectorSession(['kind' => 'repair', 'phase' => 'confirming',
+        'fields' => repairExtraction(['summary' => null, 'repair_place' => 'both', 'price' => '5000 тг'])]);
+
+    $messenger = fakeCollectorMessenger();
+    $messenger->shouldReceive('sendText')->once();   // ответ на вопрос про сервис
+    $messenger->shouldReceive('sendButtons')->once()
+        ->withArgs(fn ($to, string $text) => str_contains($text, 'Аскар')
+            && str_contains($text, 'ремонт гидравлики')
+            && str_contains($text, 'И так, и так')
+            && str_contains($text, 'диагностика 5000 тг'));
+    ListingExtractionAgent::fake([repairExtraction(['summary' => null, 'user_intent' => 'service_question'])]);
+
+    app(SupplierListingCollector::class)->resume($session, repairAiNode(), new InboundMessage(text: 'это платно?'));
+});
+
+test('кнопочный ответ переживает следующее сообщение поставщика', function () {
+    // Поля пересобираются с нуля каждый ход: без реаплая значение с кнопки
+    // исчезло бы при первом же ответе словами на другой вопрос.
+    ListingExtractionAgent::fake([repairExtraction(['repair_place' => null])]);
+    $session = collectorSession(['kind' => 'repair', 'phase' => 'choosing', 'button_field' => 'repair_place',
+        'transcript' => ['чиню гидравлику, Алматы'],
+        'fields' => repairExtraction(['repair_place' => null, 'person_name' => null, 'location_id' => locationNamed('г.Алматы')->id]),
+        'button_prompts' => ['repair_place' => 1]]);
+
+    $messenger = fakeCollectorMessenger();
+    $messenger->shouldReceive('sendText')->once();      // вопрос про имя
+    $messenger->shouldReceive('sendButtons')->once()
+        ->withArgs(fn ($to, string $text) => str_contains($text, 'Всё верно?'));
+
+    $collector = app(SupplierListingCollector::class);
+    $collector->resume($session, repairAiNode(), new InboundMessage(replyId: 'kind_choice:repair_place:own_service', text: 'В своём сервисе'));
+    $outcome = $collector->resume($session->fresh(), repairAiNode(), new InboundMessage(text: 'Аскар'));
+
+    expect($outcome)->toBe(AiOutcome::InProgress)
+        ->and($session->fresh()->state['phase'])->toBe('confirming')
+        ->and($session->fresh()->state['fields']['repair_place'])->toBe('own_service');
+});
+
+test('вопрос про сервис на кнопочном шаге повторяет кнопки, не тратя счётчик', function () {
+    ListingExtractionAgent::fake([repairExtraction(['repair_place' => null, 'user_intent' => 'service_question'])]);
+    $session = collectorSession(['kind' => 'repair', 'phase' => 'choosing', 'button_field' => 'repair_place',
+        'transcript' => ['чиню гидравлику, Алматы'],
+        'fields' => repairExtraction(['repair_place' => null, 'location_id' => locationNamed('г.Алматы')->id]),
+        'button_prompts' => ['repair_place' => 1]]);
+
+    $messenger = fakeCollectorMessenger();
+    $messenger->shouldReceive('sendText')->once()
+        ->withArgs(fn ($to, string $text) => str_contains($text, 'оператор'));
+    $messenger->shouldReceive('sendButtons')->once()
+        ->withArgs(fn ($to, string $text, array $buttons) => str_contains($text, 'Где вы выполняете ремонт')
+            && count($buttons) === 3);
+
+    $outcome = app(SupplierListingCollector::class)
+        ->resume($session, repairAiNode(), new InboundMessage(text: 'а это платно?'));
+
+    // Ни попытка, ни счётчик кнопочных вопросов на вопрос не тратятся.
+    expect($outcome)->toBe(AiOutcome::InProgress)
+        ->and($session->fresh()->state)
+        ->toMatchArray(['phase' => 'choosing', 'attempts' => 0, 'button_prompts' => ['repair_place' => 1]]);
+    // Короткий ответ читается против кнопочного вопроса — он в контексте модели.
+    ListingExtractionAgent::assertPrompted(
+        fn ($prompt): bool => $prompt->contains('задал вопрос с кнопками: «Где вы выполняете ремонт?»'),
+    );
 });
 
 test('a missing title never blocks confirmation and never spends an attempt', function () {
@@ -706,7 +1144,7 @@ test('an overlong extracted title is clipped to the column limit before saving',
 });
 
 test('the extraction schema carries a nullable title the model composes itself', function () {
-    $agent = new ListingExtractionAgent(['Автокран']);
+    $agent = new ListingExtractionAgent(ListingKind::Rental, ['Автокран']);
 
     $titleSchema = $agent->schema(new JsonSchemaTypeFactory)['title']->toArray();
 

@@ -3,6 +3,7 @@
 namespace App\Services\Bot;
 
 use App\Enums\BotNodeType;
+use App\Enums\ListingKind;
 
 /**
  * Read-only accessor over a scenario graph definition.
@@ -184,23 +185,35 @@ class ScenarioDefinition
 
     /**
      * Compatibility fingerprint of a waiting block: everything the contact
-     * relies on while answering it (type, the option set, the AI task).
-     * After a republication a changed fingerprint means the stored step is
-     * incompatible with the new schema — a soft reset, not a silent
-     * continuation. Message text tweaks keep the fingerprint intact.
+     * relies on while answering it (type, the option set, the AI task and
+     * listing kind). After a republication a changed fingerprint means the
+     * stored step is incompatible with the new schema — a soft reset, not a
+     * silent continuation. Message text tweaks keep the fingerprint intact.
      *
      * @param  array<string, mixed>  $node
      */
     public function nodeFingerprint(array $node): string
     {
-        return md5(json_encode([
+        $payload = [
             'type' => $node['type'] ?? null,
             'task' => $node['task'] ?? null,
             'options' => array_map(
                 fn (array $option): array => ['id' => $option['id'] ?? null, 'title' => $option['title'] ?? null],
                 $this->options($node),
             ),
-        ]));
+        ];
+
+        // The rental kind is omitted, not written as 'rental': fingerprints
+        // stored by sessions before kinds existed (no kind key in the hash)
+        // must keep matching a node that now carries kind=rental — otherwise
+        // the first republication would softly reset every waiting dialog.
+        $kind = ListingKind::fromNode($node['kind'] ?? null);
+
+        if ($kind !== ListingKind::Rental) {
+            $payload['kind'] = $kind->value;
+        }
+
+        return md5(json_encode($payload));
     }
 
     /**

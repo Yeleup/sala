@@ -360,6 +360,20 @@ test('the AI block text stays out of the compatibility fingerprint', function ()
         ->toBe($definition->nodeFingerprint($node));
 });
 
+test('узел без вида и узел с видом rental дают один отпечаток — legacy-сессии не сбрасываются', function () {
+    $definition = new App\Services\Bot\ScenarioDefinition([]);
+    $node = ['id' => 'collect', 'type' => 'ai', 'task' => 'collect_listing'];
+
+    // Отпечаток rental-узла совпадает и с узлом без ключа kind, и байт в байт
+    // с дорелизным алгоритмом (type+task+options): отпечатки, сохранённые в
+    // сессиях прошлым релизом, переживают републикацию без мягкого сброса.
+    expect($definition->nodeFingerprint($node + ['kind' => 'rental']))
+        ->toBe($definition->nodeFingerprint($node))
+        ->toBe(md5(json_encode(['type' => 'ai', 'task' => 'collect_listing', 'options' => []])))
+        ->and($definition->nodeFingerprint($node + ['kind' => 'repair']))
+        ->not->toBe($definition->nodeFingerprint($node));
+});
+
 test('the my_listings block sends the personal portal link and ends the branch', function () {
     $scenario = BotScenario::factory()->published([
         'nodes' => [

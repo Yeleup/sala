@@ -6,6 +6,7 @@ use App\Ai\Agents\SearchQueryExtractionAgent;
 use App\Enums\AiOperationType;
 use App\Enums\AiOutcome;
 use App\Enums\BotReplyKey;
+use App\Enums\ListingKind;
 use App\Enums\UserIntent;
 use App\Models\BotSession;
 use App\Models\Listing;
@@ -107,15 +108,30 @@ class CustomerSearchAssistant
      */
     public function start(BotSession $session, array $node): AiOutcome
     {
-        $session->state = $this->defaultState();
+        $kind = ListingKind::fromNode($node['kind'] ?? null);
+
+        $session->state = ['kind' => $kind->value] + $this->defaultState();
         $session->save();
 
         $this->messenger->sendText(
             $session->contact,
-            trim((string) ($node['text'] ?? '')) ?: 'Опишите, что вам нужно и в каком городе или районе — например: «нужен кран 25 тонн, Шымкент».',
+            trim((string) ($node['text'] ?? '')) ?: $this->searchGreeting($kind),
         );
 
         return AiOutcome::InProgress;
+    }
+
+    /**
+     * The built-in greeting of the search block per kind — what goes out
+     * when the operator left the block's own text empty.
+     */
+    protected function searchGreeting(ListingKind $kind): string
+    {
+        return match ($kind) {
+            ListingKind::Rental => 'Опишите, что вам нужно и в каком городе или районе — например: «нужен кран 25 тонн, Шымкент».',
+            ListingKind::Repair => 'Опишите, что сломалось или какой ремонт нужен, и в каком городе.',
+            ListingKind::Driver => 'Опишите, какой водитель или машинист нужен и в каком городе.',
+        };
     }
 
     /**
@@ -247,6 +263,14 @@ class CustomerSearchAssistant
         // filter, so the search text must not duplicate it.
         $state['subject'] = filled($requirements['subject'] ?? null) ? (string) $requirements['subject'] : null;
 
+        // The travel requirement (repair/driver branches only) survives
+        // refinements like the picked place: a turn where the customer did
+        // not repeat it (null) must not erase what was already said, while
+        // an explicit change overrides.
+        if (($requirements['needs_travel'] ?? null) !== null) {
+            $state['needs_travel'] = (bool) $requirements['needs_travel'];
+        }
+
         // The KATO dictionary is the only source of truth for the place:
         // a named location either resolves to a node (the subtree filter,
         // tolerating close distortions of transcribed voice input) or
@@ -310,7 +334,7 @@ class CustomerSearchAssistant
         $state['location_candidates'] = [];
 
         $location ??= $this->locations->detectInQuery($query);
-        $matches = $this->matcher->match($query, $location);
+        $matches = $this->matcher->match($query, $location, $this->kind($state), $this->matchFilters($state));
 
         if ($matches->isEmpty()) {
             $state['attempts']++;
@@ -321,6 +345,7 @@ class CustomerSearchAssistant
                     $session,
                     'К сожалению, сейчас ничего подходящего не нашлось. Загляните в каталог — там все объявления, база пополняется каждый день.',
                     self::CATALOG_BUTTON_DEAD_END,
+                    kind: $this->kind($state),
                 );
 
                 return AiOutcome::Completed;
@@ -336,6 +361,7 @@ class CustomerSearchAssistant
             $this->sendDeadEnd(
                 $session,
                 sprintf('По запросу ничего не нашлось. Попробуйте описать иначе — вид техники и город, %s.', self::QUERY_EXAMPLE),
+                $this->kind($state),
             );
 
             return AiOutcome::InProgress;
@@ -380,6 +406,7 @@ class CustomerSearchAssistant
             self::CATALOG_BUTTON_RESULTS,
             $location !== null ? (($state['subject'] ?? null) ?: $query) : $query,
             $location,
+            $this->kind($state),
         );
 
         return AiOutcome::InProgress;
@@ -409,6 +436,7 @@ class CustomerSearchAssistant
             self::CATALOG_BUTTON_DEAD_END,
             (($state['subject'] ?? null) ?: $query),
             $parent,
+            $this->kind($state),
         );
 
         return AiOutcome::InProgress;
@@ -583,7 +611,7 @@ class CustomerSearchAssistant
             return $this->runSearch($session, $state, $query);
         }
 
-        $matches = $this->matcher->match($query, $location);
+        $matches = $this->matcher->match($query, $location, $this->kind($state), $this->matchFilters($state));
 
         if ($matches->isNotEmpty()) {
             return $this->offerMatches($session, $state, $query, $matches, $location);
@@ -599,6 +627,7 @@ class CustomerSearchAssistant
         $this->sendDeadEnd(
             $session,
             sprintf('Шире искать уже некуда — по всей стране ничего не нашлось. Попробуйте описать иначе, %s.', self::QUERY_EXAMPLE),
+            $this->kind($state),
         );
 
         return AiOutcome::InProgress;
@@ -612,7 +641,7 @@ class CustomerSearchAssistant
      * empty выдача is exactly what browsing the full catalog fixes. No
      * prefill: this query just proved empty against the same matcher.
      */
-    protected function sendDeadEnd(BotSession $session, string $text): void
+    protected function sendDeadEnd(BotSession $session, string $text, ?ListingKind $kind = null): void
     {
         $this->messenger->sendButtons(
             $session->contact,
@@ -624,6 +653,7 @@ class CustomerSearchAssistant
             $session,
             'А ещё можно посмотреть весь каталог — вдруг подойдёт что-то из него.',
             self::CATALOG_BUTTON_DEAD_END,
+            kind: $kind,
         );
     }
 
@@ -636,14 +666,14 @@ class CustomerSearchAssistant
      * and swallowed: the CTA is an enhancement and must not break the
      * already-delivered outcome.
      */
-    protected function sendCatalogCta(BotSession $session, string $text, string $button, ?string $query = null, ?Location $location = null): void
+    protected function sendCatalogCta(BotSession $session, string $text, string $button, ?string $query = null, ?Location $location = null, ?ListingKind $kind = null): void
     {
         try {
             $this->messenger->sendCtaUrl(
                 $session->contact,
                 $text,
                 $button,
-                $this->links->catalogUrl($session->contact, $query, $location),
+                $this->links->catalogUrl($session->contact, $query, $location, $kind),
             );
         } catch (Throwable $e) {
             Log::warning('Failed to send the catalog CTA.', [
@@ -722,6 +752,10 @@ class CustomerSearchAssistant
     }
 
     /**
+     * The list row speaks each kind's language: a rental shows the place
+     * and the price, a master — his services and place, a driver — his
+     * machines, the years of experience and place.
+     *
      * @return array{id: string, title: string, description?: string}
      */
     protected function listRow(Listing $listing): array
@@ -731,7 +765,15 @@ class CustomerSearchAssistant
             'title' => $this->rowTitle($listing),
         ];
 
-        $description = implode(' · ', array_filter([$listing->locationLine(), $listing->price]));
+        $description = match ($listing->kind) {
+            ListingKind::Rental => implode(' · ', array_filter([$listing->locationLine(), $listing->price])),
+            ListingKind::Repair => implode(' · ', array_filter([$listing->services, $listing->locationLine()])),
+            ListingKind::Driver => implode(' · ', array_filter([
+                $listing->machineCategories->pluck('name')->implode(', ') ?: null,
+                $listing->experience_years !== null ? 'стаж '.$listing->experience_years.' л.' : null,
+                $listing->locationLine(),
+            ])),
+        };
 
         if ($description !== '') {
             $row['description'] = WhatsappText::clamp($description, self::ROW_DESCRIPTION_LIMIT);
@@ -745,9 +787,14 @@ class CustomerSearchAssistant
         return WhatsappText::clamp($this->fullRowTitle($listing), self::ROW_TITLE_LIMIT);
     }
 
+    /**
+     * A master and a driver go by their name — that is who the customer
+     * picks; a rental keeps the listing's display name.
+     */
     protected function fullRowTitle(Listing $listing): string
     {
-        return $listing->displayName() ?: 'Объявление №'.$listing->id;
+        return ($listing->kind !== ListingKind::Rental && filled($listing->person_name) ? $listing->person_name : null)
+            ?? $listing->displayName() ?: 'Объявление №'.$listing->id;
     }
 
     /**
@@ -773,7 +820,7 @@ class CustomerSearchAssistant
         try {
             return $this->audit->run(
                 AiOperationType::SearchQueryExtraction,
-                fn (): array => (new SearchQueryExtractionAgent)
+                fn (): array => (new SearchQueryExtractionAgent($this->kind($state)))
                     ->prompt($prompt)
                     ->toArray(),
                 [
@@ -899,6 +946,7 @@ class CustomerSearchAssistant
     protected function defaultState(): array
     {
         return [
+            'kind' => ListingKind::Rental->value,
             'phase' => 'searching',
             'attempts' => 0,
             'clarifications' => 0,
@@ -906,6 +954,7 @@ class CustomerSearchAssistant
             'transcript' => [],
             'query' => null,
             'subject' => null,
+            'needs_travel' => null,
             'offered' => [],
             'location_candidates' => [],
             'location_id' => null,
@@ -913,6 +962,33 @@ class CustomerSearchAssistant
             'unresolved_location' => null,
             'last_question' => null,
         ];
+    }
+
+    /**
+     * The listing kind of this search dialog. Stored in the state at
+     * start(); a session started before kinds existed falls back to rental.
+     *
+     * @param  array<string, mixed>  $state
+     */
+    protected function kind(array $state): ListingKind
+    {
+        return ListingKind::fromNode($state['kind'] ?? null);
+    }
+
+    /**
+     * The structural filters for the matcher — only the pieces the
+     * customer actually stated (null means «не сказал»); the matcher
+     * applies them as hard conditions, not ranking signals.
+     *
+     * @param  array<string, mixed>  $state
+     * @return array{needs_travel?: bool}
+     */
+    protected function matchFilters(array $state): array
+    {
+        return array_filter(
+            ['needs_travel' => $state['needs_travel'] ?? null],
+            fn (?bool $value): bool => $value !== null,
+        );
     }
 
     /**

@@ -28,37 +28,118 @@
 
                 <div class="field">
                     <label for="title">Название</label>
-                    <input id="title" name="title" maxlength="255" value="{{ old('title', $listing->title) }}" placeholder="Например: Аренда автокрана 25 т">
+                    <input id="title" name="title" maxlength="255" value="{{ old('title', $listing->title) }}"
+                           placeholder="{{ match ($listing->kind) {
+                               \App\Enums\ListingKind::Rental => 'Например: Аренда автокрана 25 т',
+                               \App\Enums\ListingKind::Repair => 'Например: Ремонт спецтехники',
+                               \App\Enums\ListingKind::Driver => 'Например: Машинист экскаватора',
+                           } }}">
                     @error('title') <p class="error">{{ $message }}</p> @enderror
                 </div>
 
-                <div class="field">
-                    <label for="category_id">Категория</label>
-                    <select id="category_id" name="category_id">
-                        <option value="" @selected(old('category_id', $listing->category_id) === null)>— выберите категорию —</option>
-                        @foreach ($categories as $category)
-                            <option value="{{ $category->id }}" @selected((int) old('category_id', $listing->category_id) === $category->id)>{{ $category->name }}</option>
-                        @endforeach
-                    </select>
-                    @error('category_id') <p class="error">{{ $message }}</p> @enderror
-                </div>
-
-                @if ($brands->isNotEmpty())
+                @if ($listing->kind === \App\Enums\ListingKind::Rental)
                     <div class="field">
-                        <label for="brand_id">Марка (необязательно)</label>
-                        <select id="brand_id" name="brand_id">
-                            <option value="" @selected(old('brand_id', $listing->brand_id) === null)>— без марки —</option>
-                            @foreach ($brands as $brand)
-                                <option value="{{ $brand->id }}" @selected((int) old('brand_id', $listing->brand_id) === $brand->id)>{{ $brand->name }}</option>
+                        <label for="category_id">Категория</label>
+                        <select id="category_id" name="category_id">
+                            <option value="" @selected(old('category_id', $listing->category_id) === null)>— выберите категорию —</option>
+                            @foreach ($categories as $category)
+                                <option value="{{ $category->id }}" @selected((int) old('category_id', $listing->category_id) === $category->id)>{{ $category->name }}</option>
                             @endforeach
                         </select>
-                        <p class="muted" style="margin: 0.25rem 0 0;">Производитель техники.</p>
-                        @error('brand_id') <p class="error">{{ $message }}</p> @enderror
+                        @error('category_id') <p class="error">{{ $message }}</p> @enderror
+                    </div>
+
+                    @if ($brands->isNotEmpty())
+                        <div class="field">
+                            <label for="brand_id">Марка (необязательно)</label>
+                            <select id="brand_id" name="brand_id">
+                                <option value="" @selected(old('brand_id', $listing->brand_id) === null)>— без марки —</option>
+                                @foreach ($brands as $brand)
+                                    <option value="{{ $brand->id }}" @selected((int) old('brand_id', $listing->brand_id) === $brand->id)>{{ $brand->name }}</option>
+                                @endforeach
+                            </select>
+                            <p class="muted" style="margin: 0.25rem 0 0;">Производитель техники.</p>
+                            @error('brand_id') <p class="error">{{ $message }}</p> @enderror
+                        </div>
+                    @endif
+                @elseif ($listing->kind === \App\Enums\ListingKind::Repair)
+                    <div class="field">
+                        <label for="person_name">Имя или название сервиса</label>
+                        <input id="person_name" name="person_name" maxlength="255" value="{{ old('person_name', $listing->person_name) }}" placeholder="Например: Сервис «Мотор» или Асхат">
+                        @error('person_name') <p class="error">{{ $message }}</p> @enderror
+                    </div>
+
+                    <div class="field">
+                        <label for="services">Услуги</label>
+                        <textarea id="services" name="services" rows="3" placeholder="Например: диагностика, ремонт двигателя, гидравлика, электрика">{{ old('services', $listing->services) }}</textarea>
+                        @error('services') <p class="error">{{ $message }}</p> @enderror
+                    </div>
+
+                    <div class="field">
+                        <label for="repair_place">Где выполняете ремонт</label>
+                        <select id="repair_place" name="repair_place">
+                            <option value="" @selected(old('repair_place', $listing->repair_place?->value) === null)>— выберите вариант —</option>
+                            @foreach ($repairPlaces as $place)
+                                <option value="{{ $place->value }}" @selected(old('repair_place', $listing->repair_place?->value) === $place->value)>{{ $place->label() }}</option>
+                            @endforeach
+                        </select>
+                        @error('repair_place') <p class="error">{{ $message }}</p> @enderror
+                    </div>
+                @else
+                    <div class="field">
+                        <label for="person_name">Имя</label>
+                        <input id="person_name" name="person_name" maxlength="255" value="{{ old('person_name', $listing->person_name) }}" placeholder="Например: Серик">
+                        @error('person_name') <p class="error">{{ $message }}</p> @enderror
+                    </div>
+
+                    <div class="field">
+                        <label>Техника, на которой работаете</label>
+                        {{-- Чекбоксы вместо select multiple: на телефоне мультиселект неудобен. --}}
+                        <div style="max-height: 13rem; overflow-y: auto; border: 1px solid #cbd5e1; border-radius: 0.625rem; background: #fff; padding: 0.25rem 0.75rem;">
+                            @foreach ($categories as $category)
+                                <label style="display: flex; align-items: center; gap: 0.5rem; margin: 0; padding: 0.4375rem 0; font-size: 0.9375rem; font-weight: 400; letter-spacing: normal; text-transform: none; color: #1e293b; cursor: pointer;">
+                                    {{-- (array): old() отдаёт скаляр, если machine_categories подделали не-массивом. --}}
+                                    <input type="checkbox" name="machine_categories[]" value="{{ $category->id }}" style="width: auto; margin: 0; accent-color: #2563eb;"
+                                           @checked(in_array($category->id, array_map('intval', (array) old('machine_categories', $machineCategoryIds)), true))>
+                                    {{ $category->name }}
+                                </label>
+                            @endforeach
+                        </div>
+                        @error('machine_categories') <p class="error">{{ $message }}</p> @enderror
+                        @error('machine_categories.*') <p class="error">{{ $message }}</p> @enderror
+                    </div>
+
+                    <div class="field">
+                        <label for="licence_type">Тип удостоверения</label>
+                        <select id="licence_type" name="licence_type">
+                            <option value="" @selected(old('licence_type', $listing->licence_type?->value) === null)>— выберите тип —</option>
+                            @foreach ($licenceTypes as $type)
+                                <option value="{{ $type->value }}" @selected(old('licence_type', $listing->licence_type?->value) === $type->value)>{{ $type->label() }}</option>
+                            @endforeach
+                        </select>
+                        @error('licence_type') <p class="error">{{ $message }}</p> @enderror
+                    </div>
+
+                    <div class="field">
+                        <label for="experience_years">Стаж, лет</label>
+                        <input id="experience_years" name="experience_years" type="number" min="0" max="80" inputmode="numeric" value="{{ old('experience_years', $listing->experience_years) }}" placeholder="Например: 8">
+                        @error('experience_years') <p class="error">{{ $message }}</p> @enderror
+                    </div>
+
+                    <div class="field">
+                        {{-- Скрытый ноль: снятый чекбокс — это ответ «не готов», а не пропуск поля. --}}
+                        <input type="hidden" name="travels_to_other_cities" value="0">
+                        <label style="display: flex; align-items: center; gap: 0.5rem; margin: 0; font-size: 0.9375rem; font-weight: 400; letter-spacing: normal; text-transform: none; color: #1e293b; cursor: pointer;">
+                            <input type="checkbox" name="travels_to_other_cities" value="1" style="width: auto; margin: 0; accent-color: #2563eb;"
+                                   @checked((bool) old('travels_to_other_cities', $listing->travels_to_other_cities))>
+                            Готов выезжать в другие города
+                        </label>
+                        @error('travels_to_other_cities') <p class="error">{{ $message }}</p> @enderror
                     </div>
                 @endif
 
                 <div class="field">
-                    <label for="description">Описание</label>
+                    <label for="description">{{ $listing->kind === \App\Enums\ListingKind::Rental ? 'Описание' : 'Описание (необязательно)' }}</label>
                     <textarea id="description" name="description" rows="4" placeholder="Что предлагаете, характеристики, условия">{{ old('description', $listing->description) }}</textarea>
                     @error('description') <p class="error">{{ $message }}</p> @enderror
                 </div>
@@ -77,11 +158,23 @@
                     @error('location_detail') <p class="error">{{ $message }}</p> @enderror
                 </div>
 
-                <div class="field">
-                    <label for="price">Цена / тариф</label>
-                    <input id="price" name="price" value="{{ old('price', $listing->price) }}" placeholder="Например: 10000 тг/ч">
-                    @error('price') <p class="error">{{ $message }}</p> @enderror
-                </div>
+                @if ($listing->kind !== \App\Enums\ListingKind::Driver)
+                    <div class="field">
+                        <label for="price">{{ $listing->kind === \App\Enums\ListingKind::Repair ? 'Цена за диагностику (необязательно)' : 'Цена / тариф' }}</label>
+                        <input id="price" name="price" value="{{ old('price', $listing->price) }}" placeholder="Например: 10000 тг/ч">
+                        @error('price') <p class="error">{{ $message }}</p> @enderror
+                    </div>
+                @else
+                    <div class="field">
+                        <label for="document">Фото удостоверения</label>
+                        @if ($hasDocument)
+                            <p class="muted" style="margin: 0 0 0.375rem;">Документ загружен. Загрузите новый файл, чтобы заменить (проверка будет выполнена заново).</p>
+                        @endif
+                        <input type="file" id="document" name="document" accept="image/jpeg,image/png,image/webp">
+                        <p class="muted" style="margin: 0.25rem 0 0;">Снимок увидит только оператор — в объявлении он не показывается.</p>
+                        @error('document') <p class="error">{{ $message }}</p> @enderror
+                    </div>
+                @endif
 
                 @if ($listing->photos->isNotEmpty())
                     <div class="field">
@@ -290,16 +383,43 @@
             <dl style="margin: 0;">
                 <dt>Название</dt>
                 <dd>{{ $listing->title ?: '—' }}</dd>
-                <dt>Категория</dt>
-                <dd>{{ $listing->category?->name ?: '—' }}</dd>
-                <dt>Марка</dt>
-                <dd>{{ $listing->brand?->name ?: '—' }}</dd>
+                @if ($listing->kind === \App\Enums\ListingKind::Rental)
+                    <dt>Категория</dt>
+                    <dd>{{ $listing->category?->name ?: '—' }}</dd>
+                    <dt>Марка</dt>
+                    <dd>{{ $listing->brand?->name ?: '—' }}</dd>
+                @elseif ($listing->kind === \App\Enums\ListingKind::Repair)
+                    <dt>Имя или название сервиса</dt>
+                    <dd>{{ $listing->person_name ?: '—' }}</dd>
+                    <dt>Услуги</dt>
+                    <dd>{{ $listing->services ?: '—' }}</dd>
+                    <dt>Где выполняете ремонт</dt>
+                    <dd>{{ $listing->repair_place?->label() ?: '—' }}</dd>
+                @else
+                    <dt>Имя</dt>
+                    <dd>{{ $listing->person_name ?: '—' }}</dd>
+                    <dt>Техника, на которой работаете</dt>
+                    <dd>{{ $listing->machineCategories->pluck('name')->join(', ') ?: '—' }}</dd>
+                    <dt>Тип удостоверения</dt>
+                    <dd>{{ $listing->licence_type?->label() ?: '—' }}</dd>
+                    <dt>Стаж</dt>
+                    <dd>{{ $listing->experience_years !== null ? $listing->experience_years.' лет' : '—' }}</dd>
+                    <dt>Готовность выезжать</dt>
+                    <dd>{{ $listing->travels_to_other_cities === null ? '—' : ($listing->travels_to_other_cities ? 'Готов выезжать в другие города' : 'Работает только в своём городе') }}</dd>
+                    <dt>Фото удостоверения</dt>
+                    <dd>{{ $hasDocument ? 'Загружено — снимок видит только оператор' : '—' }}</dd>
+                @endif
                 <dt>Описание</dt>
                 <dd>{{ $listing->description ?: '—' }}</dd>
                 <dt>Локация</dt>
                 <dd>{{ $listing->locationLine() ?: '—' }}</dd>
-                <dt>Цена / тариф</dt>
-                <dd>{{ $listing->price ?: '—' }}</dd>
+                @if ($listing->kind === \App\Enums\ListingKind::Rental)
+                    <dt>Цена / тариф</dt>
+                    <dd>{{ $listing->price ?: '—' }}</dd>
+                @elseif ($listing->kind === \App\Enums\ListingKind::Repair)
+                    <dt>Цена за диагностику</dt>
+                    <dd>{{ $listing->price ?: '—' }}</dd>
+                @endif
             </dl>
 
             @if ($archiveUrl)

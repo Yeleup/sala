@@ -84,6 +84,11 @@ class InstallDefaultBotScenario extends Command
     }
 
     /**
+     * Главный диалог: меню-список из шести веток — по паре
+     * «разместить/найти» на каждый вид объявления (аренда, ремонт,
+     * водитель) — плюс «Мои объявления» седьмой строкой. Текст AI-блокам
+     * не задаётся: приветствие подставляется из выбранного вида.
+     *
      * @return array{nodes: list<array<string, mixed>>, edges: list<array<string, mixed>>}
      */
     protected function mainDialogDefinition(): array
@@ -92,21 +97,30 @@ class InstallDefaultBotScenario extends Command
             'nodes' => [
                 ['id' => 'start', 'type' => 'start', 'x' => 40, 'y' => 240],
                 ['id' => 'greeting', 'type' => 'text', 'x' => 260, 'y' => 240,
-                    'text' => 'Здравствуйте! Это сервис аренды спецтехники: разместите своё предложение или найдите технику.'],
-                ['id' => 'main_menu', 'type' => 'buttons', 'x' => 520, 'y' => 240,
-                    'text' => 'Что вы хотите сделать?',
+                    'text' => 'Здравствуйте! Это сервис спецтехники: аренда, ремонт, водители и машинисты. Разместите своё предложение или найдите исполнителя.'],
+                ['id' => 'main_menu', 'type' => 'list', 'x' => 520, 'y' => 240,
+                    'text' => 'Выберите, что вам нужно.',
+                    'button' => 'Выбрать',
                     'options' => [
-                        ['id' => 'supplier', 'title' => 'Я поставщик'],
-                        ['id' => 'customer', 'title' => 'Я заказчик'],
+                        ['id' => 'rent_out', 'title' => 'Сдаю спецтехнику'],
+                        ['id' => 'rent_seek', 'title' => 'Ищу спецтехнику'],
+                        ['id' => 'master', 'title' => 'Я мастер'],
+                        ['id' => 'master_seek', 'title' => 'Ищу мастера'],
+                        ['id' => 'driver', 'title' => 'Я водитель'],
+                        ['id' => 'driver_seek', 'title' => 'Ищу водителя'],
                         ['id' => 'my', 'title' => 'Мои объявления'],
                     ]],
-                ['id' => 'collect_listing', 'type' => 'ai', 'task' => 'collect_listing', 'x' => 800, 'y' => 80],
-                ['id' => 'after_collect', 'type' => 'text', 'x' => 1080, 'y' => 80,
-                    'text' => 'Чтобы добавить ещё одно объявление или найти технику — просто напишите нам снова.'],
-                ['id' => 'customer_search', 'type' => 'ai', 'task' => 'customer_search', 'x' => 800, 'y' => 300],
-                ['id' => 'after_search', 'type' => 'text', 'x' => 1080, 'y' => 300,
+                ['id' => 'collect_rental', 'type' => 'ai', 'task' => 'collect_listing', 'kind' => 'rental', 'x' => 800, 'y' => 40],
+                ['id' => 'collect_repair', 'type' => 'ai', 'task' => 'collect_listing', 'kind' => 'repair', 'x' => 800, 'y' => 160],
+                ['id' => 'collect_driver', 'type' => 'ai', 'task' => 'collect_listing', 'kind' => 'driver', 'x' => 800, 'y' => 280],
+                ['id' => 'search_rental', 'type' => 'ai', 'task' => 'customer_search', 'kind' => 'rental', 'x' => 800, 'y' => 400],
+                ['id' => 'search_repair', 'type' => 'ai', 'task' => 'customer_search', 'kind' => 'repair', 'x' => 800, 'y' => 520],
+                ['id' => 'search_driver', 'type' => 'ai', 'task' => 'customer_search', 'kind' => 'driver', 'x' => 800, 'y' => 640],
+                ['id' => 'after_collect', 'type' => 'text', 'x' => 1080, 'y' => 160,
+                    'text' => 'Чтобы добавить ещё одно объявление или найти исполнителя — просто напишите нам снова.'],
+                ['id' => 'after_search', 'type' => 'text', 'x' => 1080, 'y' => 520,
                     'text' => 'Спасибо, что воспользовались сервисом! Напишите нам снова, когда что-то понадобится.'],
-                ['id' => 'my_listings', 'type' => 'my_listings', 'x' => 800, 'y' => 430,
+                ['id' => 'my_listings', 'type' => 'my_listings', 'x' => 800, 'y' => 760,
                     'text' => 'Откройте кабинет — там ваши объявления, статусы, причины отклонения и снятие с публикации.'],
             ],
             'edges' => [
@@ -114,11 +128,19 @@ class InstallDefaultBotScenario extends Command
                 // Повторное обращение: без приветствия — сразу меню действий.
                 ['from' => 'start', 'output' => 'returning', 'to' => 'main_menu'],
                 ['from' => 'greeting', 'output' => 'continue', 'to' => 'main_menu'],
-                ['from' => 'main_menu', 'output' => 'option:supplier', 'to' => 'collect_listing'],
-                ['from' => 'main_menu', 'output' => 'option:customer', 'to' => 'customer_search'],
+                ['from' => 'main_menu', 'output' => 'option:rent_out', 'to' => 'collect_rental'],
+                ['from' => 'main_menu', 'output' => 'option:rent_seek', 'to' => 'search_rental'],
+                ['from' => 'main_menu', 'output' => 'option:master', 'to' => 'collect_repair'],
+                ['from' => 'main_menu', 'output' => 'option:master_seek', 'to' => 'search_repair'],
+                ['from' => 'main_menu', 'output' => 'option:driver', 'to' => 'collect_driver'],
+                ['from' => 'main_menu', 'output' => 'option:driver_seek', 'to' => 'search_driver'],
                 ['from' => 'main_menu', 'output' => 'option:my', 'to' => 'my_listings'],
-                ['from' => 'collect_listing', 'output' => 'continue', 'to' => 'after_collect'],
-                ['from' => 'customer_search', 'output' => 'continue', 'to' => 'after_search'],
+                ['from' => 'collect_rental', 'output' => 'continue', 'to' => 'after_collect'],
+                ['from' => 'collect_repair', 'output' => 'continue', 'to' => 'after_collect'],
+                ['from' => 'collect_driver', 'output' => 'continue', 'to' => 'after_collect'],
+                ['from' => 'search_rental', 'output' => 'continue', 'to' => 'after_search'],
+                ['from' => 'search_repair', 'output' => 'continue', 'to' => 'after_search'],
+                ['from' => 'search_driver', 'output' => 'continue', 'to' => 'after_search'],
             ],
         ];
     }

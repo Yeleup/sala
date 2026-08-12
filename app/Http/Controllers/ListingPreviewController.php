@@ -20,7 +20,7 @@ class ListingPreviewController extends Controller
 {
     public function __invoke(Listing $listing): View
     {
-        $listing->load(['supplier', 'category', 'brand', 'location', 'photos']);
+        $listing->load(['supplier', 'category', 'brand', 'location', 'photos', 'machineCategories']);
 
         $note = 'Предпросмотр: так объявление видит заказчик. Кнопки «Выбрать» здесь нет — заявку от лица заказчика оператор не оформляет.';
 

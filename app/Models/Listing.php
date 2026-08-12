@@ -2,9 +2,12 @@
 
 namespace App\Models;
 
+use App\Enums\LicenceType;
+use App\Enums\ListingKind;
 use App\Enums\ListingMediaType;
 use App\Enums\ListingOrigin;
 use App\Enums\ListingStatus;
+use App\Enums\RepairPlace;
 use App\Jobs\GenerateListingEmbedding;
 use Database\Factories\ListingFactory;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
@@ -13,6 +16,7 @@ use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\HasOne;
 use Illuminate\Support\Facades\Storage;
@@ -24,7 +28,7 @@ use LogicException;
  * every business field may stay empty until the supplier completes it via
  * the web interface.
  */
-#[Fillable(['contact_id', 'origin', 'created_by_user_id', 'title', 'category_id', 'brand_id', 'description', 'location_id', 'location_detail', 'price', 'status', 'rejection_reason', 'moderated_by_user_id', 'moderated_at', 'expires_at', 'renewal_requested_at'])]
+#[Fillable(['contact_id', 'origin', 'created_by_user_id', 'kind', 'title', 'category_id', 'brand_id', 'description', 'location_id', 'location_detail', 'price', 'person_name', 'services', 'experience_years', 'repair_place', 'travels_to_other_cities', 'licence_type', 'document_verified_at', 'document_verified_by', 'status', 'rejection_reason', 'moderated_by_user_id', 'moderated_at', 'expires_at', 'renewal_requested_at'])]
 class Listing extends Model
 {
     /** @use HasFactory<ListingFactory> */
@@ -41,32 +45,19 @@ class Listing extends Model
      */
     public const int MAX_PHOTOS = 10;
 
-    /**
-     * The business fields a listing must carry to go live, mapped to the
-     * label the operator sees in the «чего не хватает» hint. This is the
-     * same set the supplier web form demands before submitting (see
-     * UpdateSupplierListingRequest), so a listing published straight from
-     * the admin is never thinner than one its supplier completed himself.
-     *
-     * @var array<string, string>
-     */
-    public const array PUBLICATION_FIELDS = [
-        'title' => 'название',
-        'category_id' => 'категория',
-        'description' => 'описание',
-        'location_id' => 'локация',
-        'price' => 'цена',
-    ];
-
     protected $attributes = [
         'status' => ListingStatus::Draft->value,
+        'kind' => ListingKind::Rental->value,
     ];
 
     /**
      * The searchable text fields whose change makes the semantic search
-     * vector stale (see ListingEmbeddings::sourceText()).
+     * vector stale (see ListingEmbeddings::sourceText()). The driver's
+     * machine categories live on a pivot and fire no attribute event —
+     * the places that sync the pivot of a published listing dispatch
+     * GenerateListingEmbedding themselves.
      */
-    private const array EMBEDDING_SOURCE_FIELDS = ['status', 'title', 'category_id', 'brand_id', 'description', 'location_id', 'location_detail'];
+    private const array EMBEDDING_SOURCE_FIELDS = ['status', 'kind', 'title', 'category_id', 'brand_id', 'description', 'location_id', 'location_detail', 'person_name', 'services'];
 
     /**
      * Media rows go away with the listing via the DB cascade, but the
@@ -132,6 +123,18 @@ class Listing extends Model
         return $this->belongsTo(Brand::class);
     }
 
+    /** @return BelongsToMany<Category, $this> Machines a driver operates. */
+    public function machineCategories(): BelongsToMany
+    {
+        return $this->belongsToMany(Category::class);
+    }
+
+    /** @return BelongsTo<User, $this> The operator who verified the driver's document. */
+    public function documentVerifier(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'document_verified_by');
+    }
+
     /** @return BelongsTo<Location, $this> */
     public function location(): BelongsTo
     {
@@ -175,6 +178,12 @@ class Listing extends Model
     public function audioMessages(): HasMany
     {
         return $this->media()->where('type', ListingMediaType::Audio);
+    }
+
+    /** @return HasMany<ListingMedia, $this> The non-public licence document. */
+    public function documents(): HasMany
+    {
+        return $this->media()->where('type', ListingMediaType::Document);
     }
 
     /** @return HasMany<CustomerRequest, $this> */
@@ -222,20 +231,36 @@ class Listing extends Model
     }
 
     /**
+     * The business fields this listing must carry to go live, mapped to
+     * the label the operator sees in the «чего не хватает» hint. The set
+     * comes from the listing's kind: a driver's questionnaire has nothing
+     * in common with a rental's beyond the title and the location.
+     *
+     * @return array<string, string>
+     */
+    public function publicationFields(): array
+    {
+        return $this->kind->publicationFields();
+    }
+
+    /**
      * The labels of the publication fields left blank in the given set of
      * values, in the order the operator asks about them on a call. Takes
      * raw values rather than a record so the admin form can hint at what
      * is still missing while the operator is typing, by the same rule the
-     * publication itself enforces.
+     * publication itself enforces. A boolean is never blank: `false` in
+     * «готов выезжать» is an answer, not an omission.
      *
      * @param  array<string, mixed>  $values
      * @return list<string>
      */
-    public static function missingPublicationFields(array $values): array
+    public static function missingPublicationFields(ListingKind $kind, array $values): array
     {
         return array_values(array_filter(
-            self::PUBLICATION_FIELDS,
-            fn (string $label, string $field): bool => blank($values[$field] ?? null),
+            $kind->publicationFields(),
+            fn (string $label, string $field): bool => is_bool($values[$field] ?? null)
+                ? false
+                : blank($values[$field] ?? null),
             ARRAY_FILTER_USE_BOTH,
         ));
     }
@@ -245,7 +270,13 @@ class Listing extends Model
      */
     public function missingForPublication(): array
     {
-        return self::missingPublicationFields($this->only(array_keys(self::PUBLICATION_FIELDS)));
+        $missing = self::missingPublicationFields($this->kind, $this->only(array_keys($this->publicationFields())));
+
+        if ($this->kind->requiresDocument() && $this->documents()->doesntExist()) {
+            $missing[] = 'фото документа';
+        }
+
+        return $missing;
     }
 
     public function isReadyForPublication(): bool
@@ -379,16 +410,21 @@ class Listing extends Model
     }
 
     /**
-     * @return array{status: class-string<ListingStatus>, origin: class-string<ListingOrigin>, expires_at: 'datetime', renewal_requested_at: 'datetime', moderated_at: 'datetime'}
+     * @return array{status: class-string<ListingStatus>, origin: class-string<ListingOrigin>, kind: class-string<ListingKind>, repair_place: class-string<RepairPlace>, licence_type: class-string<LicenceType>, travels_to_other_cities: 'boolean', expires_at: 'datetime', renewal_requested_at: 'datetime', moderated_at: 'datetime', document_verified_at: 'datetime'}
      */
     protected function casts(): array
     {
         return [
             'status' => ListingStatus::class,
             'origin' => ListingOrigin::class,
+            'kind' => ListingKind::class,
+            'repair_place' => RepairPlace::class,
+            'licence_type' => LicenceType::class,
+            'travels_to_other_cities' => 'boolean',
             'expires_at' => 'datetime',
             'renewal_requested_at' => 'datetime',
             'moderated_at' => 'datetime',
+            'document_verified_at' => 'datetime',
         ];
     }
 }

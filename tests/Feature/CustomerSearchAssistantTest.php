@@ -6,6 +6,7 @@ use App\Enums\AiOperationType;
 use App\Enums\AiOutcome;
 use App\Enums\CustomerRequestStatus;
 use App\Enums\ListingMediaType;
+use App\Enums\RepairPlace;
 use App\Models\AiOperation;
 use App\Models\BotSession;
 use App\Models\Contact;
@@ -18,6 +19,7 @@ use App\Services\Bot\InboundMessage;
 use App\Services\DereuMediaDownloader;
 use App\Services\DereuMessenger;
 use App\Services\WhatsappTemplateLibrary;
+use App\Support\WhatsappText;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Laravel\Ai\Embeddings;
 use Laravel\Ai\Prompts\TranscriptionPrompt;
@@ -331,7 +333,7 @@ test('picking a row creates a pending request and notifies the supplier in the o
     $listing = Listing::factory()->published()->for($supplier, 'supplier')->create(['category_id' => categoryNamed('Автокран')->id]);
 
     $messenger = fakeSearchMessenger();
-    $messenger->shouldReceive('sendButtons')->once()->withArgs(function (Contact $contact, string $text, array $buttons) use ($supplier, $listing): bool {
+    $messenger->shouldReceive('sendButtons')->once()->withArgs(function (Contact $contact, string $text, array $buttons) use ($supplier): bool {
         return $contact->is($supplier)
             && str_contains($text, 'Автокран')
             && str_contains($text, 'нужен кран')
@@ -508,7 +510,7 @@ test('typing the truncated title of a listing with a long category name still eq
 
     $session = searchSession(['phase' => 'choosing', 'query' => 'экскаватор', 'offered' => [$listing->id]]);
     $outcome = app(CustomerSearchAssistant::class)
-        ->resume($session, customerAiNode(), new InboundMessage(text: App\Support\WhatsappText::clamp($longName, 24)));
+        ->resume($session, customerAiNode(), new InboundMessage(text: WhatsappText::clamp($longName, 24)));
 
     expect($outcome)->toBe(AiOutcome::Completed)
         ->and(CustomerRequest::count())->toBe(1);
@@ -1554,4 +1556,132 @@ test('a service question while a results list is open sends a hint instead of re
     expect($outcome)->toBe(AiOutcome::InProgress)
         ->and($session->fresh()->state)
         ->toMatchArray(['phase' => 'choosing', 'clarifications' => 1, 'attempts' => 1]);
+});
+
+test('вход в ветку поиска водителя пишет вид в state и здоровается по-своему', function () {
+    $messenger = fakeSearchMessenger();
+    $messenger->shouldReceive('sendText')->once()->withArgs(
+        fn (Contact $contact, string $text): bool => str_contains($text, 'водитель или машинист'),
+    );
+    $session = BotSession::factory()->waitingAt('search_driver')->create(['state' => null]);
+
+    $outcome = app(CustomerSearchAssistant::class)->start($session, customerAiNode() + ['kind' => 'driver']);
+
+    expect($outcome)->toBe(AiOutcome::InProgress)
+        ->and($session->refresh()->state['kind'])->toBe('driver');
+});
+
+test('ветка «ищу водителя» ищет только водителей и передаёт вид в каталожной ссылке', function () {
+    SearchQueryExtractionAgent::fake([fullSearchIntake([
+        'subject' => 'машинист экскаватора', 'location' => null, 'location_any' => true,
+    ])]);
+    Listing::factory()->published()->create([
+        'title' => 'Аренда экскаватора', 'category_id' => categoryNamed('Экскаватор')->id,
+        'description' => 'Гусеничный экскаватор в аренду.', 'price' => '10000 тг/ч',
+    ]);
+    $driver = Listing::factory()->driver()->published()->create(['title' => 'Машинист экскаватора']);
+
+    $messenger = fakeSearchMessenger();
+    $messenger->shouldReceive('sendList')->once()->withArgs(
+        fn (Contact $contact, string $text, string $button, array $rows): bool => count($rows) === 1
+            && $rows[0]['id'] === "listing:{$driver->id}",
+    );
+    $messenger->shouldReceive('sendCtaUrl')->once()->withArgs(
+        fn (Contact $contact, string $text, string $button, string $url): bool => str_contains($url, 'kind=driver'),
+    );
+
+    $outcome = app(CustomerSearchAssistant::class)->resume(
+        searchSession(['kind' => 'driver']),
+        customerAiNode() + ['kind' => 'driver'],
+        new InboundMessage(text: 'нужен машинист экскаватора'),
+    );
+
+    expect($outcome)->toBe(AiOutcome::InProgress);
+});
+
+test('строка выдачи мастера — имя, услуги и место вместо категории и цены', function () {
+    SearchQueryExtractionAgent::fake([fullSearchIntake([
+        'subject' => 'ремонт гидравлики', 'location' => null, 'location_any' => true,
+    ])]);
+    Listing::factory()->repair()->published()->create([
+        'person_name' => 'Сергей', 'services' => 'гидравлика, двигатели',
+        'title' => 'Ремонт гидравлики', 'description' => 'Ремонт гидравлики спецтехники.',
+        'location_id' => locationNamed('г.Шымкент')->id,
+    ]);
+
+    $messenger = fakeSearchMessenger();
+    $messenger->shouldReceive('sendList')->once()->withArgs(
+        fn (Contact $contact, string $text, string $button, array $rows): bool => count($rows) === 1
+            && $rows[0]['title'] === 'Сергей'
+            && $rows[0]['description'] === 'гидравлика, двигатели · г.Шымкент',
+    );
+    expectCatalogCta($messenger, 'kind=repair');
+
+    $outcome = app(CustomerSearchAssistant::class)->resume(
+        searchSession(['kind' => 'repair']),
+        customerAiNode() + ['kind' => 'repair'],
+        new InboundMessage(text: 'нужен ремонт гидравлики'),
+    );
+
+    expect($outcome)->toBe(AiOutcome::InProgress);
+});
+
+test('строка выдачи водителя — имя, техника, стаж и место', function () {
+    SearchQueryExtractionAgent::fake([fullSearchIntake([
+        'subject' => 'машинист экскаватора', 'location' => null, 'location_any' => true,
+    ])]);
+    $driver = Listing::factory()->driver()->published()->create([
+        'person_name' => 'Серик', 'title' => 'Машинист экскаватора',
+        'location_id' => locationNamed('г.Шымкент')->id,
+    ]);
+    $driver->machineCategories()->attach(categoryNamed('Экскаватор'));
+
+    $messenger = fakeSearchMessenger();
+    $messenger->shouldReceive('sendList')->once()->withArgs(
+        fn (Contact $contact, string $text, string $button, array $rows): bool => count($rows) === 1
+            && $rows[0]['title'] === 'Серик'
+            && $rows[0]['description'] === 'Экскаватор · стаж 8 л. · г.Шымкент',
+    );
+    expectCatalogCta($messenger, 'kind=driver');
+
+    $outcome = app(CustomerSearchAssistant::class)->resume(
+        searchSession(['kind' => 'driver']),
+        customerAiNode() + ['kind' => 'driver'],
+        new InboundMessage(text: 'нужен машинист экскаватора'),
+    );
+
+    expect($outcome)->toBe(AiOutcome::InProgress);
+});
+
+test('сказанный заказчиком выезд превращается в жёсткий фильтр', function () {
+    SearchQueryExtractionAgent::fake([fullSearchIntake([
+        'subject' => 'ремонт гидравлики', 'location' => null, 'location_any' => true, 'needs_travel' => true,
+    ])]);
+    Listing::factory()->repair()->published()->create([
+        'repair_place' => RepairPlace::OwnService, 'services' => 'гидравлика',
+        'title' => 'Ремонт гидравлики', 'description' => 'Ремонт гидравлики в своём сервисе.',
+    ]);
+    $travels = Listing::factory()->repair()->published()->create([
+        'repair_place' => RepairPlace::Travels, 'services' => 'гидравлика',
+        'title' => 'Ремонт гидравлики с выездом', 'description' => 'Ремонт гидравлики с выездом.',
+    ]);
+
+    $messenger = fakeSearchMessenger();
+    $messenger->shouldReceive('sendList')->once()->withArgs(
+        fn (Contact $contact, string $text, string $button, array $rows): bool => count($rows) === 1
+            && $rows[0]['id'] === "listing:{$travels->id}",
+    );
+    expectCatalogCta($messenger, 'kind=repair');
+
+    $session = searchSession(['kind' => 'repair']);
+    $outcome = app(CustomerSearchAssistant::class)->resume(
+        $session,
+        customerAiNode() + ['kind' => 'repair'],
+        new InboundMessage(text: 'нужен ремонт гидравлики, мастер пусть приедет ко мне'),
+    );
+
+    // Требование выезда переживает уточнения: оно хранится в state рядом
+    // с предметом поиска, а не выводится заново из каждого сообщения.
+    expect($outcome)->toBe(AiOutcome::InProgress)
+        ->and($session->refresh()->state['needs_travel'])->toBeTrue();
 });

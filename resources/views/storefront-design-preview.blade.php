@@ -14,6 +14,9 @@
     «Мои объявления» с карточкой имени и статусами, редактирование
     отклонённого объявления (причина, форма, фото), просмотр
     опубликованного (шапка со статусом, данные списком, снятие с публикации).
+    Форма редактирования ветвится по виду объявления: у мастера — имя,
+    услуги и место ремонта, у водителя — техника чекбоксами, удостоверение,
+    стаж, готовность выезжать и замена фото документа (поля цены нет).
 --}}
 <!DOCTYPE html>
 <html lang="ru">
@@ -70,6 +73,10 @@
         .title-link:hover { color: #1d4ed8; text-decoration: underline; }
         .listing-line { margin: 0.25rem 0; font-size: 0.875rem; overflow-wrap: anywhere; }
         .listing-price { color: #1d4ed8; font-weight: 700; font-size: 0.9375rem; }
+        /* Мастер и водитель — люди: имя открывает карточку строкой над названием. */
+        .listing-person { margin: 0 0 0.125rem; font-size: 0.8125rem; font-weight: 700; color: #475569; overflow-wrap: anywhere; }
+        /* Бейдж проверенного документа водителя — зелёная пилюля в теле карточки. */
+        .card-badge { display: inline-block; white-space: nowrap; background: #d1fae5; color: #065f46; font-size: 0.75rem; font-weight: 600; padding: 0.125rem 0.625rem; border-radius: 9999px; margin: 0.25rem 0; }
         .gallery { --gallery-peek: 1.5rem; margin: 0 0 0.875rem; }
         .gallery-frame { position: relative; overflow: hidden; background: #eef2f7; margin: calc(var(--card-pad) * -1) calc(var(--card-pad) * -1) 0; border-radius: calc(var(--card-radius) - 1px) calc(var(--card-radius) - 1px) 0 0; box-shadow: inset 0 -1px 0 #e2e8f0; }
         .gallery-stage { display: flex; gap: 0.375rem; overflow-x: auto; overflow-y: hidden; scroll-snap-type: x mandatory; overscroll-behavior-x: contain; }
@@ -176,7 +183,7 @@
 <body>
 
 <div class="preview-section">
-    <h2>Каталог заказчика — desktop (после «Выбрать»: баннер успеха, у карточки бейдж)</h2>
+    <h2>Каталог заказчика — desktop (после «Выбрать»: баннер успеха, у карточки бейдж; карточки аренды, мастера и водителя)</h2>
     <div class="viewport viewport-desktop">
         <main>
             <div class="flash">Заявка отправлена поставщику. Его ответ придёт вам в WhatsApp.</div>
@@ -252,6 +259,45 @@
                 </div>
             </div>
 
+            {{-- Карточка мастера по ремонту: имя над названием, услуги, где
+                 ремонтирует, цена подписана «Диагностика». --}}
+            <div class="card listing-card">
+                <a class="thumb-link" href="#"><div class="thumb-placeholder">фото</div></a>
+                <div class="listing-body">
+                    <p class="listing-person">Сервис «Мотор»</p>
+                    <h2 class="listing-title"><a class="title-link" href="#">Ремонт двигателей и гидравлики</a></h2>
+                    <p class="listing-line">Диагностика, ремонт двигателя, гидравлика, электрика.</p>
+                    <p class="listing-line muted">И так, и так</p>
+                    <p class="listing-line">Ремонтируем спецтехнику любых марок, выезд по городу и области.</p>
+                    <p class="listing-line muted">г.Шымкент, центр</p>
+                    <p class="listing-line listing-price">Диагностика: 5000 тг</p>
+                    <p class="listing-line muted">Поставщик: Азамат</p>
+                    <div class="actions">
+                        <button class="btn btn-primary">Выбрать</button>
+                        <a class="btn btn-secondary" href="#">Подробнее</a>
+                    </div>
+                </div>
+            </div>
+
+            {{-- Карточка водителя: техника, стаж «со слов», бейдж проверенного
+                 документа; строки цены нет. --}}
+            <div class="card listing-card">
+                <div class="listing-body">
+                    <p class="listing-person">Серик</p>
+                    <h2 class="listing-title"><a class="title-link" href="#">Машинист экскаватора</a></h2>
+                    <p class="listing-line muted">Экскаватор, Самосвал</p>
+                    <p class="listing-line">Стаж 8 лет (со слов исполнителя)</p>
+                    <div class="card-badge">✅ Документ проверен</div>
+                    <p class="listing-line">Машинист экскаватора, стаж 8 лет, работал на карьере.</p>
+                    <p class="listing-line muted">г.Шымкент</p>
+                    <p class="listing-line muted">Поставщик: Серик</p>
+                    <div class="actions">
+                        <button class="btn btn-primary">Выбрать</button>
+                        <a class="btn btn-secondary" href="#">Подробнее</a>
+                    </div>
+                </div>
+            </div>
+
             <nav class="pager">
                 <span class="pager-link disabled">&larr; Назад</span>
                 <span class="muted">Страница 1 из 2</span>
@@ -262,7 +308,7 @@
 </div>
 
 <div class="preview-section">
-    <h2>Каталог заказчика — mobile 375px (фильтры в одну колонку)</h2>
+    <h2>Каталог заказчика — mobile 375px (фильтры в одну колонку; карточки аренды, мастера и водителя)</h2>
     <div class="viewport viewport-mobile">
         <main>
             <header class="page-header">
@@ -315,6 +361,40 @@
                     <p class="listing-line muted">г.Шымкент, центр</p>
                     <p class="listing-line listing-price">20000 тг/ч</p>
                     <p class="listing-line muted">Поставщик: Асхат</p>
+                    <div class="actions">
+                        <button class="btn btn-primary">Выбрать</button>
+                        <a class="btn btn-secondary" href="#">Подробнее</a>
+                    </div>
+                </div>
+            </div>
+
+            {{-- Карточка мастера по ремонту в узкой колонке. --}}
+            <div class="card listing-card">
+                <div class="listing-body">
+                    <p class="listing-person">Сервис «Мотор»</p>
+                    <h2 class="listing-title"><a class="title-link" href="#">Ремонт двигателей и гидравлики</a></h2>
+                    <p class="listing-line">Диагностика, ремонт двигателя, гидравлика, электрика.</p>
+                    <p class="listing-line muted">И так, и так</p>
+                    <p class="listing-line muted">г.Шымкент, центр</p>
+                    <p class="listing-line listing-price">Диагностика: 5000 тг</p>
+                    <p class="listing-line muted">Поставщик: Азамат</p>
+                    <div class="actions">
+                        <button class="btn btn-primary">Выбрать</button>
+                        <a class="btn btn-secondary" href="#">Подробнее</a>
+                    </div>
+                </div>
+            </div>
+
+            {{-- Карточка водителя в узкой колонке: бейдж документа, цены нет. --}}
+            <div class="card listing-card">
+                <div class="listing-body">
+                    <p class="listing-person">Серик</p>
+                    <h2 class="listing-title"><a class="title-link" href="#">Машинист экскаватора</a></h2>
+                    <p class="listing-line muted">Экскаватор, Самосвал</p>
+                    <p class="listing-line">Стаж 8 лет (со слов исполнителя)</p>
+                    <div class="card-badge">✅ Документ проверен</div>
+                    <p class="listing-line muted">г.Шымкент</p>
+                    <p class="listing-line muted">Поставщик: Серик</p>
                     <div class="actions">
                         <button class="btn btn-primary">Выбрать</button>
                         <a class="btn btn-secondary" href="#">Подробнее</a>
@@ -492,6 +572,33 @@
 </div>
 
 <div class="preview-section">
+    <h2>Страница объявления водителя, mobile 375px (удостоверение, стаж «со слов», готовность выезжать, бейдж проверенного документа; строки цены нет)</h2>
+    <div class="viewport viewport-mobile">
+        <main>
+            <a class="back" href="#">&larr; Назад к каталогу</a>
+
+            <header class="page-header">
+                <h1>Машинист экскаватора</h1>
+            </header>
+
+            <div class="card">
+                <p class="listing-person">Серик</p>
+                <p class="listing-line muted">Экскаватор, Самосвал</p>
+                <p class="listing-line">Удостоверение: Тракторист-машинист</p>
+                <p class="listing-line">Стаж 8 лет (со слов исполнителя)</p>
+                <p class="listing-line">Готов выезжать в другие города</p>
+                <div class="card-badge">✅ Документ проверен</div>
+                <p class="listing-line prewrap">Машинист экскаватора, стаж 8 лет, работал на карьере и в городской застройке.</p>
+                <p class="listing-line muted">г.Шымкент</p>
+                <p class="listing-line muted">Поставщик: Серик</p>
+
+                <div class="actions"><button class="btn btn-primary">Выбрать</button></div>
+            </div>
+        </main>
+    </div>
+</div>
+
+<div class="preview-section">
     <h2>Страница объявления — без фото и с уже отправленной заявкой (бейдж вместо кнопки)</h2>
     <div class="viewport viewport-mobile">
         <main>
@@ -583,6 +690,35 @@
                 <p class="reason">Причина отклонения: Не указана цена — добавьте тариф.</p>
                 <div class="actions">
                     <a class="btn btn-primary" href="#">Исправить и отправить снова</a>
+                </div>
+            </article>
+
+            {{-- Подзаголовок карточки по виду: у мастера — имя и услуги --}}
+            <article class="card">
+                <div class="meta">
+                    <strong>Ремонт спецтехники</strong>
+                    <span class="badge badge-green">Опубликовано</span>
+                </div>
+                <p class="muted" style="margin: 0.25rem 0 0;">Сервис «Мотор» · Диагностика, ремонт двигателя, гидравлика, электрика.</p>
+                <p style="margin: 0.5rem 0 0;">Ремонтируем спецтехнику: двигатель, гидравлика, электрика.</p>
+                <p class="muted" style="margin: 0.5rem 0 0;">г.Шымкент · 5000 тг</p>
+                <p class="muted" style="margin: 0.5rem 0 0;">Опубликовано до 21.08.2026</p>
+                <div class="actions">
+                    <button class="btn btn-danger">Снять с публикации</button>
+                </div>
+            </article>
+
+            {{-- Подзаголовок карточки по виду: у водителя — имя и техника --}}
+            <article class="card">
+                <div class="meta">
+                    <strong>Машинист экскаватора</strong>
+                    <span class="badge badge-gray">Черновик</span>
+                </div>
+                <p class="muted" style="margin: 0.25rem 0 0;">Серик · Экскаватор, Самосвал</p>
+                <p style="margin: 0.5rem 0 0;">Машинист экскаватора, стаж 8 лет.</p>
+                <p class="muted" style="margin: 0.5rem 0 0;">г.Шымкент</p>
+                <div class="actions">
+                    <a class="btn btn-primary" href="#">Редактировать</a>
                 </div>
             </article>
         </main>
@@ -715,6 +851,214 @@
                 <dl style="margin: 1rem 0 0;"><dt>Фотографии</dt></dl>
                 <div class="photos">
                     <div class="photo-placeholder">фото</div>
+                    <div class="photo-placeholder">фото</div>
+                </div>
+            </div>
+        </main>
+    </div>
+</div>
+
+<div class="preview-section">
+    <h2>Портал поставщика — анкета мастера по ремонту, mobile 375px (имя/услуги/где ремонтирует; цена за диагностику и описание необязательны)</h2>
+    <div class="viewport viewport-mobile">
+        <main>
+            <a class="back" href="#">&larr; Мои объявления</a>
+
+            <header class="page-header">
+                <div class="meta">
+                    <h1>Редактирование объявления</h1>
+                    <span class="badge badge-gray">Черновик</span>
+                </div>
+                <p>Проверьте данные и заполните недостающее — после сохранения объявление уйдёт на проверку модератору.</p>
+            </header>
+
+            <div class="card">
+                <div class="field">
+                    <label>Название</label>
+                    <input value="Ремонт спецтехники" placeholder="Например: Ремонт спецтехники">
+                </div>
+                <div class="field">
+                    <label>Имя или название сервиса</label>
+                    <input value="Сервис «Мотор»" placeholder="Например: Сервис «Мотор» или Асхат">
+                </div>
+                <div class="field">
+                    <label>Услуги</label>
+                    <textarea rows="3" placeholder="Например: диагностика, ремонт двигателя, гидравлика, электрика">Диагностика, ремонт двигателя, гидравлика, электрика.</textarea>
+                </div>
+                <div class="field">
+                    <label>Где выполняете ремонт</label>
+                    <select><option>— выберите вариант —</option><option>В своём сервисе</option><option>С выездом</option><option selected>И так, и так</option></select>
+                </div>
+                <div class="field">
+                    <label>Описание (необязательно)</label>
+                    <textarea rows="4" placeholder="Что предлагаете, характеристики, условия">Ремонтируем спецтехнику: двигатель, гидравлика, электрика.</textarea>
+                </div>
+                <div class="field">
+                    <label>Локация</label>
+                    <div class="location-picker">
+                        <input class="lp-input" value="г.Шымкент" placeholder="Начните вводить: город, район или село">
+                        <button type="button" class="lp-clear">&times;</button>
+                    </div>
+                    <p class="muted" style="margin: 0.25rem 0 0;">Выберите вариант из подсказок.</p>
+                </div>
+                <div class="field">
+                    <label>Уточнение адреса (необязательно)</label>
+                    <input placeholder="Например: центр, мкр Нурсат">
+                </div>
+                <div class="field">
+                    <label>Цена за диагностику (необязательно)</label>
+                    <input value="5000 тг" placeholder="Например: 10000 тг/ч">
+                </div>
+                <div class="field">
+                    <label>Добавить фотографии</label>
+                    <div class="upload-zone">
+                        <input type="file" multiple>
+                        <span class="upload-icon" aria-hidden="true">+</span>
+                        <div class="upload-actions">
+                            <span class="btn btn-primary upload-choose">Выбрать фото</span>
+                            <label class="btn btn-secondary upload-camera">Снять на камеру<input type="file" capture="environment"></label>
+                        </div>
+                        <span class="upload-hint">или перетащите файлы сюда</span>
+                    </div>
+                    <p class="muted" style="margin: 0.25rem 0 0;">До 10 фото на объявление: JPG, PNG или WebP, каждое до 10 МБ.</p>
+                </div>
+                <div class="actions">
+                    <button class="btn btn-primary">Сохранить и отправить на проверку</button>
+                </div>
+            </div>
+        </main>
+    </div>
+</div>
+
+<div class="preview-section">
+    <h2>Портал поставщика — анкета водителя, mobile 375px (чекбоксы техники, удостоверение, стаж, готовность выезжать, замена документа; поля цены нет)</h2>
+    <div class="viewport viewport-mobile">
+        <main>
+            <a class="back" href="#">&larr; Мои объявления</a>
+
+            <header class="page-header">
+                <div class="meta">
+                    <h1>Редактирование объявления</h1>
+                    <span class="badge badge-gray">Черновик</span>
+                </div>
+                <p>Проверьте данные и заполните недостающее — после сохранения объявление уйдёт на проверку модератору.</p>
+            </header>
+
+            <div class="card">
+                <div class="field">
+                    <label>Название</label>
+                    <input value="Машинист экскаватора" placeholder="Например: Машинист экскаватора">
+                </div>
+                <div class="field">
+                    <label>Имя</label>
+                    <input value="Серик" placeholder="Например: Серик">
+                </div>
+                <div class="field">
+                    <label>Техника, на которой работаете</label>
+                    {{-- Чекбоксы вместо select multiple: на телефоне мультиселект неудобен. --}}
+                    <div style="max-height: 13rem; overflow-y: auto; border: 1px solid #cbd5e1; border-radius: 0.625rem; background: #fff; padding: 0.25rem 0.75rem;">
+                        <label style="display: flex; align-items: center; gap: 0.5rem; margin: 0; padding: 0.4375rem 0; font-size: 0.9375rem; font-weight: 400; letter-spacing: normal; text-transform: none; color: #1e293b; cursor: pointer;"><input type="checkbox" style="width: auto; margin: 0; accent-color: #2563eb;"> Автокран</label>
+                        <label style="display: flex; align-items: center; gap: 0.5rem; margin: 0; padding: 0.4375rem 0; font-size: 0.9375rem; font-weight: 400; letter-spacing: normal; text-transform: none; color: #1e293b; cursor: pointer;"><input type="checkbox" style="width: auto; margin: 0; accent-color: #2563eb;"> Бульдозер</label>
+                        <label style="display: flex; align-items: center; gap: 0.5rem; margin: 0; padding: 0.4375rem 0; font-size: 0.9375rem; font-weight: 400; letter-spacing: normal; text-transform: none; color: #1e293b; cursor: pointer;"><input type="checkbox" checked style="width: auto; margin: 0; accent-color: #2563eb;"> Погрузчик</label>
+                        <label style="display: flex; align-items: center; gap: 0.5rem; margin: 0; padding: 0.4375rem 0; font-size: 0.9375rem; font-weight: 400; letter-spacing: normal; text-transform: none; color: #1e293b; cursor: pointer;"><input type="checkbox" checked style="width: auto; margin: 0; accent-color: #2563eb;"> Самосвал</label>
+                        <label style="display: flex; align-items: center; gap: 0.5rem; margin: 0; padding: 0.4375rem 0; font-size: 0.9375rem; font-weight: 400; letter-spacing: normal; text-transform: none; color: #1e293b; cursor: pointer;"><input type="checkbox" checked style="width: auto; margin: 0; accent-color: #2563eb;"> Экскаватор</label>
+                    </div>
+                </div>
+                <div class="field">
+                    <label>Тип удостоверения</label>
+                    <select><option>— выберите тип —</option><option>Водительское</option><option selected>Тракторист-машинист</option><option>Другой документ</option></select>
+                </div>
+                <div class="field">
+                    <label>Стаж, лет</label>
+                    <input type="number" min="0" max="80" value="8" placeholder="Например: 8">
+                </div>
+                <div class="field">
+                    <label style="display: flex; align-items: center; gap: 0.5rem; margin: 0; font-size: 0.9375rem; font-weight: 400; letter-spacing: normal; text-transform: none; color: #1e293b; cursor: pointer;">
+                        <input type="checkbox" checked style="width: auto; margin: 0; accent-color: #2563eb;">
+                        Готов выезжать в другие города
+                    </label>
+                </div>
+                <div class="field">
+                    <label>Описание (необязательно)</label>
+                    <textarea rows="4" placeholder="Что предлагаете, характеристики, условия">Машинист экскаватора, стаж 8 лет.</textarea>
+                </div>
+                <div class="field">
+                    <label>Локация</label>
+                    <div class="location-picker">
+                        <input class="lp-input" value="г.Шымкент" placeholder="Начните вводить: город, район или село">
+                        <button type="button" class="lp-clear">&times;</button>
+                    </div>
+                    <p class="muted" style="margin: 0.25rem 0 0;">Выберите вариант из подсказок.</p>
+                </div>
+                <div class="field">
+                    <label>Уточнение адреса (необязательно)</label>
+                    <input placeholder="Например: центр, мкр Нурсат">
+                </div>
+                <div class="field">
+                    <label>Фото удостоверения</label>
+                    <p class="muted" style="margin: 0 0 0.375rem;">Документ загружен. Загрузите новый файл, чтобы заменить (проверка будет выполнена заново).</p>
+                    <input type="file">
+                    <p class="muted" style="margin: 0.25rem 0 0;">Снимок увидит только оператор — в объявлении он не показывается.</p>
+                </div>
+                <div class="field">
+                    <label>Добавить фотографии</label>
+                    <div class="upload-zone">
+                        <input type="file" multiple>
+                        <span class="upload-icon" aria-hidden="true">+</span>
+                        <div class="upload-actions">
+                            <span class="btn btn-primary upload-choose">Выбрать фото</span>
+                            <label class="btn btn-secondary upload-camera">Снять на камеру<input type="file" capture="environment"></label>
+                        </div>
+                        <span class="upload-hint">или перетащите файлы сюда</span>
+                    </div>
+                    <p class="muted" style="margin: 0.25rem 0 0;">До 10 фото на объявление: JPG, PNG или WebP, каждое до 10 МБ.</p>
+                </div>
+                <div class="actions">
+                    <button class="btn btn-primary">Сохранить и отправить на проверку</button>
+                </div>
+            </div>
+        </main>
+    </div>
+</div>
+
+<div class="preview-section">
+    <h2>Портал поставщика — просмотр анкеты водителя на модерации, mobile 375px (данные списком по виду, без цены)</h2>
+    <div class="viewport viewport-mobile">
+        <main>
+            <a class="back" href="#">&larr; Мои объявления</a>
+
+            <header class="page-header">
+                <div class="meta">
+                    <h1>Ваше объявление</h1>
+                    <span class="badge badge-amber">На модерации</span>
+                </div>
+                <p>Объявление на проверке у модератора — редактирование недоступно, ожидайте результата.</p>
+            </header>
+
+            <div class="card">
+                <dl style="margin: 0;">
+                    <dt>Название</dt>
+                    <dd>Машинист экскаватора</dd>
+                    <dt>Имя</dt>
+                    <dd>Серик</dd>
+                    <dt>Техника, на которой работаете</dt>
+                    <dd>Экскаватор, Самосвал, Погрузчик</dd>
+                    <dt>Тип удостоверения</dt>
+                    <dd>Тракторист-машинист</dd>
+                    <dt>Стаж</dt>
+                    <dd>8 лет</dd>
+                    <dt>Готовность выезжать</dt>
+                    <dd>Готов выезжать в другие города</dd>
+                    <dt>Фото удостоверения</dt>
+                    <dd>Загружено — снимок видит только оператор</dd>
+                    <dt>Описание</dt>
+                    <dd>Машинист экскаватора, стаж 8 лет.</dd>
+                    <dt>Локация</dt>
+                    <dd>г.Шымкент</dd>
+                </dl>
+
+                <dl style="margin: 1rem 0 0;"><dt>Фотографии</dt></dl>
+                <div class="photos">
                     <div class="photo-placeholder">фото</div>
                 </div>
             </div>

@@ -49,6 +49,10 @@
         .title-link:hover { color: #1d4ed8; text-decoration: underline; }
         .listing-line { margin: 0.25rem 0; font-size: 0.875rem; overflow-wrap: anywhere; }
         .listing-price { color: #1d4ed8; font-weight: 700; font-size: 0.9375rem; }
+        /* Мастер и водитель — люди: имя открывает карточку строкой над названием. */
+        .listing-person { margin: 0 0 0.125rem; font-size: 0.8125rem; font-weight: 700; color: #475569; overflow-wrap: anywhere; }
+        /* Бейдж проверенного документа водителя — зелёная пилюля в теле карточки. */
+        .card-badge { display: inline-block; white-space: nowrap; background: #d1fae5; color: #065f46; font-size: 0.75rem; font-weight: 600; padding: 0.125rem 0.625rem; border-radius: 9999px; margin: 0.25rem 0; }
         /* Слайдер фото на странице объявления: кадр во всю ширину карточки, листается
            пальцем без скрипта. Высота сцены фиксирована, а не задана aspect-ratio:
            размеры фотографий нигде не хранятся, и без известной заранее высоты кнопка

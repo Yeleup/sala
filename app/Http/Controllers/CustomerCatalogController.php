@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Enums\CustomerRequestStatus;
+use App\Enums\ListingKind;
 use App\Models\Category;
 use App\Models\Contact;
 use App\Models\CustomerRequest;
@@ -97,14 +98,14 @@ class CustomerCatalogController extends Controller
                 ->with('error', 'Это объявление уже не публикуется. Выберите, пожалуйста, другой вариант.');
         }
 
-        $listing->load(['supplier', 'category', 'brand', 'location', 'photos']);
+        $listing->load(['supplier', 'category', 'brand', 'location', 'photos', 'machineCategories']);
 
         return view('customer.listing-show', [
             'listing' => $listing,
             'backUrl' => $this->catalogReturnUrl($request, $contact),
             'selectUrl' => $this->links->selectUrl($contact, $listing),
             // Junk deep-link params degrade silently, so only scalars ride into the hidden fields.
-            'filterState' => collect($request->only(['q', 'location_id', 'category_id', 'sort', 'page']))
+            'filterState' => collect($request->only(['q', 'kind', 'location_id', 'category_id', 'sort', 'page']))
                 ->filter(fn ($value): bool => is_scalar($value))
                 ->all(),
             'alreadyRequested' => CustomerRequest::query()
@@ -158,7 +159,7 @@ class CustomerCatalogController extends Controller
      * fall back to the default — instead of erroring a page that has no
      * «back» to redirect to.
      *
-     * @return array{q: string, category: Category|null, location: Location|null, sort: string}
+     * @return array{q: string, kind: ListingKind|null, category: Category|null, location: Location|null, sort: string}
      */
     protected function filters(Request $request): array
     {
@@ -172,6 +173,9 @@ class CustomerCatalogController extends Controller
 
         return [
             'q' => $q,
+            // A plain filter carried by the bot's deep links, not an
+            // authorization: garbage degrades to the unfiltered catalog.
+            'kind' => ListingKind::tryFrom((string) $request->query('kind')),
             'category' => Category::find((int) $request->query('category_id')),
             'location' => Location::find((int) $request->query('location_id')),
             'sort' => $sort,
@@ -184,14 +188,15 @@ class CustomerCatalogController extends Controller
      * DB-side over the ranked ids; without one it is a plain browse of
      * searchable listings.
      *
-     * @param  array{q: string, category: Category|null, location: Location|null, sort: string}  $filters
+     * @param  array{q: string, kind: ListingKind|null, category: Category|null, location: Location|null, sort: string}  $filters
      * @return LengthAwarePaginator<int, Listing>
      */
     protected function paginate(array $filters): LengthAwarePaginator
     {
         $query = Listing::query()
             ->searchable()
-            ->with(['supplier', 'category', 'brand', 'location', 'photos'])
+            ->with(['supplier', 'category', 'brand', 'location', 'photos', 'machineCategories'])
+            ->when($filters['kind'], fn (Builder $builder, ListingKind $kind): Builder => $builder->where('kind', $kind))
             ->when($filters['category'], fn (Builder $builder, Category $category): Builder => $builder->where('category_id', $category->id));
 
         if ($filters['q'] !== '') {
@@ -226,7 +231,7 @@ class CustomerCatalogController extends Controller
      */
     protected function catalogReturnUrl(Request $request, Contact $contact): string
     {
-        $filters = http_build_query(array_filter($request->only(['q', 'location_id', 'category_id', 'sort', 'page'])));
+        $filters = http_build_query(array_filter($request->only(['q', 'kind', 'location_id', 'category_id', 'sort', 'page'])));
 
         $url = $this->links->catalogUrl($contact);
 
@@ -238,12 +243,13 @@ class CustomerCatalogController extends Controller
      * outside the signature so the page's «back» link restores the same
      * catalog view.
      *
-     * @param  array{q: string, category: Category|null, location: Location|null, sort: string}  $filters
+     * @param  array{q: string, kind: ListingKind|null, category: Category|null, location: Location|null, sort: string}  $filters
      */
     protected function listingDetailUrl(Contact $contact, Listing $listing, array $filters, int $page): string
     {
         $state = http_build_query(array_filter([
             'q' => $filters['q'],
+            'kind' => $filters['kind']?->value,
             'category_id' => $filters['category']?->id,
             'location_id' => $filters['location']?->id,
             'sort' => $filters['sort'],

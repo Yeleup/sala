@@ -44,7 +44,7 @@ class GenerateListingEmbedding implements ShouldQueueAfterCommit
 
     public function handle(ListingEmbeddings $embeddings, AiAudit $audit): void
     {
-        $listing = $this->listing->fresh(['category', 'brand', 'location', 'embedding']);
+        $listing = $this->listing->fresh(['category', 'brand', 'location', 'machineCategories', 'embedding']);
 
         if ($listing === null || $listing->status !== ListingStatus::Published) {
             return;

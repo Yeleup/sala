@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Controllers\CustomerCatalogController;
+use App\Http\Controllers\ListingDocumentController;
 use App\Http\Controllers\ListingPreviewController;
 use App\Http\Controllers\LocationSearchController;
 use App\Http\Controllers\SupplierListingController;
@@ -53,6 +54,16 @@ Route::middleware('auth')
     ->get('/moderation/listings/{listing}/preview', ListingPreviewController::class)
     ->whereNumber('listing')
     ->name('moderation.listings.preview');
+
+/**
+ * The driver's licence snapshot, stored on the non-public disk: an
+ * operator's tool behind the admin session, 404 when the listing carries
+ * no document.
+ */
+Route::middleware('auth')
+    ->get('/moderation/listings/{listing}/document', ListingDocumentController::class)
+    ->whereNumber('listing')
+    ->name('moderation.listings.document');
 
 /**
  * Customer web catalog (Modules 2–3): every published listing with search

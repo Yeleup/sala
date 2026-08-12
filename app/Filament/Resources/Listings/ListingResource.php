@@ -63,7 +63,7 @@ class ListingResource extends Resource
      */
     public static function getGloballySearchableAttributes(): array
     {
-        return ['title', 'category.name'];
+        return ['title', 'person_name', 'category.name'];
     }
 
     public static function form(Schema $schema): Schema

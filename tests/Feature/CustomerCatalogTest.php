@@ -1,6 +1,7 @@
 <?php
 
 use App\Enums\CustomerRequestStatus;
+use App\Enums\ListingMediaType;
 use App\Exceptions\SessionWindowClosed;
 use App\Models\BotSession;
 use App\Models\Contact;
@@ -220,6 +221,92 @@ describe('содержимое каталога', function () {
         $this->get(catalogLinks()->catalogUrl($contact, 'вертолёт'))
             ->assertOk()
             ->assertSee('Ничего не нашлось. Измените запрос или сбросьте фильтры.');
+    });
+});
+
+describe('виды объявлений в каталоге', function () {
+    test('фильтр вида в каталоге жёсткий, мусорный вид молча отбрасывается', function () {
+        $contact = Contact::factory()->create();
+        Listing::factory()->published()->create(['title' => 'Аренда крана для фильтра вида']);
+        $driver = Listing::factory()->driver()->published()->create(['person_name' => 'Серик Машинист']);
+        $driver->machineCategories()->attach([categoryNamed('Экскаватор')->id, categoryNamed('Самосвал')->id]);
+
+        $this->get(catalogLinks()->catalogUrl($contact).'&kind=driver')
+            ->assertOk()
+            ->assertSee('Серик Машинист')
+            ->assertSee('Экскаватор, Самосвал')
+            ->assertDontSee('Аренда крана для фильтра вида')
+            // Скрытое поле формы фильтров несёт вид дальше при «Показать».
+            ->assertSee('name="kind" value="driver"', false);
+
+        // Мусорный вид — молча без фильтра, как остальные параметры ссылки.
+        $this->get(catalogLinks()->catalogUrl($contact).'&kind=nonsense')
+            ->assertOk()
+            ->assertSee('Серик Машинист')
+            ->assertSee('Аренда крана для фильтра вида');
+    });
+
+    test('карточка водителя показывает стаж со слов и бейдж только у проверенного документа', function () {
+        $contact = Contact::factory()->create();
+        Listing::factory()->driver()->published()->create([
+            'person_name' => 'Иван', 'experience_years' => 8, 'document_verified_at' => now(),
+        ]);
+        $unverified = Listing::factory()->driver()->published()->create([
+            'person_name' => 'Пётр', 'document_verified_at' => null,
+        ]);
+
+        $this->get(catalogLinks()->catalogUrl($contact).'&kind=driver')
+            ->assertOk()
+            ->assertSee('Стаж 8 лет (со слов исполнителя)')
+            ->assertSee('Документ проверен');
+
+        // У непроверенного стаж остаётся «со слов», а бейджа нет —
+        // видно на его собственной странице объявления.
+        $this->get(catalogLinks()->listingUrl($contact, $unverified))
+            ->assertOk()
+            ->assertSee('Стаж 8 лет (со слов исполнителя)')
+            ->assertDontSee('Документ проверен');
+    });
+
+    test('карточка мастера: имя, услуги, где ремонтирует, цена подписана «Диагностика»', function () {
+        $contact = Contact::factory()->create();
+        Listing::factory()->repair()->published()->create([
+            'title' => 'Ремонт двигателей', 'price' => '5000 тг',
+        ]);
+
+        $this->get(catalogLinks()->catalogUrl($contact).'&kind=repair')
+            ->assertOk()
+            ->assertSee('Сервис «Мотор»')
+            ->assertSee('Диагностика, ремонт двигателя, гидравлика, электрика.')
+            ->assertSee('И так, и так')
+            ->assertSee('Диагностика: 5000 тг');
+    });
+
+    test('страница объявления водителя: удостоверение, стаж, готовность выезжать и бейдж', function () {
+        $contact = Contact::factory()->create();
+        $driver = Listing::factory()->driver()->published()->create(['document_verified_at' => now()]);
+        $driver->machineCategories()->attach(categoryNamed('Экскаватор')->id);
+
+        $this->get(catalogLinks()->listingUrl($contact, $driver))
+            ->assertOk()
+            ->assertSee('Серик')
+            ->assertSee('Экскаватор')
+            ->assertSee('Удостоверение: Тракторист-машинист')
+            ->assertSee('Стаж 8 лет (со слов исполнителя)')
+            ->assertSee('Готов выезжать в другие города')
+            ->assertSee('Документ проверен');
+    });
+
+    test('фото документа не попадает ни в галерею, ни в карточку', function () {
+        $contact = Contact::factory()->create();
+        $driver = Listing::factory()->driver()->published()->create();
+        ListingMedia::create([
+            'listing_id' => $driver->id, 'type' => ListingMediaType::Document,
+            'disk' => 'local', 'path' => 'doc.jpg',
+        ]);
+
+        $this->get(catalogLinks()->catalogUrl($contact))->assertOk()->assertDontSee('doc.jpg');
+        $this->get(catalogLinks()->listingUrl($contact, $driver))->assertOk()->assertDontSee('doc.jpg');
     });
 });
 

@@ -3,6 +3,7 @@
 namespace App\Services\Ai;
 
 use App\Enums\AiOperationType;
+use App\Enums\ListingKind;
 use App\Models\Listing;
 use App\Services\Ai\Audit\AiAudit;
 use Illuminate\Support\Facades\Log;
@@ -26,17 +27,33 @@ class ListingEmbeddings
 
     /**
      * The text a listing's vector is generated from: everything a
-     * free-form customer request may semantically refer to. The location
-     * stays in so a query location the resolver did not recognize still
-     * matches semantically; the price is left out (numeric noise for
-     * embeddings — the keyword score covers it).
+     * free-form customer request may semantically refer to, assembled
+     * from the fields of the listing's kind. The location stays in so a
+     * query location the resolver did not recognize still matches
+     * semantically; the price, the driver's experience years and licence
+     * type are left out (numeric/enum noise for embeddings — structural
+     * filters and the keyword score cover them).
      */
     public function sourceText(Listing $listing): string
     {
+        $kindLines = match ($listing->kind) {
+            ListingKind::Rental => [
+                $listing->category === null ? null : 'Категория: '.$listing->category->name,
+                $listing->brand === null ? null : 'Марка: '.$listing->brand->name,
+            ],
+            ListingKind::Repair => [
+                blank($listing->person_name) ? null : 'Мастер: '.$listing->person_name,
+                blank($listing->services) ? null : 'Услуги: '.$listing->services,
+            ],
+            ListingKind::Driver => [
+                blank($listing->person_name) ? null : 'Водитель: '.$listing->person_name,
+                $listing->machineCategories->isEmpty() ? null : 'Техника: '.$listing->machineCategories->pluck('name')->implode(', '),
+            ],
+        };
+
         return implode("\n", array_filter([
             blank($listing->title) ? null : 'Название: '.$listing->title,
-            $listing->category === null ? null : 'Категория: '.$listing->category->name,
-            $listing->brand === null ? null : 'Марка: '.$listing->brand->name,
+            ...$kindLines,
             blank($listing->description) ? null : 'Описание: '.$listing->description,
             $listing->locationLine() === null ? null : 'Локация: '.$listing->locationLine(),
         ]));

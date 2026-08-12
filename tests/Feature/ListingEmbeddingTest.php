@@ -114,7 +114,7 @@ test('джоба пропускает объявление, ушедшее из 
         ->and(AiOperation::query()->count())->toBe(0);
 });
 
-test('текст для эмбеддинга включает название, категорию, марку, описание и локацию, но не цену', function () {
+test('текст эмбеддинга аренды включает название, категорию, марку, описание и локацию, но не цену', function () {
     $listing = Listing::factory()->published()->create([
         'title' => 'Аренда автокрана 25 т',
         'category_id' => categoryNamed('Автокран')->id,
@@ -129,11 +129,54 @@ test('текст для эмбеддинга включает название, 
 
     expect($text)
         ->toContain('Название: Аренда автокрана 25 т')
-        ->toContain('Автокран')
-        ->toContain('Kato')
+        ->toContain('Категория: Автокран')
+        ->toContain('Марка: Kato')
         ->toContain('Стрела 28 метров')
         ->toContain('г.Шымкент, центр')
         ->not->toContain('20000');
+});
+
+test('текст эмбеддинга ремонта включает мастера и услуги вместо категории и марки', function () {
+    $repair = Listing::factory()->repair()->create([
+        'person_name' => 'Сервис «Мотор»',
+        'services' => 'Диагностика, ремонт двигателя',
+        'description' => 'Ремонтируем спецтехнику.',
+        'location_id' => locationNamed('г.Шымкент')->id,
+    ]);
+
+    $text = app(ListingEmbeddings::class)->sourceText($repair);
+
+    expect($text)
+        ->toContain('Мастер: Сервис «Мотор»')
+        ->toContain('Услуги: Диагностика, ремонт двигателя')
+        ->toContain('Ремонтируем спецтехнику.')
+        ->toContain('г.Шымкент')
+        ->not->toContain('Категория:')
+        ->not->toContain('Марка:');
+});
+
+test('текст эмбеддинга собирается по виду и не содержит стажа и типа удостоверения', function () {
+    $driver = Listing::factory()->driver()->create([
+        'person_name' => 'Иван',
+        'experience_years' => 8,
+        'description' => 'Работаю аккуратно, без простоев.',
+        'location_id' => locationNamed('г.Шымкент')->id,
+    ]);
+    $driver->machineCategories()->sync([categoryNamed('Экскаватор')->id]);
+
+    $text = app(ListingEmbeddings::class)->sourceText($driver->fresh());
+
+    expect($text)->toContain('Иван', 'Экскаватор')->not->toContain('8', 'удостоверение');
+});
+
+test('правка полей вида опубликованного объявления обновляет эмбеддинг', function () {
+    Queue::fake();
+    $listing = Listing::factory()->repair()->published()->create();
+
+    $listing->update(['services' => 'Сварочные работы, рихтовка.']);
+    $listing->update(['person_name' => 'Мастер Али']);
+
+    Queue::assertPushed(GenerateListingEmbedding::class, 2);
 });
 
 test('объявление без названия не получает строку названия в тексте эмбеддинга', function () {

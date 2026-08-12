@@ -9,8 +9,8 @@ Dereu — официальный Meta Tech Provider: сам создаёт и х
 Meta и форвардит его партнёру. Партнёрский проект (этот) не работает с Meta Graph API напрямую — вся
 коммуникация идёт через REST API Dereu.
 
-Базовый URL: `https://api.dereu.noderail.io/api/v1`
-Полная спецификация (OpenAPI): `https://docs.dereu.noderail.io`
+Базовый URL: `https://api.dereu.chat/api/v1`
+Полная спецификация (OpenAPI): `https://docs.dereu.chat`
 
 ## Модель данных
 
@@ -42,7 +42,7 @@ Meta и форвардит его партнёру. Партнёрский пр�
 |---|---|---|---|
 | `DEREU_PLATFORM_KEY` | `plat_<prefix>.<secret>` | Оператор Dereu (`dereu:issue-platform-key`) | да — базовый M2M |
 | `DEREU_WEBHOOK_SECRET` | случайная строка | вместе с platform key | да, если принимаете форвард входящих |
-| `DEREU_API_BASE_URL` | `https://api.dereu.noderail.io/api/v1` | константа окружения | да |
+| `DEREU_API_BASE_URL` | `https://api.dereu.chat/api/v1` | константа окружения | да |
 | `DEREU_CONNECT_SIGNING_SECRET` | `consec_...` | оператор при настройке Hosted ES | только для Hosted ES |
 
 `key_prefix` (параметр `p`) отдельно хранить не нужно — выводится кодом из `DEREU_PLATFORM_KEY` (сегмент
@@ -74,7 +74,9 @@ Content-Type: application/json
 ## 2. Подключение номера (Embedded Signup, Model B)
 
 Embedded Signup-попап Meta запускается **на вашем фронтенде** с `app_id`/`config_id`, которые выдаёт Dereu
-вместе с platform key. По завершении попап отдаёт вам `code`, `waba_id`, `phone_number_id` — перешлите их в:
+вместе с platform key. `config_id` подбирается Dereu под ваш подключённый фиче-пакет — на своей стороне
+ничего выбирать или хардкодить не нужно, всегда берите значение из ответа Dereu и не кэшируйте его как
+константу. По завершении попап отдаёт вам `code`, `waba_id`, `phone_number_id` — перешлите их в:
 
 ```
 POST /platform/companies/{external_id}/waba
@@ -96,8 +98,7 @@ Content-Type: application/json
   значения `cloud_api`/`smb_coexistence` как есть — приводить вручную не нужно.
   ⚠️ Для hosted-connect (§2b, redirect/widget) поле `account_mode` нужно класть в payload `d` ЯВНО — без
   него сервер дефолтит `business_only`, и coexistence-режим не активируется.
-- **201**: `{ "dereu_company_id": "...", "phone_number_id": "...", "display_phone_number": "+7 700 123 45 67", "status": "connected", "transferred": false, "catalogs": { "owned": [...], "waba": [...] } }`
-  — `display_phone_number` может быть `null` (Graph не отдал номер; подключение это не валит).
+- **201**: `{ "dereu_company_id": "...", "phone_number_id": "...", "status": "connected", "transferred": false, "catalogs": { "owned": [...], "waba": [...] } }`
   — каталоги Meta Commerce приходят сразу в этом ответе при подключении через `code`, отдельный
   `GET .../catalogs` обычно не нужен. Для coexistence/SMB-номеров `waba` в каталогах будет пустым
   (ограничение Meta) — используйте `owned`.
@@ -152,7 +153,7 @@ $p   = explode('.', substr($platformKey, strlen('plat_')), 2)[0];   // key_prefi
 ```
 
 **2. Верификация OUT-редиректа** `return_url?result=<b64>&sig=<hmac>` (`result` =
-`{dereu_company_id, phone_number_id, display_phone_number, waba_id, status, nonce, transferred, account_mode}`):
+`{dereu_company_id, phone_number_id, waba_id, status, nonce, transferred}`):
 
 ```php
 $expected = b64url(hash_hmac('sha256', $_GET['result'], $connectSigningSecret, true));
@@ -166,11 +167,6 @@ if ($data['status'] !== 'connected') { abort(409); }   // pending=ждать, su
 `status` — `WabaStatus` подключённой WABA: `connected` (успех, единственный статус happy-path) \|
 `pending` (заведена, ещё не подтверждена Meta — не declined, дозреет до `connected`) \| `suspended` \|
 `deleted` (отказ). **Литерала `success` НЕТ** — проверяйте `status === 'connected'`.
-
-`display_phone_number` (string\|null) и `account_mode` — аддитивные поля: подпись считается по строке
-`result` целиком, поэтому верификатор прежних полей от их появления не ломается. `display_phone_number` —
-человекочитаемый номер от Meta, его и показывают администратору вместо нечитаемого `phone_number_id`;
-`null` — Graph номер не отдал (подключение это не валит), обязательным полем его считать нельзя.
 
 `transferred` (boolean, входит в подписанный `result`-blob) — `true`, если подключение стало переносом
 номера от другого партнёра (owner-consented move, см. §2). Успешный чужой номер на hosted-пути — всегда
@@ -232,14 +228,6 @@ if (! hash_equals($expected, (string) $signature)) {
 - `type` известные значения: `text`, `image`, `video`, `audio`, `document`, `sticker`, `location`,
   `interactive`, `button`, `order`, `contacts`, `reaction`, `system`, `unsupported` — список не закрыт,
   не падайте на неизвестном `type`.
-- Статусы доставки исходящих (`message_sent`, `message_delivered`, `message_read`, `message_failed`)
-  несут `message_id` (id из ответа `/messages/send`) и `wamid`. У `message_failed` ключа `wamid` может
-  не быть: при синхронном отказе Meta отклоняет сообщение до присвоения wamid — матчьте failed-события
-  по `message_id`. `message_failed` дополнительно несёт `reason` (string|null) — человекочитаемую
-  причину отказа. Формат не гарантирован: для отказов Meta обычно `meta error {code}: {message}`
-  (при асинхронном отказе — с расшифровкой `error_data.details`, например про закрытое 24-часовое окно,
-  код `131047`), при инфраструктурном сбое отправки — текст ошибки; `null` — причина неизвестна.
-  Ищите код ошибки подстрокой, не парсите строку строго.
 - `template_status_update` — статус шаблона в Meta изменился (модерация). У этого события нет `from`/
   `wamid`/`type`, форма другая:
 
@@ -437,4 +425,4 @@ Authorization: Bearer {DEREU_PLATFORM_KEY}
   `/platform/companies/{external_id}/...`; `dereu_company_id` — id Dereu, приходит в ответах и в
   `company_id` вебхука.
 
-Полный контракт с примерами всех эндпоинтов (шаблоны, каталоги, business profile): `https://docs.dereu.noderail.io`.
+Полный контракт с примерами всех эндпоинтов (шаблоны, каталоги, business profile): `https://docs.dereu.chat`.

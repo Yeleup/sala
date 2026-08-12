@@ -225,6 +225,6 @@ final class DereuConnect
  * // сохранить $data['dereu_company_id'] / $data['phone_number_id'] / $data['waba_id'];
  *
  * // 4. Забрать api_key S2S (наружу в OUT он не отдаётся):
- * //    POST https://api.dereu.noderail.io/api/v1/platform/companies/org_123/api-key/reissue
+ * //    POST https://api.dereu.chat/api/v1/platform/companies/org_123/api-key/reissue
  * //    Authorization: Bearer plat_<prefix>.<secret>   -> { "api_key": "dereu_..." }
  */

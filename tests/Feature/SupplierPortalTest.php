@@ -1,9 +1,13 @@
 <?php
 
+use App\Enums\LicenceType;
+use App\Enums\ListingMediaType;
 use App\Enums\ListingStatus;
+use App\Enums\RepairPlace;
 use App\Models\Contact;
 use App\Models\Listing;
 use App\Models\ListingMedia;
+use App\Models\User;
 use App\Services\Ai\CtaLinkBuilder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\UploadedFile;
@@ -30,6 +34,50 @@ function supplierListingPayload(Listing $listing, array $overrides = []): array
         'location_id' => $listing->location_id,
         'price' => $listing->price,
     ], $overrides);
+}
+
+/**
+ * Валидная анкета мастера по ремонту для формы кабинета.
+ */
+function validRepairPayload(Listing $listing, array $overrides = []): array
+{
+    return array_merge([
+        'title' => 'Ремонт спецтехники',
+        'person_name' => 'Сервис «Мотор»',
+        'services' => 'Диагностика, ремонт двигателя, гидравлика.',
+        'repair_place' => RepairPlace::Both->value,
+        'location_id' => $listing->location_id,
+    ], $overrides);
+}
+
+/**
+ * Валидная анкета водителя для формы кабинета. Документ в набор не входит:
+ * тесты либо загружают файл сами, либо кладут медиа-строку в базу.
+ */
+function validDriverPayload(Listing $listing, array $overrides = []): array
+{
+    return array_merge([
+        'title' => 'Машинист экскаватора',
+        'person_name' => 'Серик',
+        'licence_type' => LicenceType::TractorOperator->value,
+        'experience_years' => 8,
+        'location_id' => $listing->location_id,
+        'travels_to_other_cities' => '1',
+        'machine_categories' => [categoryNamed('Экскаватор')->id],
+    ], $overrides);
+}
+
+/**
+ * Медиа-строка уже загруженного документа водителя.
+ */
+function storedDocumentFor(Listing $listing, string $path = 'old.jpg'): ListingMedia
+{
+    return ListingMedia::create([
+        'listing_id' => $listing->id,
+        'type' => ListingMediaType::Document,
+        'disk' => 'local',
+        'path' => $path,
+    ]);
 }
 
 describe('доступ по подписанным ссылкам', function () {
@@ -337,6 +385,197 @@ describe('редактирование', function () {
         ]))->assertForbidden();
 
         expect($listing->refresh())->status->toBe(ListingStatus::Published);
+    });
+});
+
+describe('анкета по виду', function () {
+    beforeEach(function () {
+        Storage::fake('local');
+    });
+
+    test('веб-форма водителя требует поля вида и документ, но не цену', function () {
+        $draft = Listing::factory()->driver()->create();
+
+        $response = $this->post(portalLinks()->updateUrl($draft), ['title' => 'Машинист']);
+
+        $response->assertSessionHasErrors(['person_name', 'licence_type', 'experience_years', 'location_id', 'travels_to_other_cities', 'machine_categories', 'document'])
+            ->assertSessionDoesntHaveErrors(['price', 'category_id', 'description']);
+        expect($draft->refresh())->status->toBe(ListingStatus::Draft);
+    });
+
+    test('веб-форма мастера требует поля вида, но не цену и описание', function () {
+        $draft = Listing::factory()->repair()->create();
+
+        $response = $this->post(portalLinks()->updateUrl($draft), ['title' => 'Ремонт спецтехники']);
+
+        $response->assertSessionHasErrors(['person_name', 'services', 'repair_place', 'location_id'])
+            ->assertSessionDoesntHaveErrors(['price', 'description', 'category_id', 'document', 'machine_categories']);
+        expect($draft->refresh())->status->toBe(ListingStatus::Draft);
+    });
+
+    test('анкета мастера сохраняется и уходит на модерацию', function () {
+        $draft = Listing::factory()->repair()->create(['person_name' => null, 'services' => null, 'repair_place' => null]);
+
+        $this->post(portalLinks()->updateUrl($draft), validRepairPayload($draft))->assertRedirect();
+
+        expect($draft->refresh())
+            ->status->toBe(ListingStatus::PendingModeration)
+            ->person_name->toBe('Сервис «Мотор»')
+            ->services->toBe('Диагностика, ремонт двигателя, гидравлика.')
+            ->repair_place->toBe(RepairPlace::Both);
+    });
+
+    test('анкета водителя сохраняется: техника синкается, документ ложится на закрытый диск', function () {
+        $draft = Listing::factory()->driver()->create(['person_name' => null, 'licence_type' => null]);
+
+        $this->post(portalLinks()->updateUrl($draft), validDriverPayload($draft, [
+            'machine_categories' => [categoryNamed('Экскаватор')->id, categoryNamed('Самосвал')->id],
+            'document' => UploadedFile::fake()->image('licence.jpg'),
+        ]))->assertRedirect();
+
+        $draft->refresh();
+        expect($draft->status)->toBe(ListingStatus::PendingModeration)
+            ->and($draft->person_name)->toBe('Серик')
+            ->and($draft->licence_type)->toBe(LicenceType::TractorOperator)
+            ->and($draft->travels_to_other_cities)->toBeTrue()
+            ->and($draft->machineCategories->pluck('name')->sort()->values()->all())->toBe(['Самосвал', 'Экскаватор'])
+            ->and($draft->documents()->count())->toBe(1);
+
+        $document = $draft->documents()->first();
+        expect($document->disk)->toBe('local');
+        Storage::disk('local')->assertExists($document->path);
+    });
+
+    test('скрытый ноль чекбокса «готов выезжать» сохраняется как false', function () {
+        $draft = Listing::factory()->driver()->create();
+        storedDocumentFor($draft);
+
+        $this->post(portalLinks()->updateUrl($draft), validDriverPayload($draft, [
+            'travels_to_other_cities' => '0',
+        ]))->assertRedirect()->assertSessionHasNoErrors();
+
+        expect($draft->refresh()->travels_to_other_cities)->toBeFalse();
+    });
+
+    test('замена документа сбрасывает галочку проверки', function () {
+        $draft = Listing::factory()->driver()->create([
+            'document_verified_at' => now(),
+            'document_verified_by' => User::factory(),
+        ]);
+        Storage::disk('local')->put('old.jpg', 'JPEG');
+        storedDocumentFor($draft);
+
+        $this->post(portalLinks()->updateUrl($draft), validDriverPayload($draft, [
+            'document' => UploadedFile::fake()->image('new.jpg'),
+        ]))->assertRedirect()->assertSessionHasNoErrors();
+
+        $draft->refresh();
+        // Старый снимок удалён вместе с файлом, остался только новый.
+        expect($draft->document_verified_at)->toBeNull()
+            ->and($draft->document_verified_by)->toBeNull()
+            ->and($draft->documents()->count())->toBe(1)
+            ->and($draft->documents()->first()->path)->not->toBe('old.jpg');
+        Storage::disk('local')->assertMissing('old.jpg');
+    });
+
+    test('документ не обязателен, когда он уже загружен, — проверка не сбрасывается', function () {
+        $draft = Listing::factory()->driver()->create([
+            'document_verified_at' => now(),
+            'document_verified_by' => User::factory(),
+        ]);
+        storedDocumentFor($draft);
+
+        $this->post(portalLinks()->updateUrl($draft), validDriverPayload($draft))
+            ->assertRedirect()->assertSessionHasNoErrors();
+
+        $draft->refresh();
+        expect($draft->status)->toBe(ListingStatus::PendingModeration)
+            ->and($draft->document_verified_at)->not->toBeNull()
+            ->and($draft->documents()->count())->toBe(1);
+    });
+
+    test('техника вне справочника не принимается', function () {
+        $draft = Listing::factory()->driver()->create();
+        storedDocumentFor($draft);
+
+        $response = $this->post(portalLinks()->updateUrl($draft), validDriverPayload($draft, [
+            'machine_categories' => [999999],
+        ]));
+
+        $response->assertSessionHasErrors(['machine_categories.0']);
+        expect($draft->refresh())->status->toBe(ListingStatus::Draft);
+    });
+
+    test('форма водителя показывает анкету вида и загрузку документа вместо цены', function () {
+        categoryNamed('Экскаватор');
+        $draft = Listing::factory()->driver()->create();
+
+        $this->get(portalLinks()->editUrl($draft))
+            ->assertOk()
+            ->assertSee('Тип удостоверения')
+            ->assertSee('Тракторист-машинист')
+            ->assertSee('Стаж, лет')
+            ->assertSee('Готов выезжать в другие города')
+            ->assertSee('Техника, на которой работаете')
+            ->assertSee('name="machine_categories[]"', false)
+            ->assertSee('Снимок увидит только оператор — в объявлении он не показывается.')
+            ->assertDontSee('Цена / тариф')
+            ->assertDontSee('name="category_id"', false)
+            ->assertDontSee('name="price"', false);
+    });
+
+    test('форма водителя с загруженным документом предлагает замену', function () {
+        $draft = Listing::factory()->driver()->create();
+        storedDocumentFor($draft);
+
+        $this->get(portalLinks()->editUrl($draft))
+            ->assertOk()
+            ->assertSee('Документ загружен. Загрузите новый файл, чтобы заменить (проверка будет выполнена заново).');
+    });
+
+    test('форма мастера показывает поля ремонта без категории и техники', function () {
+        $draft = Listing::factory()->repair()->create();
+
+        $this->get(portalLinks()->editUrl($draft))
+            ->assertOk()
+            ->assertSee('Имя или название сервиса')
+            ->assertSee('Услуги')
+            ->assertSee('Где выполняете ремонт')
+            ->assertSee('В своём сервисе')
+            ->assertSee('Цена за диагностику (необязательно)')
+            ->assertSee('Описание (необязательно)')
+            ->assertDontSee('name="category_id"', false)
+            ->assertDontSee('name="machine_categories[]"', false);
+    });
+
+    test('просмотр анкеты водителя показывает поля вида списком', function () {
+        $listing = Listing::factory()->driver()->pendingModeration()->create(['title' => 'Машинист экскаватора']);
+        $listing->machineCategories()->sync([categoryNamed('Экскаватор')->id]);
+        storedDocumentFor($listing);
+
+        $this->get(portalLinks()->editUrl($listing))
+            ->assertOk()
+            ->assertSee('Серик')
+            ->assertSee('Экскаватор')
+            ->assertSee('Тракторист-машинист')
+            ->assertSee('8 лет')
+            ->assertSee('Готов выезжать в другие города')
+            ->assertSee('Фото удостоверения')
+            ->assertDontSee('Цена / тариф');
+    });
+
+    test('карточки «Мои объявления» показывают подзаголовок по виду', function () {
+        $contact = Contact::factory()->create();
+        Listing::factory()->for($contact, 'supplier')->repair()->create();
+        $driver = Listing::factory()->for($contact, 'supplier')->driver()->create();
+        $driver->machineCategories()->sync([categoryNamed('Экскаватор')->id]);
+
+        $this->get(portalLinks()->myListingsUrl($contact))
+            ->assertOk()
+            ->assertSee('Сервис «Мотор»')
+            ->assertSee('Диагностика, ремонт двигателя')
+            ->assertSee('Серик')
+            ->assertSee('Экскаватор');
     });
 });
 

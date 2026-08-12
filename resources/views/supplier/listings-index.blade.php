@@ -26,11 +26,19 @@
 
     @forelse ($listings as $listing)
         <article class="card">
+            @php($fallbackTitle = $listing->kind === \App\Enums\ListingKind::Rental
+                ? collect([$listing->category?->name ?: 'Без категории', $listing->brand?->name])->filter()->join(' ')
+                : $listing->kind->label())
             <div class="meta">
-                <strong>{{ filled($listing->title) ? $listing->title : collect([$listing->category?->name ?: 'Без категории', $listing->brand?->name])->filter()->join(' ') }}</strong>
+                <strong>{{ filled($listing->title) ? $listing->title : $fallbackTitle }}</strong>
                 <x-supplier.status-badge :status="$listing->status" />
             </div>
-            @php($subtitle = filled($listing->title) ? collect([$listing->category?->name, $listing->brand?->name])->filter()->join(' ') : '')
+            {{-- Подзаголовок по виду: у аренды — категория и марка, у мастера — имя и услуги, у водителя — имя и техника. --}}
+            @php($subtitle = match ($listing->kind) {
+                \App\Enums\ListingKind::Rental => filled($listing->title) ? collect([$listing->category?->name, $listing->brand?->name])->filter()->join(' ') : '',
+                \App\Enums\ListingKind::Repair => collect([$listing->person_name, Str::limit($listing->services, 80)])->filter()->join(' · '),
+                \App\Enums\ListingKind::Driver => collect([$listing->person_name, $listing->machineCategories->pluck('name')->join(', ')])->filter()->join(' · '),
+            })
             @if ($subtitle)
                 <p class="muted" style="margin: 0.25rem 0 0;">{{ $subtitle }}</p>
             @endif

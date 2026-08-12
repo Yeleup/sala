@@ -2,8 +2,11 @@
 
 namespace App\Http\Controllers;
 
+use App\Enums\LicenceType;
+use App\Enums\ListingKind;
 use App\Enums\ListingMediaType;
 use App\Enums\ListingStatus;
+use App\Enums\RepairPlace;
 use App\Http\Requests\UpdateSupplierListingRequest;
 use App\Http\Requests\UpdateSupplierNameRequest;
 use App\Models\Brand;
@@ -29,7 +32,7 @@ class SupplierListingController extends Controller
 
     public function index(Contact $contact): View
     {
-        $listings = $contact->listings()->with(['category', 'brand', 'location'])->latest()->get();
+        $listings = $contact->listings()->with(['category', 'brand', 'location', 'machineCategories'])->latest()->get();
 
         return view('supplier.listings-index', [
             'contact' => $contact,
@@ -46,12 +49,16 @@ class SupplierListingController extends Controller
 
     public function edit(Listing $listing): View
     {
-        $listing->load(['photos', 'audioMessages']);
+        $listing->load(['photos', 'audioMessages', 'machineCategories']);
 
         return view('supplier.listing-edit', [
             'listing' => $listing,
             'categories' => Category::query()->orderBy('name')->get(),
             'brands' => Brand::query()->orderBy('name')->get(),
+            'repairPlaces' => RepairPlace::cases(),
+            'licenceTypes' => LicenceType::cases(),
+            'machineCategoryIds' => $listing->machineCategories->pluck('id')->all(),
+            'hasDocument' => $listing->documents()->exists(),
             'editable' => $this->isEditable($listing),
             'indexUrl' => $this->links->myListingsUrl($listing->supplier),
             'updateUrl' => $this->links->updateUrl($listing),
@@ -63,7 +70,17 @@ class SupplierListingController extends Controller
     {
         abort_unless($this->isEditable($listing), 403);
 
-        $listing->fill($request->safe()->except(['photos', 'remove_photos']))->save();
+        $listing->fill($request->safe()->except(['photos', 'remove_photos', 'document', 'machine_categories']));
+
+        if ($listing->kind === ListingKind::Driver) {
+            // No GenerateListingEmbedding dispatch after the sync: the
+            // supplier only ever edits drafts and rejected listings, and
+            // the vector is (re)built when moderation publishes them.
+            $listing->machineCategories()->sync($request->validated('machine_categories', []));
+            $this->applyDocumentReplacement($request, $listing);
+        }
+
+        $listing->save();
         $this->applyPhotoChanges($request, $listing);
         $listing->submitForModeration();
 
@@ -97,6 +114,29 @@ class SupplierListingController extends Controller
         return redirect()
             ->to($this->links->myListingsUrl($listing->supplier))
             ->with('status', 'Объявление снято с публикации.');
+    }
+
+    /**
+     * A newly uploaded licence photo replaces the stored one — the old
+     * file goes away via the ListingMedia deleted hook — and voids the
+     * operator's verification mark: it referred to the old shot. The new
+     * document lands on the non-public disk, same as in the chat flow.
+     */
+    private function applyDocumentReplacement(UpdateSupplierListingRequest $request, Listing $listing): void
+    {
+        if (! $request->hasFile('document')) {
+            return;
+        }
+
+        $listing->documents()->get()->each(fn (ListingMedia $document) => $document->delete());
+
+        $listing->documents()->create([
+            'type' => ListingMediaType::Document,
+            'disk' => 'local',
+            'path' => $request->file('document')->store("listings/{$listing->id}/documents", 'local'),
+        ]);
+
+        $listing->fill(['document_verified_at' => null, 'document_verified_by' => null]);
     }
 
     /**

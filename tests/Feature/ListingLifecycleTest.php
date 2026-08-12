@@ -119,25 +119,40 @@ test('false в булевом поле — это ответ, а не пробе
     ]);
 
     expect($missing)->toBe([]);
+
+    // Тот же ответ «не готов» через полный путь: сохранённая модель с
+    // travels=false и загруженным документом публикуема.
+    $driver = Listing::factory()->driver()->create([
+        'title' => 'Машинист экскаватора',
+        'travels_to_other_cities' => false,
+    ]);
+    ListingMedia::create(['listing_id' => $driver->id, 'type' => ListingMediaType::Document,
+        'disk' => 'local', 'path' => 'x.jpg']);
+
+    expect($driver->fresh()->missingForPublication())->toBe([]);
 });
 
 test('публикация возможна только из черновика и отклонённого', function (string $state) {
     Listing::factory()->publishable()->{$state}()->create()->publish();
 })->with(['pendingModeration', 'published', 'archived'])->throws(LogicException::class);
 
-test('требования к публикации аренды те же, что у веб-формы поставщика', function () {
+test('требования к публикации совпадают у модели и веб-формы для каждого вида', function (ListingKind $kind) {
     // Иначе оператор опубликует объявление тоньше, чем поставщик обязан
     // заполнить сам — и разъедутся два описания одного правила.
-    $webFormRequired = collect((new UpdateSupplierListingRequest)->rules())
+    $webFormRequired = collect((new UpdateSupplierListingRequest)->rulesFor($kind))
         ->filter(fn (array $rules): bool => in_array('required', $rules, true))
         ->keys()
+        // Техника (pivot) и документ (файл) — вне скалярного гейта: у
+        // водителя техника обязательна своей строкой формы, а документ —
+        // отдельной строкой «фото документа» в missingForPublication().
+        ->reject(fn (string $field): bool => in_array($field, ['document', 'machine_categories'], true))
         ->sort()
         ->values()
         ->all();
 
-    expect(collect(array_keys(ListingKind::Rental->publicationFields()))->sort()->values()->all())
+    expect(collect(array_keys($kind->publicationFields()))->sort()->values()->all())
         ->toBe($webFormRequired);
-});
+})->with(ListingKind::cases());
 
 test('вердикт модератора остаётся в объявлении', function () {
     $moderator = User::factory()->create();

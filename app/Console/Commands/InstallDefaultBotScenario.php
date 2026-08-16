@@ -84,10 +84,14 @@ class InstallDefaultBotScenario extends Command
     }
 
     /**
-     * Главный диалог: меню-список из шести веток — по паре
-     * «разместить/найти» на каждый вид объявления (аренда, ремонт,
-     * водитель) — плюс «Мои объявления» седьмой строкой. Текст AI-блокам
-     * не задаётся: приветствие подставляется из выбранного вида.
+     * Главный диалог: меню в два шага на кнопках. Первый шаг — три вида
+     * объявлений (аренда, ремонт, водитель); второй — роль внутри вида
+     * («сдаю» / «ищу») плюс «Мои объявления» третьей кнопкой. Четыре
+     * пункта верхнего уровня в одно сообщение не помещаются: лимит
+     * WhatsApp — три reply-кнопки. Прежние id вариантов сохранены, чтобы
+     * кнопки прежней версии сценария, висящие в чатах, продолжали
+     * работать. Текст AI-блокам не задаётся: приветствие подставляется
+     * из выбранного вида.
      *
      * @return array{nodes: list<array<string, mixed>>, edges: list<array<string, mixed>>}
      */
@@ -95,46 +99,67 @@ class InstallDefaultBotScenario extends Command
     {
         return [
             'nodes' => [
-                ['id' => 'start', 'type' => 'start', 'x' => 40, 'y' => 240],
-                ['id' => 'greeting', 'type' => 'text', 'x' => 260, 'y' => 240,
+                ['id' => 'start', 'type' => 'start', 'x' => 40, 'y' => 400],
+                ['id' => 'greeting', 'type' => 'text', 'x' => 260, 'y' => 400,
                     'text' => 'Здравствуйте! Это сервис спецтехники: аренда, ремонт, водители и машинисты. Разместите своё предложение или найдите исполнителя.'],
-                ['id' => 'main_menu', 'type' => 'list', 'x' => 520, 'y' => 240,
-                    'text' => 'Выберите, что вам нужно.',
-                    'button' => 'Выбрать',
+                ['id' => 'main_menu', 'type' => 'buttons', 'x' => 500, 'y' => 400,
+                    'text' => 'Выберите раздел.',
                     'options' => [
-                        ['id' => 'rent_out', 'title' => 'Сдаю спецтехнику'],
-                        ['id' => 'rent_seek', 'title' => 'Ищу спецтехнику'],
-                        ['id' => 'master', 'title' => 'Я мастер'],
-                        ['id' => 'master_seek', 'title' => 'Ищу мастера'],
-                        ['id' => 'driver', 'title' => 'Я водитель'],
-                        ['id' => 'driver_seek', 'title' => 'Ищу водителя'],
+                        ['id' => 'kind_rental', 'title' => 'Аренда спецтехники'],
+                        ['id' => 'kind_repair', 'title' => 'Ремонт спецтехники'],
+                        ['id' => 'kind_driver', 'title' => 'Водитель / машинист'],
+                    ]],
+                ['id' => 'menu_rental', 'type' => 'buttons', 'x' => 740, 'y' => 140,
+                    'text' => 'Аренда спецтехники. Что вам нужно?',
+                    'options' => [
+                        ['id' => 'rent_out', 'title' => 'Я сдаю спецтехнику'],
+                        ['id' => 'rent_seek', 'title' => 'Я ищу спецтехнику'],
                         ['id' => 'my', 'title' => 'Мои объявления'],
                     ]],
-                ['id' => 'collect_rental', 'type' => 'ai', 'task' => 'collect_listing', 'kind' => 'rental', 'x' => 800, 'y' => 40],
-                ['id' => 'collect_repair', 'type' => 'ai', 'task' => 'collect_listing', 'kind' => 'repair', 'x' => 800, 'y' => 160],
-                ['id' => 'collect_driver', 'type' => 'ai', 'task' => 'collect_listing', 'kind' => 'driver', 'x' => 800, 'y' => 280],
-                ['id' => 'search_rental', 'type' => 'ai', 'task' => 'customer_search', 'kind' => 'rental', 'x' => 800, 'y' => 400],
-                ['id' => 'search_repair', 'type' => 'ai', 'task' => 'customer_search', 'kind' => 'repair', 'x' => 800, 'y' => 520],
-                ['id' => 'search_driver', 'type' => 'ai', 'task' => 'customer_search', 'kind' => 'driver', 'x' => 800, 'y' => 640],
-                ['id' => 'after_collect', 'type' => 'text', 'x' => 1080, 'y' => 160,
-                    'text' => 'Чтобы добавить ещё одно объявление или найти исполнителя — просто напишите нам снова.'],
-                ['id' => 'after_search', 'type' => 'text', 'x' => 1080, 'y' => 520,
-                    'text' => 'Спасибо, что воспользовались сервисом! Напишите нам снова, когда что-то понадобится.'],
-                ['id' => 'my_listings', 'type' => 'my_listings', 'x' => 800, 'y' => 760,
+                ['id' => 'menu_repair', 'type' => 'buttons', 'x' => 740, 'y' => 400,
+                    'text' => 'Ремонт спецтехники. Что вам нужно?',
+                    'options' => [
+                        ['id' => 'master', 'title' => 'Я мастер'],
+                        ['id' => 'master_seek', 'title' => 'Я ищу мастера'],
+                        ['id' => 'my_repair', 'title' => 'Мои объявления'],
+                    ]],
+                ['id' => 'menu_driver', 'type' => 'buttons', 'x' => 740, 'y' => 660,
+                    'text' => 'Водители и машинисты. Что вам нужно?',
+                    'options' => [
+                        ['id' => 'driver', 'title' => 'Я водитель'],
+                        ['id' => 'driver_seek', 'title' => 'Я ищу водителя'],
+                        ['id' => 'my_driver', 'title' => 'Мои объявления'],
+                    ]],
+                ['id' => 'collect_rental', 'type' => 'ai', 'task' => 'collect_listing', 'kind' => 'rental', 'x' => 1000, 'y' => 40],
+                ['id' => 'search_rental', 'type' => 'ai', 'task' => 'customer_search', 'kind' => 'rental', 'x' => 1000, 'y' => 160],
+                ['id' => 'collect_repair', 'type' => 'ai', 'task' => 'collect_listing', 'kind' => 'repair', 'x' => 1000, 'y' => 300],
+                ['id' => 'search_repair', 'type' => 'ai', 'task' => 'customer_search', 'kind' => 'repair', 'x' => 1000, 'y' => 420],
+                ['id' => 'collect_driver', 'type' => 'ai', 'task' => 'collect_listing', 'kind' => 'driver', 'x' => 1000, 'y' => 560],
+                ['id' => 'search_driver', 'type' => 'ai', 'task' => 'customer_search', 'kind' => 'driver', 'x' => 1000, 'y' => 680],
+                ['id' => 'my_listings', 'type' => 'my_listings', 'x' => 1000, 'y' => 820,
                     'text' => 'Откройте кабинет — там ваши объявления, статусы, причины отклонения и снятие с публикации.'],
+                ['id' => 'after_collect', 'type' => 'text', 'x' => 1260, 'y' => 300,
+                    'text' => 'Чтобы добавить ещё одно объявление или найти исполнителя — просто напишите нам снова.'],
+                ['id' => 'after_search', 'type' => 'text', 'x' => 1260, 'y' => 560,
+                    'text' => 'Спасибо, что воспользовались сервисом! Напишите нам снова, когда что-то понадобится.'],
             ],
             'edges' => [
                 ['from' => 'start', 'output' => 'continue', 'to' => 'greeting'],
                 // Повторное обращение: без приветствия — сразу меню действий.
                 ['from' => 'start', 'output' => 'returning', 'to' => 'main_menu'],
                 ['from' => 'greeting', 'output' => 'continue', 'to' => 'main_menu'],
-                ['from' => 'main_menu', 'output' => 'option:rent_out', 'to' => 'collect_rental'],
-                ['from' => 'main_menu', 'output' => 'option:rent_seek', 'to' => 'search_rental'],
-                ['from' => 'main_menu', 'output' => 'option:master', 'to' => 'collect_repair'],
-                ['from' => 'main_menu', 'output' => 'option:master_seek', 'to' => 'search_repair'],
-                ['from' => 'main_menu', 'output' => 'option:driver', 'to' => 'collect_driver'],
-                ['from' => 'main_menu', 'output' => 'option:driver_seek', 'to' => 'search_driver'],
-                ['from' => 'main_menu', 'output' => 'option:my', 'to' => 'my_listings'],
+                ['from' => 'main_menu', 'output' => 'option:kind_rental', 'to' => 'menu_rental'],
+                ['from' => 'main_menu', 'output' => 'option:kind_repair', 'to' => 'menu_repair'],
+                ['from' => 'main_menu', 'output' => 'option:kind_driver', 'to' => 'menu_driver'],
+                ['from' => 'menu_rental', 'output' => 'option:rent_out', 'to' => 'collect_rental'],
+                ['from' => 'menu_rental', 'output' => 'option:rent_seek', 'to' => 'search_rental'],
+                ['from' => 'menu_rental', 'output' => 'option:my', 'to' => 'my_listings'],
+                ['from' => 'menu_repair', 'output' => 'option:master', 'to' => 'collect_repair'],
+                ['from' => 'menu_repair', 'output' => 'option:master_seek', 'to' => 'search_repair'],
+                ['from' => 'menu_repair', 'output' => 'option:my_repair', 'to' => 'my_listings'],
+                ['from' => 'menu_driver', 'output' => 'option:driver', 'to' => 'collect_driver'],
+                ['from' => 'menu_driver', 'output' => 'option:driver_seek', 'to' => 'search_driver'],
+                ['from' => 'menu_driver', 'output' => 'option:my_driver', 'to' => 'my_listings'],
                 ['from' => 'collect_rental', 'output' => 'continue', 'to' => 'after_collect'],
                 ['from' => 'collect_repair', 'output' => 'continue', 'to' => 'after_collect'],
                 ['from' => 'collect_driver', 'output' => 'continue', 'to' => 'after_collect'],

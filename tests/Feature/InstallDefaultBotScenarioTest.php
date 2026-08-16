@@ -3,6 +3,7 @@
 use App\Enums\BotScenarioTrigger;
 use App\Models\BotScenario;
 use App\Services\Bot\ScenarioDefinition;
+use App\Services\Bot\ScenarioValidator;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 
 uses(RefreshDatabase::class);
@@ -16,7 +17,7 @@ test('the installer publishes the reference main dialog with every MVP branch', 
     $definition = new ScenarioDefinition($scenario->published_definition);
     $nodes = collect($scenario->published_definition['nodes']);
 
-    expect($nodes->firstWhere('id', 'main_menu')['options'])->toHaveCount(7)
+    expect($nodes->firstWhere('id', 'main_menu')['options'])->toHaveCount(3)
         ->and($nodes->firstWhere('id', 'collect_rental')['task'])->toBe('collect_listing')
         ->and($nodes->firstWhere('id', 'search_rental')['task'])->toBe('customer_search')
         ->and($nodes->firstWhere('id', 'my_listings')['type'])->toBe('my_listings')
@@ -24,24 +25,45 @@ test('the installer publishes the reference main dialog with every MVP branch', 
         // Повторное обращение ведёт сразу к меню, минуя приветствие.
         ->and($definition->target('start', ScenarioDefinition::OUTPUT_RETURNING))->toBe('main_menu')
         ->and($definition->target('start', ScenarioDefinition::OUTPUT_CONTINUE))->toBe('greeting')
-        // Каждая ветка меню подключена: поставщик попадает к сборщику сразу.
-        ->and($definition->target('main_menu', 'option:rent_out'))->toBe('collect_rental')
-        ->and($definition->target('main_menu', 'option:rent_seek'))->toBe('search_rental')
-        ->and($definition->target('main_menu', 'option:my'))->toBe('my_listings');
+        // Первый шаг разводит по видам, второй — по роли внутри вида.
+        ->and($definition->target('main_menu', 'option:kind_rental'))->toBe('menu_rental')
+        ->and($definition->target('main_menu', 'option:kind_repair'))->toBe('menu_repair')
+        ->and($definition->target('main_menu', 'option:kind_driver'))->toBe('menu_driver')
+        ->and($definition->target('menu_rental', 'option:rent_out'))->toBe('collect_rental')
+        ->and($definition->target('menu_rental', 'option:rent_seek'))->toBe('search_rental')
+        ->and($definition->target('menu_rental', 'option:my'))->toBe('my_listings');
 });
 
-test('типовой главный сценарий — меню-список из шести веток с видами на AI-узлах', function () {
+test('типовое меню — два шага на кнопках: вид услуги, затем роль', function () {
     $this->artisan('bot:install-default-scenario --force')->assertSuccessful();
 
     $scenario = BotScenario::main();
     $definition = new ScenarioDefinition($scenario->published_definition);
     $nodes = collect($scenario->published_definition['nodes']);
-    $menu = $nodes->firstWhere('id', 'main_menu');
 
-    // Шесть веток видов плюс «Мои объявления» седьмой строкой (лимит WhatsApp — 10).
-    expect($menu['type'])->toBe('list')
-        ->and(collect($menu['options'])->pluck('id')->all())
-        ->toBe(['rent_out', 'rent_seek', 'master', 'master_seek', 'driver', 'driver_seek', 'my']);
+    // Четыре пункта верхнего уровня кнопками в одно сообщение не помещаются
+    // (лимит WhatsApp — 3), поэтому меню разложено на два шага;
+    // узлов-списков в главном диалоге не осталось.
+    expect($nodes->where('type', 'list'))->toBeEmpty();
+
+    // Состав и порядок кнопок каждого экрана зафиксирован поимённо: это же
+    // держит уникальность id — валидатор дубликаты не ловит.
+    foreach ([
+        'main_menu' => ['kind_rental', 'kind_repair', 'kind_driver'],
+        'menu_rental' => ['rent_out', 'rent_seek', 'my'],
+        'menu_repair' => ['master', 'master_seek', 'my_repair'],
+        'menu_driver' => ['driver', 'driver_seek', 'my_driver'],
+    ] as $nodeId => $optionIds) {
+        $menu = $nodes->firstWhere('id', $nodeId);
+
+        expect($menu['type'])->toBe('buttons')
+            ->and(collect($menu['options'])->pluck('id')->all())->toBe($optionIds);
+    }
+
+    // Все три кнопки «Мои объявления» ведут в один блок CTA.
+    expect($definition->target('menu_rental', 'option:my'))->toBe('my_listings')
+        ->and($definition->target('menu_repair', 'option:my_repair'))->toBe('my_listings')
+        ->and($definition->target('menu_driver', 'option:my_driver'))->toBe('my_listings');
 
     foreach ([
         'collect_rental' => ['collect_listing', 'rental'],
@@ -54,6 +76,50 @@ test('типовой главный сценарий — меню-список �
         // У каждой ветки — своя пара задача+вид, и выход «Продолжить» подключен.
         expect($nodes->firstWhere('id', $id))->toMatchArray(['task' => $task, 'kind' => $kind])
             ->and($definition->target($id, ScenarioDefinition::OUTPUT_CONTINUE))->not->toBeNull();
+    }
+});
+
+test('прежние id вариантов сохранены — кнопки из старых чатов ведут в те же ветки', function () {
+    $this->artisan('bot:install-default-scenario')->assertSuccessful();
+
+    $definition = new ScenarioDefinition(BotScenario::main()->published_definition);
+
+    // Маршрутизация идёт по машинному id и работает с любого шага, поэтому
+    // строки прежнего семистрочного списка, висящие в чатах контактов,
+    // обязаны вести туда же, куда вели.
+    foreach ([
+        'rent_out' => 'collect_rental',
+        'rent_seek' => 'search_rental',
+        'master' => 'collect_repair',
+        'master_seek' => 'search_repair',
+        'driver' => 'collect_driver',
+        'driver_seek' => 'search_driver',
+        'my' => 'my_listings',
+    ] as $optionId => $expectedTarget) {
+        $owner = $definition->optionOwner($optionId);
+
+        expect($owner)->not->toBeNull()
+            ->and($definition->target($owner['node_id'], ScenarioDefinition::optionOutput($optionId)))
+            ->toBe($expectedTarget);
+    }
+});
+
+test('типовой главный диалог укладывается в лимиты WhatsApp', function () {
+    $this->artisan('bot:install-default-scenario')->assertSuccessful();
+
+    $definition = BotScenario::main()->published_definition;
+
+    ['errors' => $errors] = app(ScenarioValidator::class)
+        ->validate($definition, BotScenarioTrigger::InboundMessage);
+
+    expect($errors)->toBe([]);
+
+    foreach (collect($definition['nodes'])->where('type', 'buttons') as $menu) {
+        expect($menu['options'])->toHaveCount(3);
+
+        foreach ($menu['options'] as $option) {
+            expect(mb_strlen($option['title']))->toBeLessThanOrEqual(20);
+        }
     }
 });
 

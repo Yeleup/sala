@@ -120,9 +120,10 @@ class CustomerSearchAssistant
         $session->state = ['kind' => $kind->value] + $this->defaultState();
         $session->save();
 
-        $this->messenger->sendText(
+        $this->messenger->sendButtons(
             $session->contact,
             trim((string) ($node['text'] ?? '')) ?: $this->searchGreeting($kind),
+            [['id' => self::BUTTON_MENU, 'title' => self::BUTTON_MENU_TITLE]],
         );
 
         return AiOutcome::InProgress;
@@ -573,7 +574,11 @@ class CustomerSearchAssistant
         $greeting = trim((string) ($node['text'] ?? ''))
             ?: sprintf('Что вам нужно и в каком городе, %s?', self::QUERY_EXAMPLE);
 
-        $this->messenger->sendText($session->contact, $question !== '' ? $question : $greeting);
+        $this->messenger->sendButtons(
+            $session->contact,
+            $question !== '' ? $question : $greeting,
+            [['id' => self::BUTTON_MENU, 'title' => self::BUTTON_MENU_TITLE]],
+        );
     }
 
     /**

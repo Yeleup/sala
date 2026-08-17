@@ -89,10 +89,12 @@ function fullSearchIntake(array $overrides = []): array
     ], $overrides);
 }
 
-test('entering the block asks what the customer needs', function () {
+test('entering the block asks what the customer needs, with a way back to the menu', function () {
     $messenger = fakeSearchMessenger();
-    $messenger->shouldReceive('sendText')->once()->withArgs(
-        fn (Contact $contact, string $text): bool => str_contains($text, 'что вам нужно'),
+    $messenger->shouldReceive('sendButtons')->once()->withArgs(
+        fn (Contact $contact, string $text, array $buttons): bool => str_contains($text, 'что вам нужно')
+            && $buttons[0]['id'] === CustomerSearchAssistant::BUTTON_MENU
+            && $buttons[0]['title'] === CustomerSearchAssistant::BUTTON_MENU_TITLE,
     );
     $session = BotSession::factory()->waitingAt('search')->create(['state' => null]);
 
@@ -105,8 +107,9 @@ test('entering the block asks what the customer needs', function () {
 test('the search AI block sends the operator text instead of the built-in prompt', function () {
     $session = searchSession();
 
-    fakeSearchMessenger()->shouldReceive('sendText')->once()
-        ->withArgs(fn (Contact $to, string $text) => $text === 'Что ищете и где?');
+    fakeSearchMessenger()->shouldReceive('sendButtons')->once()
+        ->withArgs(fn (Contact $to, string $text, array $buttons) => $text === 'Что ищете и где?'
+            && $buttons[0]['id'] === CustomerSearchAssistant::BUTTON_MENU);
 
     app(CustomerSearchAssistant::class)->start($session, customerAiNode() + ['text' => 'Что ищете и где?']);
 });
@@ -1533,8 +1536,9 @@ test('a question about the service spends neither a clarification nor a fruitles
     $messenger = fakeSearchMessenger();
     $messenger->shouldReceive('sendText')->once()
         ->withArgs(fn (Contact $to, string $text) => str_contains($text, 'оператор'));
-    $messenger->shouldReceive('sendText')->once()
-        ->withArgs(fn (Contact $to, string $text) => $text === 'В каком городе или районе нужен кран?');
+    $messenger->shouldReceive('sendButtons')->once()
+        ->withArgs(fn (Contact $to, string $text, array $buttons) => $text === 'В каком городе или районе нужен кран?'
+            && $buttons[0]['id'] === CustomerSearchAssistant::BUTTON_MENU);
 
     $outcome = app(CustomerSearchAssistant::class)
         ->resume($session, customerAiNode(), new InboundMessage(text: 'а вы берёте комиссию?'));
@@ -1558,12 +1562,9 @@ test('a fourth service question in a row walks the ordinary intake path', functi
     $messenger = fakeSearchMessenger();
     $messenger->shouldReceive('sendText')->times(3)
         ->withArgs(fn (Contact $to, string $text) => str_contains($text, 'оператор'));
-    // Три повтора текущего вопроса (без выхода «В меню» — repeatCurrentStep
-    // просто повторяет ожидаемый ответ) плюс он же как свежее уточнение на
-    // четвёртом ходе — уже с кнопкой «В меню».
-    $messenger->shouldReceive('sendText')->times(3)
-        ->withArgs(fn (Contact $to, string $text) => $text === 'Что именно вам нужно — какая техника?');
-    $messenger->shouldReceive('sendButtons')->once()
+    // Три повтора текущего вопроса (repeatCurrentStep, тоже с «В меню») плюс
+    // он же как свежее уточнение на четвёртом ходе — все четыре с кнопкой.
+    $messenger->shouldReceive('sendButtons')->times(4)
         ->withArgs(fn (Contact $to, string $text, array $buttons) => $text === 'Что именно вам нужно — какая техника?'
             && $buttons[0]['id'] === CustomerSearchAssistant::BUTTON_MENU);
 
@@ -1668,8 +1669,9 @@ test('a service question while a results list is open sends a hint instead of re
 
 test('вход в ветку поиска водителя пишет вид в state и здоровается по-своему', function () {
     $messenger = fakeSearchMessenger();
-    $messenger->shouldReceive('sendText')->once()->withArgs(
-        fn (Contact $contact, string $text): bool => str_contains($text, 'водитель или машинист'),
+    $messenger->shouldReceive('sendButtons')->once()->withArgs(
+        fn (Contact $contact, string $text, array $buttons): bool => str_contains($text, 'водитель или машинист')
+            && $buttons[0]['id'] === CustomerSearchAssistant::BUTTON_MENU,
     );
     $session = BotSession::factory()->waitingAt('search_driver')->create(['state' => null]);
 

@@ -136,9 +136,9 @@ class CustomerSearchAssistant
     protected function searchGreeting(ListingKind $kind): string
     {
         return match ($kind) {
-            ListingKind::Rental => 'Опишите, что вам нужно и в каком городе или районе — например: «нужен кран 25 тонн, Шымкент».',
-            ListingKind::Repair => 'Опишите, что сломалось или какой ремонт нужен, и в каком городе.',
-            ListingKind::Driver => 'Опишите, какой водитель или машинист нужен и в каком городе.',
+            ListingKind::Rental => 'Расскажите, что нужно и в каком городе — можно голосом. Например: «нужен кран 25 тонн, Шымкент».',
+            ListingKind::Repair => 'Что случилось с техникой и в каком вы городе? Можно написать или наговорить голосом.',
+            ListingKind::Driver => 'Какой водитель или машинист нужен и в каком городе? Можно написать или наговорить голосом.',
         };
     }
 
@@ -165,6 +165,16 @@ class CustomerSearchAssistant
 
             if ($chosen !== null) {
                 return $this->placeRequest($session, $state, $chosen);
+            }
+
+            // The tapped row is still remembered as offered but the
+            // listing behind it no longer passes searchable() — our own
+            // выдача went stale, not the customer's query, so the restart
+            // below does not spend a fruitless-search attempt.
+            if ($this->isStaleRow($state['offered'], $message)) {
+                $this->messenger->sendText($session->contact, 'Этот вариант уже сняли с публикации. Сейчас поищем свежие.');
+
+                return $this->runSearch($session, $state, (string) $state['query'], countAttempt: false);
             }
         }
 
@@ -198,7 +208,7 @@ class CustomerSearchAssistant
                 $this->persist($session, $state);
                 $this->messenger->sendButtons(
                     $session->contact,
-                    'Не удалось распознать голосовое сообщение. Напишите, пожалуйста, текстом: что нужно и в каком городе.',
+                    'Голосовое не расшифровалось — бывает. Напишите, пожалуйста, текстом: что нужно и в каком городе?',
                     [['id' => self::BUTTON_MENU, 'title' => self::BUTTON_MENU_TITLE]],
                 );
 
@@ -210,7 +220,7 @@ class CustomerSearchAssistant
             $this->persist($session, $state);
             $this->messenger->sendButtons(
                 $session->contact,
-                'Опишите, пожалуйста, текстом: что нужно и в каком городе.',
+                'Напишите, пожалуйста, текстом: что нужно и в каком городе?',
                 [['id' => self::BUTTON_MENU, 'title' => self::BUTTON_MENU_TITLE]],
             );
 
@@ -352,7 +362,7 @@ class CustomerSearchAssistant
     /**
      * @param  array<string, mixed>  $state
      */
-    protected function runSearch(BotSession $session, array $state, string $query, ?Location $location = null): AiOutcome
+    protected function runSearch(BotSession $session, array $state, string $query, ?Location $location = null, bool $countAttempt = true): AiOutcome
     {
         // A running search supersedes an open place pick list.
         $state['location_candidates'] = [];
@@ -361,13 +371,18 @@ class CustomerSearchAssistant
         $matches = $this->matcher->match($query, $location, $this->kind($state), $this->matchFilters($state));
 
         if ($matches->isEmpty()) {
-            $state['attempts']++;
+            // The restart after an honestly-stale row never spends a
+            // fruitless attempt — our own выдача went stale, not the
+            // customer's query.
+            if ($countAttempt) {
+                $state['attempts']++;
+            }
 
             if ($state['attempts'] >= self::MAX_FRUITLESS_SEARCHES) {
                 $this->persist($session, $state);
                 $this->sendCatalogCta(
                     $session,
-                    'К сожалению, сейчас ничего подходящего не нашлось. Загляните в каталог — там все объявления, база пополняется каждый день.',
+                    'Подходящего сейчас не нашлось — так бывает, база пополняется каждый день. Загляните в каталог: вдруг что-то уже появилось.',
                     self::CATALOG_BUTTON_DEAD_END,
                     kind: $this->kind($state),
                 );
@@ -384,7 +399,7 @@ class CustomerSearchAssistant
             $this->persist($session, $state);
             $this->sendDeadEnd(
                 $session,
-                sprintf('По запросу ничего не нашлось. Попробуйте описать иначе — вид техники и город, %s.', self::QUERY_EXAMPLE),
+                sprintf('Пока по такому запросу пусто. Попробуйте сказать иначе — вид техники и город, %s.', self::QUERY_EXAMPLE),
                 $this->kind($state),
             );
 
@@ -422,8 +437,8 @@ class CustomerSearchAssistant
         $this->messenger->sendList(
             $session->contact,
             filled($unresolvedLocation)
-                ? sprintf('Не нашли «%s» в справочнике мест, поэтому показываем варианты без учёта места. Выберите вариант — и мы отправим заявку поставщику:', $unresolvedLocation)
-                : 'Вот что нашлось по вашему запросу. Выберите вариант — и мы отправим заявку поставщику:',
+                ? sprintf('Место «%s» не нашлось в справочнике, поэтому подобрали варианты без учёта места. Выберите подходящий — заявка сразу уйдёт поставщику.', $unresolvedLocation)
+                : $this->resultsHeader($matches->count(), ($state['subject'] ?? null) ?: $query, $location),
             self::LIST_BUTTON,
             [
                 ...$matches->map(fn (Listing $listing): array => $this->listRow($listing))->all(),
@@ -433,7 +448,7 @@ class CustomerSearchAssistant
 
         $this->sendCatalogCta(
             $session,
-            'Показали до 10 самых подходящих вариантов. В каталоге — все объявления: поиск, фильтры по месту и категории, заявка в пару нажатий.',
+            'Здесь — до 9 самых подходящих. Весь каталог с поиском и фильтрами по месту и категории — по кнопке ниже.',
             self::CATALOG_BUTTON_RESULTS,
             $location !== null ? (($state['subject'] ?? null) ?: $query) : $query,
             $location,
@@ -441,6 +456,39 @@ class CustomerSearchAssistant
         );
 
         return AiOutcome::InProgress;
+    }
+
+    /**
+     * The honest results header: how many matched, what for, and where —
+     * replaces the old fixed «Вот что нашлось» with real numbers (used
+     * only when the place is either unset or resolved — an unresolved
+     * named place gets its own fixed honesty string instead, see the
+     * caller).
+     */
+    private function resultsHeader(int $count, string $subject, ?Location $location): string
+    {
+        $header = ($count === 1 ? 'Нашёлся' : 'Нашлось')." {$count} ".$this->pluralVariants($count);
+        $header .= sprintf(' по запросу «%s»', $subject);
+
+        if ($location !== null) {
+            $header .= ' в '.$location->name;
+        }
+
+        return $header.'. Выберите подходящий — заявка сразу уйдёт поставщику.';
+    }
+
+    /**
+     * The Russian noun form for a results count — bounded by
+     * MAX_OFFERED_ROWS (9), so the 11–14 exception of the full
+     * pluralization rule never applies here.
+     */
+    private function pluralVariants(int $count): string
+    {
+        return match (true) {
+            $count === 1 => 'вариант',
+            $count >= 2 && $count <= 4 => 'варианта',
+            default => 'вариантов',
+        };
     }
 
     /**
@@ -466,13 +514,13 @@ class CustomerSearchAssistant
         // mirroring sendDeadEnd.
         $this->messenger->sendButtons(
             $session->contact,
-            sprintf('По «%s» сейчас ничего нет. Посмотрите шире — в каталоге уже подставлены ваш запрос и «%s».', $location->name, $parent->name),
+            sprintf('В «%s» пока пусто. Посмотрите шире: в каталоге уже подставлены ваш запрос и «%s».', $location->name, $parent->name),
             [['id' => self::BUTTON_MENU, 'title' => self::BUTTON_MENU_TITLE]],
         );
 
         $this->sendCatalogCta(
             $session,
-            'А ещё можно посмотреть весь каталог — вдруг подойдёт что-то из него.',
+            'Или загляните в каталог — там все объявления, база пополняется каждый день.',
             self::CATALOG_BUTTON_DEAD_END,
             (($state['subject'] ?? null) ?: $query),
             $parent,
@@ -563,7 +611,7 @@ class CustomerSearchAssistant
         if ($state['phase'] === 'choosing') {
             $this->messenger->sendButtons(
                 $session->contact,
-                'Выберите вариант из списка выше или уточните запрос.',
+                'Выберите вариант из списка выше — или уточните запрос словами.',
                 [['id' => self::BUTTON_MENU, 'title' => self::BUTTON_MENU_TITLE]],
             );
 
@@ -582,11 +630,12 @@ class CustomerSearchAssistant
     }
 
     /**
-     * The customer picks one of the same-named places — by the list row or
-     * by typing a candidate's name matching exactly one of them (the
-     * scenario-wide convention). Same-named candidates cannot be told
-     * apart by typed text, so such a reply — like any other text — goes
-     * through the normal intake, which re-offers the list.
+     * The customer picks one of the same-named places — by the list row,
+     * by typing a candidate's name matching exactly one of them, or by its
+     * ordinal position in the current list (the scenario-wide convention).
+     * Same-named candidates cannot be told apart by typed text, so such a
+     * reply — like any other text — goes through the normal intake, which
+     * re-offers the list.
      *
      * @param  array<string, mixed>  $state
      * @param  array<string, mixed>  $node
@@ -636,7 +685,13 @@ class CustomerSearchAssistant
         $byName = Location::query()->whereIn('id', $candidates)->get()
             ->filter(fn (Location $location): bool => mb_strtolower($location->name) === $text);
 
-        return $byName->count() === 1 ? $byName->first() : null;
+        if ($byName->count() === 1) {
+            return $byName->first();
+        }
+
+        $ordinal = $this->matchOrdinal($candidates, $message);
+
+        return $ordinal !== null ? Location::find($ordinal) : null;
     }
 
     /**
@@ -679,7 +734,7 @@ class CustomerSearchAssistant
         $this->persist($session, $state);
         $this->sendDeadEnd(
             $session,
-            sprintf('Шире искать уже некуда — по всей стране ничего не нашлось. Попробуйте описать иначе, %s.', self::QUERY_EXAMPLE),
+            sprintf('По всей стране пока пусто — шире уже некуда. Попробуйте сказать иначе, %s.', self::QUERY_EXAMPLE),
             $this->kind($state),
         );
 
@@ -704,7 +759,7 @@ class CustomerSearchAssistant
 
         $this->sendCatalogCta(
             $session,
-            'А ещё можно посмотреть весь каталог — вдруг подойдёт что-то из него.',
+            'Или загляните в каталог — там все объявления, база пополняется каждый день.',
             self::CATALOG_BUTTON_DEAD_END,
             kind: $kind,
         );
@@ -754,6 +809,49 @@ class CustomerSearchAssistant
     }
 
     /**
+     * Free-text digits «1»–«N» pick the N-th element of the given id list
+     * (1-indexed) — the scenario-wide ordinal convention
+     * (ScenarioDefinition::matchOption). Callers try title matching first,
+     * so a row titled with a digit stays reachable by its title.
+     *
+     * @param  list<int>  $ids
+     */
+    private function matchOrdinal(array $ids, InboundMessage $message): ?int
+    {
+        $text = trim((string) $message->text);
+
+        if ($text === '' || ! ctype_digit($text)) {
+            return null;
+        }
+
+        $index = ((int) $text) - 1;
+
+        return $ids[$index] ?? null;
+    }
+
+    /**
+     * A tap on a row that is still remembered as offered, but whose
+     * listing no longer passes searchable() — archived, expired, or
+     * unpublished since the list went out. Honesty distinguishes this
+     * from an ordinary miss: the customer's tap was valid when the list
+     * was sent, our own выдача just went stale underneath it.
+     *
+     * @param  list<int>  $offered
+     */
+    private function isStaleRow(array $offered, InboundMessage $message): bool
+    {
+        $replyId = (string) $message->replyId;
+
+        if (! str_starts_with($replyId, self::ROW_ID_PREFIX)) {
+            return false;
+        }
+
+        $id = (int) Str::after($replyId, self::ROW_ID_PREFIX);
+
+        return in_array($id, $offered, true) && ! Listing::query()->searchable()->whereKey($id)->exists();
+    }
+
+    /**
      * A second pick of the same listing while the earlier request is
      * still pending is deduplicated by the placer (the customer may have
      * already pressed «Выбрать» in the web catalog) — the supplier is
@@ -769,8 +867,8 @@ class CustomerSearchAssistant
             $session->contact,
             sprintf(
                 $request->wasRecentlyCreated
-                    ? 'Заявка по варианту «%s» отправлена поставщику. Как только он ответит, мы сразу сообщим вам.'
-                    : 'Заявка по варианту «%s» уже отправлена поставщику — ждём его ответа.',
+                    ? 'Заявка по «%s» ушла поставщику. Как только он ответит — сразу напишем.'
+                    : 'Заявка по «%s» уже у поставщика — ждём его ответа.',
                 $listing->displayName() ?: 'объявление',
             ),
         );
@@ -779,10 +877,12 @@ class CustomerSearchAssistant
     }
 
     /**
-     * A picked list row (by machine id), or a typed text that exactly
-     * matches the title of exactly one offered row — the scenario-wide
-     * convention that typing a button's name equals pressing it. Anything
-     * else is treated as a refined search query.
+     * A picked list row (by machine id), a typed text that exactly matches
+     * the title of exactly one offered row, or its ordinal position in the
+     * current list — the scenario-wide convention that typing a button's
+     * name equals pressing it (title matching takes priority, so a listing
+     * titled with a digit stays reachable by its title). Anything else is
+     * treated as a refined search query.
      *
      * @param  list<int>  $offered
      */
@@ -812,7 +912,13 @@ class CustomerSearchAssistant
                 Str::lower($this->fullRowTitle($listing)),
             ], true));
 
-        return $byTitle->count() === 1 ? $byTitle->first() : null;
+        if ($byTitle->count() === 1) {
+            return $byTitle->first();
+        }
+
+        $ordinal = $this->matchOrdinal($offered, $message);
+
+        return $ordinal !== null ? Listing::query()->searchable()->find($ordinal) : null;
     }
 
     /**
@@ -971,7 +1077,7 @@ class CustomerSearchAssistant
                     $requirements['location'],
                 )
                 : sprintf(
-                    'Не нашли «%s» в справочнике мест. Напишите город, район или село точнее.',
+                    'Место «%s» в справочнике не нашлось. Напишите город, район или село поточнее.',
                     $requirements['location'],
                 );
         }
@@ -981,7 +1087,7 @@ class CustomerSearchAssistant
         }
 
         return $missing[0] === 'subject'
-            ? 'Что именно вам нужно — какая техника?'
+            ? 'Какая техника нужна?'
             : 'В каком городе или районе нужна техника?';
     }
 

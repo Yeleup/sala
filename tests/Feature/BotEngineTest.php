@@ -8,6 +8,7 @@ use App\Services\Bot\AiAssistant;
 use App\Services\Bot\BotEngine;
 use App\Services\Bot\InboundMessage;
 use App\Services\Bot\PassthroughAiAssistant;
+use App\Services\Bot\ScenarioDefinition;
 use App\Services\DereuMessenger;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Mockery\MockInterface;
@@ -309,7 +310,7 @@ test('republication that changed the options of the awaited block softly resets 
     $contact = Contact::factory()->create();
     $session = botSessionWaitingAt($scenario, $contact, 'menu');
     $session->update([
-        'current_node_fingerprint' => (new App\Services\Bot\ScenarioDefinition(botMenuDefinition()))
+        'current_node_fingerprint' => (new ScenarioDefinition(botMenuDefinition()))
             ->nodeFingerprint(botMenuDefinition()['nodes'][2]),
     ]);
 
@@ -336,7 +337,7 @@ test('republication with only a text tweak keeps the fingerprinted step alive', 
     $contact = Contact::factory()->create();
     $session = botSessionWaitingAt($scenario, $contact, 'menu');
     $session->update([
-        'current_node_fingerprint' => (new App\Services\Bot\ScenarioDefinition(botMenuDefinition()))
+        'current_node_fingerprint' => (new ScenarioDefinition(botMenuDefinition()))
             ->nodeFingerprint(botMenuDefinition()['nodes'][2]),
     ]);
 
@@ -353,7 +354,7 @@ test('republication with only a text tweak keeps the fingerprinted step alive', 
 });
 
 test('the AI block text stays out of the compatibility fingerprint', function () {
-    $definition = new App\Services\Bot\ScenarioDefinition([]);
+    $definition = new ScenarioDefinition([]);
     $node = ['id' => 'collect', 'type' => 'ai', 'task' => 'collect_listing'];
 
     expect($definition->nodeFingerprint($node + ['text' => 'Что сдаёте?']))
@@ -361,7 +362,7 @@ test('the AI block text stays out of the compatibility fingerprint', function ()
 });
 
 test('узел без вида и узел с видом rental дают один отпечаток — legacy-сессии не сбрасываются', function () {
-    $definition = new App\Services\Bot\ScenarioDefinition([]);
+    $definition = new ScenarioDefinition([]);
     $node = ['id' => 'collect', 'type' => 'ai', 'task' => 'collect_listing'];
 
     // Отпечаток rental-узла совпадает и с узлом без ключа kind, и байт в байт
@@ -705,6 +706,72 @@ test('finishing a dialog marks the contact as having completed one', function ()
     expect($session->fresh())
         ->current_node_id->toBeNull()
         ->last_dialog_ended_at->not->toBeNull();
+});
+
+test('a contact who only reached the first waiting step still returns straight to the menu next time', function () {
+    $scenario = BotScenario::factory()->published(botReturningStartDefinition())->create();
+    $contact = Contact::factory()->create();
+
+    // Первый ход: контакт получил приветствие и меню, ничего не завершив.
+    $firstTurn = fakeBotMessenger();
+    $firstTurn->shouldReceive('sendText')->once()
+        ->withArgs(fn (Contact $to, string $text) => $text === 'Здравствуйте, это сервис!');
+    $firstTurn->shouldReceive('sendButtons')->once();
+
+    app(BotEngine::class)->handle($contact, new InboundMessage(text: 'Привет'));
+
+    $session = BotSession::sole();
+    // waitAt уже отметил ждущий шаг — диалог не завершён, но контакт
+    // «повторный» с точки зрения приветствия.
+    expect($session)
+        ->current_node_id->toBe('menu')
+        ->last_dialog_ended_at->not->toBeNull();
+
+    $session->update(['updated_at' => now()->subDays(2)]); // 24 часа тишины — сессия истекла
+
+    $secondTurn = fakeBotMessenger();
+    $secondTurn->shouldNotReceive('sendText'); // без приветствия
+    $secondTurn->shouldReceive('sendButtons')->once()
+        ->withArgs(fn (Contact $to, string $text) => $text === 'Что вы хотите?');
+
+    app(BotEngine::class)->handle($contact, new InboundMessage(text: 'Привет снова'));
+
+    expect(BotSession::sole())
+        ->current_node_id->toBe('menu')
+        ->scenario_version->toBe($scenario->published_version);
+});
+
+test('AI block completion returns the contact to the menu within the same turn', function () {
+    BotScenario::factory()->published([
+        'nodes' => [
+            ['id' => 'start', 'type' => 'start'],
+            ['id' => 'collect', 'type' => 'ai'],
+            ['id' => 'main_menu', 'type' => 'buttons', 'text' => 'Что вас интересует?', 'options' => [
+                ['id' => 'kind_rental', 'title' => 'Аренда'],
+            ]],
+        ],
+        'edges' => [
+            ['from' => 'start', 'output' => 'continue', 'to' => 'collect'],
+            ['from' => 'collect', 'output' => 'continue', 'to' => 'main_menu'],
+        ],
+    ])->create();
+    $contact = Contact::factory()->create();
+
+    $assistant = test()->mock(AiAssistant::class);
+    $assistant->shouldReceive('start')->once()->andReturn(AiOutcome::InProgress);
+    $assistant->shouldReceive('resume')->once()->andReturn(AiOutcome::Completed);
+
+    $messenger = fakeBotMessenger();
+    $messenger->shouldReceive('sendButtons')->once()
+        ->withArgs(fn (Contact $to, string $text) => $text === 'Что вас интересует?');
+
+    app(BotEngine::class)->handle($contact, new InboundMessage(text: 'Привет'));
+
+    // Тот же ход, которым ассистент вернул Completed, обязан домотать
+    // граф до меню — второе сообщение боту для этого не нужно.
+    app(BotEngine::class)->handle($contact, new InboundMessage(text: 'Кран 25 тонн'));
+
+    expect(BotSession::sole())->current_node_id->toBe('main_menu');
 });
 
 test('a cycle of auto-advancing blocks is capped and the dialog is parked', function () {

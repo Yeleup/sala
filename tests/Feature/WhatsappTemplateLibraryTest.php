@@ -4,6 +4,7 @@ use App\Enums\WhatsappTemplateStatus;
 use App\Models\WhatsappTemplate;
 use App\Services\WhatsappTemplateLibrary;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Http;
 
 uses(RefreshDatabase::class);
@@ -67,7 +68,7 @@ test('adding a library template registers it through Dereu with buttons and exam
 
     $template = app(WhatsappTemplateLibrary::class)->add(WhatsappTemplateLibrary::LISTING_RENEWAL);
 
-    Http::assertSent(fn (Illuminate\Http\Client\Request $request) => $request['name'] === WhatsappTemplateLibrary::LISTING_RENEWAL
+    Http::assertSent(fn (Request $request) => $request['name'] === WhatsappTemplateLibrary::LISTING_RENEWAL
         && $request['components'][0]['buttons'] === [
             ['type' => 'QUICK_REPLY', 'text' => 'Да, актуально'],
             ['type' => 'QUICK_REPLY', 'text' => 'Нет, в архив'],

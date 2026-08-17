@@ -9,6 +9,7 @@ use App\Enums\ScenarioCondition;
 use App\Enums\ScenarioMessageChannel;
 use App\Enums\ScenarioVariable;
 use App\Models\WhatsappTemplate;
+use Illuminate\Support\Collection;
 
 /**
  * Publication-time validation of a scenario graph (docs/modules/bot-constructor.md).
@@ -136,7 +137,7 @@ class ScenarioValidator
 
     /**
      * @param  array<string, mixed>  $node
-     * @param  \Illuminate\Support\Collection<int, array<string, mixed>>  $edges
+     * @param  Collection<int, array<string, mixed>>  $edges
      * @return array{errors: list<string>, warnings: list<string>}
      */
     protected function validateNode(array $node, $edges, BotScenarioTrigger $trigger): array

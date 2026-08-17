@@ -1,10 +1,14 @@
 <?php
 
+use App\Enums\BotReplyKey;
 use App\Enums\BotScenarioTrigger;
 use App\Filament\Pages\BotScenarioEditor;
+use App\Models\BotReplyText;
 use App\Models\BotScenario;
 use App\Models\BotScenarioVersion;
 use App\Models\User;
+use App\Models\WhatsappTemplate;
+use App\Services\Bot\BotReplyTexts;
 use App\Services\Bot\ScenarioDefinition;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Livewire\Livewire;
@@ -238,7 +242,7 @@ describe('несколько сценариев', function () {
     test('шаблон без зеркалированных кнопок (синхронизация Dereu) не блокирует публикацию', function () {
         BotScenario::factory()->create();
         // Синхронизация возвращает только BODY-компонент — состав кнопок неизвестен.
-        \App\Models\WhatsappTemplate::factory()->approved()->create([
+        WhatsappTemplate::factory()->approved()->create([
             'name' => 'renewal_poll',
             'body' => 'Объявление «{{1}}» ещё актуально?',
             'components' => [['type' => 'BODY', 'text' => 'Объявление «{{1}}» ещё актуально?']],
@@ -258,7 +262,7 @@ describe('несколько сценариев', function () {
 
     test('явное несовпадение числа кнопок с шаблоном блокирует публикацию', function () {
         BotScenario::factory()->create();
-        \App\Models\WhatsappTemplate::factory()->approved()->create([
+        WhatsappTemplate::factory()->approved()->create([
             'name' => 'renewal_poll',
             'body' => 'Объявление «{{1}}» ещё актуально?',
             'components' => [
@@ -389,16 +393,16 @@ describe('понятность редактора', function () {
 
     test('справка редактора отдаёт встроенные ответы с учётом переопределений', function () {
         BotScenario::factory()->create();
-        \App\Models\BotReplyText::query()->create(['key' => 'stale_button', 'text' => 'Свой текст про кнопку']);
-        app(\App\Services\Bot\BotReplyTexts::class)->flush();
+        BotReplyText::query()->create(['key' => 'stale_button', 'text' => 'Свой текст про кнопку']);
+        app(BotReplyTexts::class)->flush();
 
         $fallbacks = collect(Livewire::test(BotScenarioEditor::class)->instance()->editorConfig()['fallbacks']);
 
-        expect($fallbacks)->toHaveCount(count(\App\Enums\BotReplyKey::cases()))
+        expect($fallbacks)->toHaveCount(count(BotReplyKey::cases()))
             ->and($fallbacks->firstWhere('value', 'stale_button')['text'])->toBe('Свой текст про кнопку')
             ->and($fallbacks->firstWhere('value', 'run_decision_final')['text'])
-            ->toBe(\App\Enums\BotReplyKey::RunDecisionFinal->default());
+            ->toBe(BotReplyKey::RunDecisionFinal->default());
 
-        app(\App\Services\Bot\BotReplyTexts::class)->flush();
+        app(BotReplyTexts::class)->flush();
     });
 });

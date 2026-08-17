@@ -19,6 +19,7 @@ use BackedEnum;
 use Filament\Notifications\Notification;
 use Filament\Pages\Page;
 use Filament\Support\Icons\Heroicon;
+use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Support\HtmlString;
 use Livewire\Attributes\Computed;
 use Livewire\Attributes\Url;
@@ -86,7 +87,7 @@ class BotScenarioEditor extends Page
     }
 
     /**
-     * @return \Illuminate\Database\Eloquent\Collection<int, BotScenario>
+     * @return Collection<int, BotScenario>
      */
     #[Computed]
     public function scenarios()

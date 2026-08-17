@@ -64,7 +64,7 @@ class AiUsageReport extends Page
     {
         $row = $this->attempts()
             ->selectRaw('count(*) as requests')
-            ->selectRaw("count(*) filter (where status = ?) as errors", [AiAttemptStatus::Failed->value])
+            ->selectRaw('count(*) filter (where status = ?) as errors', [AiAttemptStatus::Failed->value])
             ->selectRaw('avg(latency_ms) as avg_latency')
             ->selectRaw('coalesce(sum(estimated_cost_usd), 0) as cost')
             ->selectRaw('count(*) filter (where cost_status = ?) as unknown_cost', [AiCostStatus::Unknown->value])

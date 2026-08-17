@@ -19,6 +19,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\HasOne;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Storage;
 use InvalidArgumentException;
 use LogicException;
@@ -339,7 +340,7 @@ class Listing extends Model
      * can also come from a console command, and an unknown author must
      * not stop the transition — it only leaves the trail thinner.
      *
-     * @return array{moderated_by_user_id: ?int, moderated_at: \Illuminate\Support\Carbon}
+     * @return array{moderated_by_user_id: ?int, moderated_at: Carbon}
      */
     private static function verdict(?User $author): array
     {

@@ -6,9 +6,12 @@ use App\Jobs\ProcessDereuWebhookEvent;
 use App\Models\ChannelMessage;
 use App\Models\Contact;
 use App\Models\DereuWebhookEvent;
+use App\Models\WhatsappTemplate;
 use App\Services\DereuMessenger;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Http\Client\RequestException;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 
 uses(RefreshDatabase::class);
@@ -69,7 +72,7 @@ describe('исходящие в журнале', function () {
         Http::fake(['api.dereu.test/api/v1/messages/send' => Http::response(['message' => 'invalid'], 422)]);
 
         expect(fn () => app(DereuMessenger::class)->sendText($contact, 'Привет'))
-            ->toThrow(Illuminate\Http\Client\RequestException::class);
+            ->toThrow(RequestException::class);
 
         $entry = ChannelMessage::sole();
         expect($entry)
@@ -158,7 +161,7 @@ describe('статусы доставки', function () {
      * Строка журнала с запасным шаблоном: так выглядит сессионное
      * уведомление, отправленное в открытое по нашим часам окно.
      */
-    function outboundEntryWithFallback(string $uuid, App\Models\WhatsappTemplate $template): ChannelMessage
+    function outboundEntryWithFallback(string $uuid, WhatsappTemplate $template): ChannelMessage
     {
         return ChannelMessage::factory()->outbound()->create([
             'dereu_message_id' => $uuid,
@@ -172,12 +175,12 @@ describe('статусы доставки', function () {
 
     test('message_failed из-за закрытого окна перепосылает уведомление платным шаблоном', function () {
         $uuid = (string) Str::uuid();
-        $template = App\Models\WhatsappTemplate::factory()->approved()->create();
+        $template = WhatsappTemplate::factory()->approved()->create();
         $entry = outboundEntryWithFallback($uuid, $template);
 
         test()->mock(DereuMessenger::class)
             ->shouldReceive('sendTemplate')->once()
-            ->withArgs(fn (Contact $to, App\Models\WhatsappTemplate $t, array $params, array $payloads): bool => $to->is($entry->contact)
+            ->withArgs(fn (Contact $to, WhatsappTemplate $t, array $params, array $payloads): bool => $to->is($entry->contact)
                 && $t->is($template)
                 && $params === ['Автокран 25т']
                 && $payloads === ['req:1:accept', 'req:1:decline']);
@@ -198,7 +201,7 @@ describe('статусы доставки', function () {
 
     test('повторный message_failed по тому же сообщению не перепосылает шаблон вторично', function () {
         $uuid = (string) Str::uuid();
-        $template = App\Models\WhatsappTemplate::factory()->approved()->create();
+        $template = WhatsappTemplate::factory()->approved()->create();
         outboundEntryWithFallback($uuid, $template);
 
         test()->mock(DereuMessenger::class)->shouldReceive('sendTemplate')->once();
@@ -210,7 +213,7 @@ describe('статусы доставки', function () {
 
     test('message_failed по причине, не связанной с окном, шаблоном не перепосылается', function () {
         $uuid = (string) Str::uuid();
-        $template = App\Models\WhatsappTemplate::factory()->approved()->create();
+        $template = WhatsappTemplate::factory()->approved()->create();
         $entry = outboundEntryWithFallback($uuid, $template);
 
         test()->mock(DereuMessenger::class)->shouldNotReceive('sendTemplate');
@@ -229,7 +232,7 @@ describe('статусы доставки', function () {
 
     test('сбой самой переотправки не роняет обработку статуса', function () {
         $uuid = (string) Str::uuid();
-        $template = App\Models\WhatsappTemplate::factory()->approved()->create();
+        $template = WhatsappTemplate::factory()->approved()->create();
         outboundEntryWithFallback($uuid, $template);
 
         test()->mock(DereuMessenger::class)
@@ -247,7 +250,7 @@ describe('статусы доставки', function () {
 
     test('неутверждённый к моменту отказа шаблон не перепосылается', function () {
         $uuid = (string) Str::uuid();
-        $template = App\Models\WhatsappTemplate::factory()->create();
+        $template = WhatsappTemplate::factory()->create();
         outboundEntryWithFallback($uuid, $template);
 
         test()->mock(DereuMessenger::class)->shouldNotReceive('sendTemplate');
@@ -261,7 +264,7 @@ describe('статусы доставки', function () {
     });
 
     test('message_failed пишется в error-лог — мониторинг видит недоставленные ответы', function () {
-        Illuminate\Support\Facades\Log::spy();
+        Log::spy();
         $uuid = (string) Str::uuid();
         outboundEntry($uuid);
 
@@ -272,7 +275,7 @@ describe('статусы доставки', function () {
             'from' => null, 'type' => null, 'payload' => [],
         ]);
 
-        Illuminate\Support\Facades\Log::shouldHaveReceived('error')->once();
+        Log::shouldHaveReceived('error')->once();
     });
 
     test('статусное событие без строки журнала просто помечается обработанным', function () {

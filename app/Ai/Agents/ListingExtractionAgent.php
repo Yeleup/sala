@@ -7,6 +7,7 @@ use App\Enums\ListingKind;
 use App\Enums\RepairPlace;
 use App\Enums\UserIntent;
 use Illuminate\Contracts\JsonSchema\JsonSchema;
+use Illuminate\JsonSchema\Types\Type;
 use Laravel\Ai\Attributes\Strict;
 use Laravel\Ai\Attributes\Temperature;
 use Laravel\Ai\Contracts\Agent;
@@ -229,7 +230,7 @@ class ListingExtractionAgent implements Agent, HasStructuredOutput
     }
 
     /**
-     * @return array<string, \Illuminate\JsonSchema\Types\Type>
+     * @return array<string, Type>
      */
     public function schema(JsonSchema $schema): array
     {

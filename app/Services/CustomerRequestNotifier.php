@@ -45,7 +45,7 @@ class CustomerRequestNotifier
                 $this->messenger->sendButtons(
                     $supplier,
                     sprintf(
-                        "По вашему объявлению «%s» новая заявка от заказчика: «%s». Готовы взять заказ?",
+                        'По вашему объявлению «%s» новая заявка от заказчика: «%s». Готовы взять заказ?',
                         $request->listing->displayName() ?: 'без названия',
                         Str::limit($request->query_text, 300),
                     ),

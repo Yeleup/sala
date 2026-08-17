@@ -1,6 +1,8 @@
 <?php
 
 use App\Enums\CustomerRequestStatus;
+use App\Enums\ListingStatus;
+use App\Exceptions\SessionWindowClosed;
 use App\Models\Contact;
 use App\Models\CustomerRequest;
 use App\Models\Listing;
@@ -107,7 +109,7 @@ test('a closed customer window does not break the acceptance', function () {
     $messenger = fakeReplyMessenger();
     $messenger->shouldReceive('sendText')->once(); // only the supplier confirmation
     $messenger->shouldReceive('sendText')->once()->andThrow(
-        new App\Exceptions\SessionWindowClosed($request->customer),
+        new SessionWindowClosed($request->customer),
     );
 
     $handled = app(NotificationReplyHandler::class)->handle(
@@ -146,7 +148,7 @@ describe('ответы на 30-дневный опрос', function () {
 
         expect($handled)->toBeTrue();
         $listing->refresh();
-        expect($listing->status)->toBe(App\Enums\ListingStatus::Published)
+        expect($listing->status)->toBe(ListingStatus::Published)
             ->and($listing->expires_at->isAfter(now()->addDays(29)))->toBeTrue()
             ->and($listing->renewal_requested_at)->toBeNull();
     });
@@ -165,7 +167,7 @@ describe('ответы на 30-дневный опрос', function () {
             new InboundMessage(replyId: NotificationReplyHandler::renewalNoId($listing)),
         );
 
-        expect($listing->refresh()->status)->toBe(App\Enums\ListingStatus::Archived);
+        expect($listing->refresh()->status)->toBe(ListingStatus::Archived);
     });
 
     test('запоздалый ответ по уже заархивированному объявлению не воскрешает его', function () {
@@ -182,7 +184,7 @@ describe('ответы на 30-дневный опрос', function () {
             new InboundMessage(replyId: NotificationReplyHandler::renewalYesId($listing)),
         );
 
-        expect($listing->refresh()->status)->toBe(App\Enums\ListingStatus::Archived);
+        expect($listing->refresh()->status)->toBe(ListingStatus::Archived);
     });
 
     test('чужой контакт не может ответить на опрос', function () {
@@ -197,7 +199,7 @@ describe('ответы на 30-дневный опрос', function () {
         );
 
         expect($handled)->toBeTrue()
-            ->and($listing->refresh()->status)->toBe(App\Enums\ListingStatus::Published);
+            ->and($listing->refresh()->status)->toBe(ListingStatus::Published);
     });
 });
 

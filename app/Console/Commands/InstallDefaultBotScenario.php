@@ -91,7 +91,9 @@ class InstallDefaultBotScenario extends Command
      * WhatsApp — три reply-кнопки. Прежние id вариантов сохранены, чтобы
      * кнопки прежней версии сценария, висящие в чатах, продолжали
      * работать. Текст AI-блокам не задаётся: приветствие подставляется
-     * из выбранного вида.
+     * из выбранного вида. Завершение любой ветки (сбор объявления, поиск,
+     * «Мои объявления») выходом «Продолжить» возвращает контакта в
+     * главное меню — тупиковых узлов в графе нет.
      *
      * @return array{nodes: list<array<string, mixed>>, edges: list<array<string, mixed>>}
      */
@@ -101,30 +103,30 @@ class InstallDefaultBotScenario extends Command
             'nodes' => [
                 ['id' => 'start', 'type' => 'start', 'x' => 40, 'y' => 400],
                 ['id' => 'greeting', 'type' => 'text', 'x' => 260, 'y' => 400,
-                    'text' => 'Здравствуйте! Это сервис спецтехники: аренда, ремонт, водители и машинисты. Разместите своё предложение или найдите исполнителя.'],
+                    'text' => 'Здравствуйте! Это сервис спецтехники: здесь сдают и ищут технику, зовут мастеров по ремонту, находят водителей и машинистов.'],
                 ['id' => 'main_menu', 'type' => 'buttons', 'x' => 500, 'y' => 400,
-                    'text' => 'Выберите раздел.',
+                    'text' => 'Что вас интересует?',
                     'options' => [
                         ['id' => 'kind_rental', 'title' => 'Аренда спецтехники'],
                         ['id' => 'kind_repair', 'title' => 'Ремонт спецтехники'],
                         ['id' => 'kind_driver', 'title' => 'Водитель / машинист'],
                     ]],
                 ['id' => 'menu_rental', 'type' => 'buttons', 'x' => 740, 'y' => 140,
-                    'text' => 'Аренда спецтехники. Что вам нужно?',
+                    'text' => 'Аренда спецтехники. Вы предлагаете технику или ищете?',
                     'options' => [
                         ['id' => 'rent_out', 'title' => 'Я сдаю спецтехнику'],
                         ['id' => 'rent_seek', 'title' => 'Я ищу спецтехнику'],
                         ['id' => 'my', 'title' => 'Мои объявления'],
                     ]],
                 ['id' => 'menu_repair', 'type' => 'buttons', 'x' => 740, 'y' => 400,
-                    'text' => 'Ремонт спецтехники. Что вам нужно?',
+                    'text' => 'Ремонт спецтехники. Вы мастер или ищете мастера?',
                     'options' => [
                         ['id' => 'master', 'title' => 'Я мастер'],
                         ['id' => 'master_seek', 'title' => 'Я ищу мастера'],
                         ['id' => 'my_repair', 'title' => 'Мои объявления'],
                     ]],
                 ['id' => 'menu_driver', 'type' => 'buttons', 'x' => 740, 'y' => 660,
-                    'text' => 'Водители и машинисты. Что вам нужно?',
+                    'text' => 'Водители и машинисты. Вы водитель или ищете водителя?',
                     'options' => [
                         ['id' => 'driver', 'title' => 'Я водитель'],
                         ['id' => 'driver_seek', 'title' => 'Я ищу водителя'],
@@ -137,11 +139,7 @@ class InstallDefaultBotScenario extends Command
                 ['id' => 'collect_driver', 'type' => 'ai', 'task' => 'collect_listing', 'kind' => 'driver', 'x' => 1000, 'y' => 560],
                 ['id' => 'search_driver', 'type' => 'ai', 'task' => 'customer_search', 'kind' => 'driver', 'x' => 1000, 'y' => 680],
                 ['id' => 'my_listings', 'type' => 'my_listings', 'x' => 1000, 'y' => 820,
-                    'text' => 'Откройте кабинет — там ваши объявления, статусы, причины отклонения и снятие с публикации.'],
-                ['id' => 'after_collect', 'type' => 'text', 'x' => 1260, 'y' => 300,
-                    'text' => 'Чтобы добавить ещё одно объявление или найти исполнителя — просто напишите нам снова.'],
-                ['id' => 'after_search', 'type' => 'text', 'x' => 1260, 'y' => 560,
-                    'text' => 'Спасибо, что воспользовались сервисом! Напишите нам снова, когда что-то понадобится.'],
+                    'text' => 'Ваши объявления собраны в кабинете: статусы, причины отклонения, снятие с публикации. Кнопка ниже откроет его без пароля.'],
             ],
             'edges' => [
                 ['from' => 'start', 'output' => 'continue', 'to' => 'greeting'],
@@ -160,12 +158,14 @@ class InstallDefaultBotScenario extends Command
                 ['from' => 'menu_driver', 'output' => 'option:driver', 'to' => 'collect_driver'],
                 ['from' => 'menu_driver', 'output' => 'option:driver_seek', 'to' => 'search_driver'],
                 ['from' => 'menu_driver', 'output' => 'option:my_driver', 'to' => 'my_listings'],
-                ['from' => 'collect_rental', 'output' => 'continue', 'to' => 'after_collect'],
-                ['from' => 'collect_repair', 'output' => 'continue', 'to' => 'after_collect'],
-                ['from' => 'collect_driver', 'output' => 'continue', 'to' => 'after_collect'],
-                ['from' => 'search_rental', 'output' => 'continue', 'to' => 'after_search'],
-                ['from' => 'search_repair', 'output' => 'continue', 'to' => 'after_search'],
-                ['from' => 'search_driver', 'output' => 'continue', 'to' => 'after_search'],
+                // Завершение любой ветки возвращает в главное меню — тупиковых узлов нет.
+                ['from' => 'collect_rental', 'output' => 'continue', 'to' => 'main_menu'],
+                ['from' => 'collect_repair', 'output' => 'continue', 'to' => 'main_menu'],
+                ['from' => 'collect_driver', 'output' => 'continue', 'to' => 'main_menu'],
+                ['from' => 'search_rental', 'output' => 'continue', 'to' => 'main_menu'],
+                ['from' => 'search_repair', 'output' => 'continue', 'to' => 'main_menu'],
+                ['from' => 'search_driver', 'output' => 'continue', 'to' => 'main_menu'],
+                ['from' => 'my_listings', 'output' => 'continue', 'to' => 'main_menu'],
             ],
         ];
     }
@@ -198,7 +198,7 @@ class InstallDefaultBotScenario extends Command
                 ['id' => 'declined_text', 'type' => 'text', 'x' => 820, 'y' => 400,
                     'text' => 'Понятно, заявку отклонили. Объявление продолжает показываться в поиске.'],
                 ['id' => 'already_decided', 'type' => 'text', 'x' => 820, 'y' => 240,
-                    'text' => 'Ответ по этой заявке уже зафиксирован — решение не меняется.'],
+                    'text' => 'По этой заявке вы уже ответили — первое решение осталось в силе.'],
                 ['id' => 'notify_accept', 'type' => 'action', 'action' => 'notify_customer', 'x' => 1100, 'y' => 80],
                 ['id' => 'notify_decline', 'type' => 'action', 'action' => 'notify_customer', 'x' => 1100, 'y' => 400],
                 ['id' => 'end', 'type' => 'end', 'x' => 1380, 'y' => 240],
@@ -265,5 +265,4 @@ class InstallDefaultBotScenario extends Command
             ],
         ];
     }
-
 }

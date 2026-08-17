@@ -41,11 +41,11 @@ class ContactForm
         return [
             self::phoneField($rejectDuplicatePhone),
             TextInput::make('display_name')
-                    ->label('Отображаемое имя')
-                    ->placeholder('Имя, заданное вручную')
-                    ->helperText('Показывается вместо имени профиля WhatsApp; поставщик задаёт его сам в веб-кабинете. Пустое поле — используется имя профиля.')
-                    ->maxLength(255)
-                    ->dehydrateStateUsing(fn (?string $state): ?string => trim((string) $state) ?: null),
+                ->label('Отображаемое имя')
+                ->placeholder('Имя, заданное вручную')
+                ->helperText('Показывается вместо имени профиля WhatsApp; поставщик задаёт его сам в веб-кабинете. Пустое поле — используется имя профиля.')
+                ->maxLength(255)
+                ->dehydrateStateUsing(fn (?string $state): ?string => trim((string) $state) ?: null),
             TextInput::make('profile_name')
                 ->label('Имя профиля')
                 ->placeholder('Как контакт подписан в WhatsApp')

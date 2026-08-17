@@ -4,7 +4,6 @@ namespace App\Filament\Resources\WhatsappTemplates\Pages;
 
 use App\Enums\WhatsappTemplateCategory;
 use App\Filament\Resources\WhatsappTemplates\WhatsappTemplateResource;
-use App\Models\WhatsappTemplate;
 use App\Services\WhatsappTemplateRegistry;
 use Filament\Resources\Pages\CreateRecord;
 use Illuminate\Database\Eloquent\Model;

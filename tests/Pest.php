@@ -1,5 +1,11 @@
 <?php
 
+use App\Models\Brand;
+use App\Models\Category;
+use App\Models\DereuCompany;
+use App\Models\Location;
+use Filament\Schemas\Components\Component;
+use Filament\Schemas\Components\Text;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
 
@@ -48,27 +54,27 @@ expect()->extend('toBeOne', function () {
  * Подключённая компания Dereu этой инсталляции; тест должен выставить
  * config('services.dereu.external_id') в 'org_test'.
  */
-function connectedDereuCompany(array $attributes = []): \App\Models\DereuCompany
+function connectedDereuCompany(array $attributes = []): DereuCompany
 {
-    return \App\Models\DereuCompany::factory()->create(array_merge(['external_id' => 'org_test'], $attributes));
+    return DereuCompany::factory()->create(array_merge(['external_id' => 'org_test'], $attributes));
 }
 
 /**
  * Категория из операторского справочника (создаётся при первом обращении) —
  * для объявлений в тестах: `'category_id' => categoryNamed('Автокран')->id`.
  */
-function categoryNamed(string $name): \App\Models\Category
+function categoryNamed(string $name): Category
 {
-    return \App\Models\Category::query()->firstOrCreate(['name' => $name]);
+    return Category::query()->firstOrCreate(['name' => $name]);
 }
 
 /**
  * Марка из операторского справочника (создаётся при первом обращении) —
  * для объявлений в тестах: `'brand_id' => brandNamed('Hitachi')->id`.
  */
-function brandNamed(string $name): \App\Models\Brand
+function brandNamed(string $name): Brand
 {
-    return \App\Models\Brand::query()->firstOrCreate(['name' => $name]);
+    return Brand::query()->firstOrCreate(['name' => $name]);
 }
 
 /**
@@ -77,13 +83,13 @@ function brandNamed(string $name): \App\Models\Brand
  * `->assertSchemaComponentExists('name', checkComponentUsing: fn ($c) =>
  * str_contains(helperTextOf($c), '…'))`.
  */
-function helperTextOf(\Filament\Schemas\Components\Component $component): string
+function helperTextOf(Component $component): string
 {
     $texts = [];
 
     foreach ($component->getChildSchemas() as $schema) {
         foreach ($schema->getFlatComponents(withHidden: true) as $child) {
-            if ($child instanceof \Filament\Schemas\Components\Text) {
+            if ($child instanceof Text) {
                 $texts[] = (string) $child->getContent();
             }
         }
@@ -96,9 +102,9 @@ function helperTextOf(\Filament\Schemas\Components\Component $component): string
  * Узел справочника локаций КАТО (создаётся при первом обращении) — для
  * объявлений в тестах: `'location_id' => locationNamed('г.Шымкент')->id`.
  */
-function locationNamed(string $name, ?\App\Models\Location $parent = null): \App\Models\Location
+function locationNamed(string $name, ?Location $parent = null): Location
 {
-    return \App\Models\Location::query()->firstOrCreate([
+    return Location::query()->firstOrCreate([
         'name' => $name,
         'parent_id' => $parent?->id,
     ]);

@@ -41,9 +41,11 @@ class BotSession extends Model
     }
 
     /**
-     * Whether this contact has already finished at least one dialog with
-     * the bot — the signal the Start block's «Повторное обращение» output
-     * branches on to skip the first-time greeting.
+     * Whether this contact has already reached at least one waiting step
+     * with the bot — set the moment the first menu or AI block is shown,
+     * not only when a dialog fully ends, so the greeting shows once. The
+     * signal the Start block's «Повторное обращение» output branches on
+     * to skip the first-time greeting.
      */
     public function hasCompletedDialog(): bool
     {

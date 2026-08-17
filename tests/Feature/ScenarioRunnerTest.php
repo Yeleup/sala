@@ -4,17 +4,21 @@ use App\Enums\BotScenarioTrigger;
 use App\Enums\CustomerRequestStatus;
 use App\Enums\ListingStatus;
 use App\Enums\ScenarioRunStatus;
+use App\Enums\WhatsappTemplateStatus;
+use App\Filament\Resources\ScenarioRuns\ScenarioRunResource;
 use App\Models\BotScenario;
 use App\Models\Contact;
 use App\Models\CustomerRequest;
 use App\Models\Listing;
 use App\Models\ScenarioRun;
+use App\Models\User;
 use App\Models\WhatsappTemplate;
 use App\Services\Bot\BotEngine;
 use App\Services\Bot\InboundMessage;
 use App\Services\Bot\ScenarioRunner;
 use App\Services\Bot\ScenarioRunReplyHandler;
 use App\Services\DereuMessenger;
+use App\Services\TemplateFallback;
 use App\Services\WhatsappTemplateLibrary;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Mockery\MockInterface;
@@ -105,7 +109,7 @@ describe('запуск сценария «Новая заявка»', function (
         // же уведомление платным шаблоном с теми же токен-кнопками.
         $messenger = runnerMessenger();
         $messenger->shouldReceive('sendButtons')->once()->withArgs(
-            fn (Contact $contact, string $text, array $buttons, ?App\Services\TemplateFallback $fallback = null): bool => $fallback !== null
+            fn (Contact $contact, string $text, array $buttons, ?TemplateFallback $fallback = null): bool => $fallback !== null
                 && $fallback->template->is($template)
                 && $fallback->bodyParameters === ['Автокран', 'нужен кран']
                 && count($fallback->buttonPayloads) === 2
@@ -122,7 +126,7 @@ describe('запуск сценария «Новая заявка»', function (
         $template = WhatsappTemplate::query()
             ->where('name', WhatsappTemplateLibrary::NEW_CUSTOMER_REQUEST)
             ->sole();
-        $template->update(['status' => \App\Enums\WhatsappTemplateStatus::Approved]);
+        $template->update(['status' => WhatsappTemplateStatus::Approved]);
         $request = runnerPendingRequest(['withClosedSessionWindow']);
 
         $messenger = runnerMessenger();
@@ -400,7 +404,7 @@ describe('исход блока «Действие»', function () {
         $request->accept();
 
         $messenger->shouldReceive('sendText')->once()->withArgs(
-            fn (Contact $contact, string $text): bool => $contact->is($supplier) && str_contains($text, 'уже зафиксирован'),
+            fn (Contact $contact, string $text): bool => $contact->is($supplier) && str_contains($text, 'уже ответили'),
         );
 
         app(ScenarioRunReplyHandler::class)->handle(
@@ -544,10 +548,10 @@ describe('действие «Отправить CTA-ссылку на кабин
 });
 
 test('журнал запусков в админке открывается', function () {
-    $this->actingAs(\App\Models\User::factory()->create());
+    $this->actingAs(User::factory()->create());
     ScenarioRun::factory()->create();
 
-    $this->get(\App\Filament\Resources\ScenarioRuns\ScenarioRunResource::getUrl())
+    $this->get(ScenarioRunResource::getUrl())
         ->assertSuccessful();
 });
 

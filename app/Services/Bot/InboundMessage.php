@@ -67,7 +67,7 @@ class InboundMessage
             'button' => new self(text: $payload['text'] ?? null, replyId: $payload['payload'] ?? null),
             'image' => self::fromMedia($payload, ListingMediaType::Photo),
             'audio' => self::fromMedia($payload, ListingMediaType::Audio),
-            default => new self(),
+            default => new self,
         };
     }
 

@@ -258,7 +258,7 @@ class BotEngine
                 case BotNodeType::MyListings:
                     $this->messenger->sendCtaUrl(
                         $contact,
-                        (string) ($node['text'] ?? '') ?: 'Откройте кабинет — там ваши объявления, статусы и причины отклонения.',
+                        (string) ($node['text'] ?? '') ?: 'Ваши объявления собраны в кабинете: статусы, причины отклонения, снятие с публикации. Кнопка ниже откроет его без пароля.',
                         'Открыть кабинет',
                         $this->links->myListingsUrl($contact),
                     );
@@ -356,8 +356,9 @@ class BotEngine
 
     /**
      * Which Start output a fresh dialog follows: the optional «Повторное
-     * обращение» output for a contact who already finished a dialog before
-     * (and only when that output is wired), otherwise the default greeting.
+     * обращение» output for a contact who already reached at least one
+     * waiting step before — the greeting shows only once — (and only when
+     * that output is wired), otherwise the default greeting.
      */
     private function startOutput(BotSession $session, ScenarioDefinition $definition, string $startId): string
     {
@@ -369,10 +370,17 @@ class BotEngine
         return ScenarioDefinition::OUTPUT_CONTINUE;
     }
 
+    /**
+     * Parks the dialog at a waiting block. Also marks the greeting as
+     * shown for good: reaching any waiting step — not only fully finishing
+     * the dialog — puts the contact on the «Повторное обращение» path for
+     * every dialog that follows.
+     */
     private function waitAt(BotSession $session, string $nodeId, string $fingerprint): void
     {
         $session->current_node_id = $nodeId;
         $session->current_node_fingerprint = $fingerprint;
+        $session->last_dialog_ended_at = now();
         $session->save();
     }
 

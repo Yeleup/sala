@@ -1,13 +1,18 @@
 <?php
 
+use App\Enums\ChannelDirection;
+use App\Enums\ChannelMessageStatus;
 use App\Exceptions\SessionWindowClosed;
+use App\Models\ChannelMessage;
 use App\Models\Contact;
 use App\Models\WhatsappTemplate;
 use App\Services\DereuMessenger;
+use App\Services\TemplateFallback;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\Request;
 use Illuminate\Http\Client\RequestException;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Str;
 
 uses(RefreshDatabase::class);
 
@@ -24,7 +29,7 @@ function fakeDereuSendAccepted(): void
     // по dereu_message_id, как и реальный Dereu.
     Http::fake([
         'api.dereu.test/*' => fn () => Http::response(
-            ['id' => (string) Illuminate\Support\Str::uuid(), 'status' => 'queued'],
+            ['id' => (string) Str::uuid(), 'status' => 'queued'],
             202,
         ),
     ]);
@@ -234,9 +239,9 @@ test('a rejected send leaves a failed entry in the channel journal', function ()
     // Без записи диалог в операторском «Чате» выглядит так, будто бот
     // просто молчал: инцидент (протухший ключ, невалидный payload) ищется
     // вслепую по laravel-логам, а счётчик ошибок показывает ноль.
-    $entry = App\Models\ChannelMessage::sole();
-    expect($entry->status)->toBe(App\Enums\ChannelMessageStatus::Failed)
-        ->and($entry->direction)->toBe(App\Enums\ChannelDirection::Outbound)
+    $entry = ChannelMessage::sole();
+    expect($entry->status)->toBe(ChannelMessageStatus::Failed)
+        ->and($entry->direction)->toBe(ChannelDirection::Outbound)
         ->and($entry->text)->toBe('Привет!')
         ->and($entry->failure_reason)->not->toBeNull();
 });
@@ -253,7 +258,7 @@ test('a session message outside the 24-hour window is refused locally', function
     // нотификаторы используют его как штатное ветвление на шаблон, и
     // журналировать его «ошибкой» значило бы засорять чат ложными сбоями.
     Http::assertNothingSent();
-    expect(App\Models\ChannelMessage::count())->toBe(0);
+    expect(ChannelMessage::count())->toBe(0);
 });
 
 test('a session send records its template fallback in the journal', function () {
@@ -269,10 +274,10 @@ test('a session send records its template fallback in the journal', function () 
         $contact,
         'Новая заявка. Готовы взять заказ?',
         [['id' => 'req:1:accept', 'title' => 'Согласиться']],
-        fallback: new App\Services\TemplateFallback($template, ['Автокран 25т'], ['req:1:accept']),
+        fallback: new TemplateFallback($template, ['Автокран 25т'], ['req:1:accept']),
     );
 
-    expect(App\Models\ChannelMessage::sole()->template_fallback)->toBe([
+    expect(ChannelMessage::sole()->template_fallback)->toBe([
         'whatsapp_template_id' => $template->id,
         'body_parameters' => ['Автокран 25т'],
         'button_payloads' => ['req:1:accept'],
@@ -287,7 +292,7 @@ test('sendTextOrTemplate inside the window records the template as its own fallb
 
     app(DereuMessenger::class)->sendTextOrTemplate($contact, 'Объявление скоро истечёт', $template, ['Автокран']);
 
-    expect(App\Models\ChannelMessage::sole()->template_fallback)->toBe([
+    expect(ChannelMessage::sole()->template_fallback)->toBe([
         'whatsapp_template_id' => $template->id,
         'body_parameters' => ['Автокран'],
         'button_payloads' => [],
@@ -304,7 +309,7 @@ test('a template send never carries a fallback of its own', function () {
 
     // Отсутствие фолбэка у шаблонных отправок — защита от цикла: упавший
     // шаблон не может породить ещё одну переотправку.
-    expect(App\Models\ChannelMessage::sole()->template_fallback)->toBeNull();
+    expect(ChannelMessage::sole()->template_fallback)->toBeNull();
 });
 
 test('an approved template is sent with body parameters regardless of the window', function () {

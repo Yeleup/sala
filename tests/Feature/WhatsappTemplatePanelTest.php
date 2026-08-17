@@ -5,6 +5,7 @@ use App\Filament\Resources\WhatsappTemplates\Pages\CreateWhatsappTemplate;
 use App\Filament\Resources\WhatsappTemplates\Pages\ListWhatsappTemplates;
 use App\Models\User;
 use App\Models\WhatsappTemplate;
+use App\Services\WhatsappTemplateLibrary;
 use Filament\Actions\Testing\TestAction;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
@@ -108,8 +109,8 @@ test('the library action registers the selected standard templates', function ()
     Livewire::test(ListWhatsappTemplates::class)
         ->callAction('library', [
             'templates' => [
-                App\Services\WhatsappTemplateLibrary::LISTING_RENEWAL,
-                App\Services\WhatsappTemplateLibrary::NEW_CUSTOMER_REQUEST,
+                WhatsappTemplateLibrary::LISTING_RENEWAL,
+                WhatsappTemplateLibrary::NEW_CUSTOMER_REQUEST,
             ],
         ])
         ->assertNotified('Добавлено шаблонов: 2');
@@ -127,8 +128,8 @@ test('a Meta refusal of one library template does not block the others', functio
     Livewire::test(ListWhatsappTemplates::class)
         ->callAction('library', [
             'templates' => [
-                App\Services\WhatsappTemplateLibrary::LISTING_RENEWAL,
-                App\Services\WhatsappTemplateLibrary::NEW_CUSTOMER_REQUEST,
+                WhatsappTemplateLibrary::LISTING_RENEWAL,
+                WhatsappTemplateLibrary::NEW_CUSTOMER_REQUEST,
             ],
         ])
         ->assertNotified('Добавлено шаблонов: 1');
@@ -137,7 +138,7 @@ test('a Meta refusal of one library template does not block the others', functio
 });
 
 test('the library action is disabled when every entry is already registered', function () {
-    foreach (app(App\Services\WhatsappTemplateLibrary::class)->all() as $entry) {
+    foreach (app(WhatsappTemplateLibrary::class)->all() as $entry) {
         WhatsappTemplate::factory()->create(['name' => $entry['name'], 'language' => $entry['language']]);
     }
 

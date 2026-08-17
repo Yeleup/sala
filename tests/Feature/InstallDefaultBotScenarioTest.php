@@ -123,6 +123,47 @@ test('типовой главный диалог укладывается в л�
     }
 });
 
+test('завершение любой ветки главного диалога возвращает контакта в главное меню', function () {
+    $this->artisan('bot:install-default-scenario')->assertSuccessful();
+
+    $definition = new ScenarioDefinition(BotScenario::main()->published_definition);
+    $nodeIds = collect(BotScenario::main()->published_definition['nodes'])->pluck('id');
+
+    // Тупиковых текстовых узлов после веток больше нет — все шесть
+    // AI-узлов и «Мои объявления» ведут выходом «Продолжить» в меню.
+    foreach ([
+        'collect_rental', 'collect_repair', 'collect_driver',
+        'search_rental', 'search_repair', 'search_driver',
+        'my_listings',
+    ] as $branchNodeId) {
+        expect($definition->target($branchNodeId, ScenarioDefinition::OUTPUT_CONTINUE))->toBe('main_menu');
+    }
+
+    expect($nodeIds)->not->toContain('after_collect')
+        ->and($nodeIds)->not->toContain('after_search');
+});
+
+test('новые тексты узлов главного диалога и заявки — дословно из копирайт-таблицы', function () {
+    $this->artisan('bot:install-default-scenario')->assertSuccessful();
+
+    $main = collect(BotScenario::main()->published_definition['nodes']);
+
+    expect($main->firstWhere('id', 'greeting')['text'])
+        ->toBe('Здравствуйте! Это сервис спецтехники: здесь сдают и ищут технику, зовут мастеров по ремонту, находят водителей и машинистов.')
+        ->and($main->firstWhere('id', 'main_menu')['text'])->toBe('Что вас интересует?')
+        ->and($main->firstWhere('id', 'menu_rental')['text'])->toBe('Аренда спецтехники. Вы предлагаете технику или ищете?')
+        ->and($main->firstWhere('id', 'menu_repair')['text'])->toBe('Ремонт спецтехники. Вы мастер или ищете мастера?')
+        ->and($main->firstWhere('id', 'menu_driver')['text'])->toBe('Водители и машинисты. Вы водитель или ищете водителя?')
+        ->and($main->firstWhere('id', 'my_listings')['text'])
+        ->toBe('Ваши объявления собраны в кабинете: статусы, причины отклонения, снятие с публикации. Кнопка ниже откроет его без пароля.');
+
+    $request = BotScenario::publishedForTrigger(BotScenarioTrigger::NewCustomerRequest);
+    $requestNodes = collect($request->published_definition['nodes']);
+
+    expect($requestNodes->firstWhere('id', 'already_decided')['text'])
+        ->toBe('По этой заявке вы уже ответили — первое решение осталось в силе.');
+});
+
 test('the installer publishes the flow scenarios next to the main dialog', function () {
     $this->artisan('bot:install-default-scenario')->assertSuccessful();
 

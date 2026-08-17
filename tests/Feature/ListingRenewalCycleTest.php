@@ -116,4 +116,3 @@ describe('ежедневный опрос актуальности', function ()
             ->and($listing->expires_at->isAfter(now()->addDays(29)))->toBeTrue();
     });
 });
-

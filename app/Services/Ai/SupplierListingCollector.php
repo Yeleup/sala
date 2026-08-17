@@ -107,6 +107,20 @@ class SupplierListingCollector
 
     public const string BUTTON_EDIT_TITLE = 'Исправить';
 
+    /** Releases the supplier from the questionnaire back to the main dialog. */
+    public const string BUTTON_MENU = 'collect_to_menu';
+
+    public const string BUTTON_MENU_TITLE = 'В меню';
+
+    /**
+     * WhatsApp lists hold at most 10 rows: at most this many places, the
+     * last row reserved for the «В меню» exit. A candidate left out is
+     * still pickable by typing its exact name — matchLocationChoice
+     * matches against the full stored candidate list, not just what is
+     * shown, mirroring the customer search.
+     */
+    private const int MAX_LOCATION_ROWS = 9;
+
     public function __construct(
         private readonly DereuMessenger $messenger,
         private readonly DereuMediaDownloader $mediaDownloader,
@@ -144,9 +158,10 @@ class SupplierListingCollector
         ];
         $session->save();
 
-        $this->messenger->sendText(
+        $this->messenger->sendButtons(
             $session->contact,
             trim((string) ($node['text'] ?? '')) ?: $kind->greeting(),
+            [['id' => self::BUTTON_MENU, 'title' => self::BUTTON_MENU_TITLE]],
         );
 
         return AiOutcome::InProgress;
@@ -158,6 +173,14 @@ class SupplierListingCollector
     public function resume(BotSession $session, array $node, InboundMessage $message): AiOutcome
     {
         $state = $this->normalizeState($session);
+
+        // «В меню» — by button tap or its typed title, the scenario-wide
+        // convention that typing a button's name equals pressing it
+        // (matchesButton already covers BUTTON_SUBMIT/BUTTON_EDIT the same
+        // way) — releases the supplier regardless of the phase.
+        if ($this->matchesButton($message, self::BUTTON_MENU, self::BUTTON_MENU_TITLE)) {
+            return $this->exitToMenu($session, $state);
+        }
 
         if ($state['phase'] === 'confirming') {
             return $this->handleConfirmation($session, $state, $message, $node);
@@ -198,9 +221,10 @@ class SupplierListingCollector
             }
 
             $this->persist($session, $state);
-            $this->messenger->sendText(
+            $this->messenger->sendButtons(
                 $session->contact,
-                'Не удалось разобрать сообщение. Опишите технику текстом, голосом или фото.',
+                'Сообщение не разобралось. Опишите предложение текстом, голосом или фото с подписью.',
+                [['id' => self::BUTTON_MENU, 'title' => self::BUTTON_MENU_TITLE]],
             );
 
             return AiOutcome::InProgress;
@@ -218,9 +242,10 @@ class SupplierListingCollector
             }
 
             $this->persist($session, $state);
-            $this->messenger->sendText(
+            $this->messenger->sendButtons(
                 $session->contact,
-                'Не получилось обработать сообщение. Повторите его, пожалуйста, ещё раз.',
+                'Что-то сбоит на нашей стороне. Отправьте сообщение, пожалуйста, ещё раз.',
+                [['id' => self::BUTTON_MENU, 'title' => self::BUTTON_MENU_TITLE]],
             );
 
             return AiOutcome::InProgress;
@@ -245,6 +270,16 @@ class SupplierListingCollector
             $state['transcript'] = array_slice($state['transcript'], 0, $intakeMark);
 
             return $this->abandon($session, $state);
+        }
+
+        // A worded request for the menu is the same exit as the «В меню»
+        // button, just spelled out instead of tapped — the transcript is
+        // rolled back exactly like a refusal, and the draft is preserved
+        // the same way (exitToMenu mirrors abandon()).
+        if ($intent === UserIntent::MenuRequested) {
+            $state['transcript'] = array_slice($state['transcript'], 0, $intakeMark);
+
+            return $this->exitToMenu($session, $state);
         }
 
         // The free answer is bounded like every other exit of the block.
@@ -386,7 +421,11 @@ class SupplierListingCollector
         $state['phase'] = 'collecting';
         $state['last_question'] = $this->clarificationQuestion($state['fields'], $missing, $kind);
         $this->persist($session, $state);
-        $this->messenger->sendText($session->contact, $state['last_question']);
+        $this->messenger->sendButtons(
+            $session->contact,
+            $state['last_question'],
+            [['id' => self::BUTTON_MENU, 'title' => self::BUTTON_MENU_TITLE]],
+        );
 
         return AiOutcome::InProgress;
     }
@@ -413,8 +452,8 @@ class SupplierListingCollector
         $this->messenger->sendCtaUrl(
             $session->contact,
             $collected
-                ? 'Данные объявления собраны. Откройте форму, чтобы проверить и отправить объявление.'
-                : 'Не получилось собрать все данные из переписки. Откройте форму и заполните объявление вручную.',
+                ? 'Всё собрано. Осталось проверить и отправить — это в форме по кнопке ниже.'
+                : 'Часть данных из переписки собрать не вышло. Удобнее закончить в форме по кнопке ниже — всё собранное уже там.',
             $collected ? 'Открыть объявление' : 'Заполнить вручную',
             $this->cta->editUrl($draft),
         );
@@ -455,6 +494,39 @@ class SupplierListingCollector
             $session->contact,
             'Хорошо, остановимся. Черновик объявления сохранили — он в вашем кабинете.',
         );
+
+        return AiOutcome::Completed;
+    }
+
+    /**
+     * «В меню» — by button, its typed title, or the worded intent — is the
+     * same draft-preserving exit as an explicit refusal (abandon()), with
+     * one difference: honesty about where the contact is headed. A saved
+     * draft still gets one line, because the supplier is leaving with
+     * something; an empty draft stays silent, because the main menu
+     * answers for itself right after — a second «ничего не сохранили»
+     * would just repeat what the empty exit already says by saying
+     * nothing.
+     *
+     * @param  array<string, mixed>  $state
+     */
+    private function exitToMenu(BotSession $session, array $state): AiOutcome
+    {
+        $attributes = $this->listingAttributes($state);
+
+        $hasContent = $state['draft_id'] !== null
+            || collect($attributes)->except('kind')->contains(fn (mixed $value): bool => filled($value));
+
+        if (! $hasContent) {
+            $this->persist($session, $state);
+
+            return AiOutcome::Completed;
+        }
+
+        $draft = $this->ensureDraft($session, $state);
+        $draft->update($attributes);
+        $this->persist($session, $state);
+        $this->messenger->sendText($session->contact, 'Черновик сохранили — он ждёт в кабинете.');
 
         return AiOutcome::Completed;
     }
@@ -518,9 +590,13 @@ class SupplierListingCollector
 
         $question = trim((string) ($state['last_question'] ?? ''));
         $greeting = trim((string) ($node['text'] ?? ''))
-            ?: 'Расскажите, что вы предлагаете: что это, в каком городе и по какой цене.';
+            ?: $this->kind($state)->greeting();
 
-        $this->messenger->sendText($session->contact, $question !== '' ? $question : $greeting);
+        $this->messenger->sendButtons(
+            $session->contact,
+            $question !== '' ? $question : $greeting,
+            [['id' => self::BUTTON_MENU, 'title' => self::BUTTON_MENU_TITLE]],
+        );
     }
 
     /**
@@ -668,6 +744,7 @@ class SupplierListingCollector
             ->whereIn('id', $candidates)
             ->orderBy('depth')
             ->orderBy('id')
+            ->limit(self::MAX_LOCATION_ROWS)
             ->get()
             ->map(fn (Location $location): array => array_filter([
                 'id' => self::LOCATION_ROW_PREFIX.$location->id,
@@ -684,7 +761,7 @@ class SupplierListingCollector
             $session->contact,
             'Нашли несколько подходящих мест — уточните, какое из них ваше.',
             'Выбрать место',
-            $rows,
+            [...$rows, ['id' => self::BUTTON_MENU, 'title' => self::BUTTON_MENU_TITLE]],
         );
     }
 
@@ -799,7 +876,7 @@ class SupplierListingCollector
             }
 
             $draft?->submitForModeration();
-            $this->messenger->sendText($session->contact, 'Спасибо! Объявление отправлено на проверку модератору.');
+            $this->messenger->sendText($session->contact, 'Готово! Объявление ушло на проверку. Как только модератор решит — сразу напишем.');
 
             return AiOutcome::Completed;
         }
@@ -808,11 +885,21 @@ class SupplierListingCollector
             if ($draft !== null) {
                 $this->messenger->sendCtaUrl(
                     $session->contact,
-                    'Откройте форму, чтобы проверить и поправить объявление.',
+                    'Дальше удобнее в форме — она по кнопке ниже, всё собранное уже там. Диалог в чате на этом закончим, черновик сохранён.',
                     'Открыть объявление',
                     $this->cta->editUrl($draft),
                 );
+
+                return AiOutcome::Completed;
             }
+
+            // The draft may have been deleted between the summary and the
+            // tap (e.g. submitted and then taken down from the cabinet):
+            // silence here would be an unexplained dead end.
+            $this->messenger->sendText(
+                $session->contact,
+                'Этот черновик уже удалён — править нечего. Если нужно, начните заново из меню.',
+            );
 
             return AiOutcome::Completed;
         }
@@ -1362,6 +1449,7 @@ class SupplierListingCollector
 
             $this->messenger->sendButtons($session->contact, $body, [
                 ['id' => self::BUTTON_EDIT, 'title' => self::BUTTON_EDIT_TITLE],
+                ['id' => self::BUTTON_MENU, 'title' => self::BUTTON_MENU_TITLE],
             ]);
 
             return;
@@ -1369,10 +1457,10 @@ class SupplierListingCollector
 
         $body = implode("\n", array_filter([
             $text,
-            'Всё верно? Нажмите «'.self::BUTTON_SUBMIT_TITLE.'», чтобы отправить объявление на проверку.',
-            // Last, after the call to action: put ahead of «Всё верно?» the
-            // ask would leave that question hanging on a request instead of
-            // on the collected data.
+            'Проверьте, всё ли верно. Если да — жмите «'.self::BUTTON_SUBMIT_TITLE.'», и объявление уйдёт на проверку.',
+            // Last, after the call to action: put ahead of the question the
+            // ask would leave it hanging on a request instead of on the
+            // collected data.
             $this->hasPhotos($state)
                 ? null
                 : 'Фотографий пока нет — пришлите снимки, с фото объявление смотрят охотнее.',
@@ -1381,6 +1469,7 @@ class SupplierListingCollector
         $this->messenger->sendButtons($session->contact, $body, [
             ['id' => self::BUTTON_SUBMIT, 'title' => self::BUTTON_SUBMIT_TITLE],
             ['id' => self::BUTTON_EDIT, 'title' => self::BUTTON_EDIT_TITLE],
+            ['id' => self::BUTTON_MENU, 'title' => self::BUTTON_MENU_TITLE],
         ]);
     }
 

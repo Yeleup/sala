@@ -185,8 +185,10 @@ function fakeMediaDownload(string $mediaId = 'wamid-doc'): void
 test('entering the AI block greets the supplier and keeps the turn', function () {
     $session = collectorSession();
 
-    fakeCollectorMessenger()->shouldReceive('sendText')->once()
-        ->withArgs(fn (Contact $to, string $text) => $to->is($session->contact) && str_contains($text, 'Расскажите'));
+    fakeCollectorMessenger()->shouldReceive('sendButtons')->once()
+        ->withArgs(fn (Contact $to, string $text, array $buttons) => $to->is($session->contact)
+            && str_contains($text, 'Расскажите')
+            && $buttons === [['id' => SupplierListingCollector::BUTTON_MENU, 'title' => SupplierListingCollector::BUTTON_MENU_TITLE]]);
 
     $outcome = app(SupplierListingCollector::class)->start($session, supplierAiNode());
 
@@ -197,8 +199,9 @@ test('entering the AI block greets the supplier and keeps the turn', function ()
 test('the AI block sends the operator text instead of the built-in greeting', function () {
     $session = collectorSession();
 
-    fakeCollectorMessenger()->shouldReceive('sendText')->once()
-        ->withArgs(fn (Contact $to, string $text) => $text === 'Что сдаёте? Напишите или наговорите.');
+    fakeCollectorMessenger()->shouldReceive('sendButtons')->once()
+        ->withArgs(fn (Contact $to, string $text, array $buttons) => $text === 'Что сдаёте? Напишите или наговорите.'
+            && $buttons === [['id' => SupplierListingCollector::BUTTON_MENU, 'title' => SupplierListingCollector::BUTTON_MENU_TITLE]]);
 
     app(SupplierListingCollector::class)->start(
         $session,
@@ -209,7 +212,7 @@ test('the AI block sends the operator text instead of the built-in greeting', fu
 test('an empty AI block text keeps the built-in greeting', function () {
     $session = collectorSession();
 
-    fakeCollectorMessenger()->shouldReceive('sendText')->once()
+    fakeCollectorMessenger()->shouldReceive('sendButtons')->once()
         ->withArgs(fn (Contact $to, string $text) => str_contains($text, 'Расскажите'));
 
     app(SupplierListingCollector::class)->start($session, supplierAiNode() + ['text' => '   ']);
@@ -222,8 +225,8 @@ test('a complete description creates a draft and asks for confirmation', functio
     fakeCollectorMessenger()->shouldReceive('sendButtons')->once()
         ->withArgs(fn (Contact $to, string $text, array $buttons) => str_contains($text, 'Название: Аренда трактора с водителем')
             && str_contains($text, 'Трактор, Шымкент, 10000 тг/ч')
-            && str_contains($text, 'Всё верно?')
-            && array_column($buttons, 'title') === ['Да, отправить', 'Исправить']
+            && str_contains($text, 'Проверьте, всё ли верно')
+            && array_column($buttons, 'title') === ['Да, отправить', 'Исправить', 'В меню']
             // Лимит WhatsApp: заголовок кнопки длиннее 20 символов Meta отклоняет асинхронно.
             && collect($buttons)->every(fn (array $button): bool => mb_strlen($button['title']) <= 20));
 
@@ -247,8 +250,9 @@ test('missing data triggers the clarifying question suggested by the extractor',
     ]);
     $session = collectorSession();
 
-    fakeCollectorMessenger()->shouldReceive('sendText')->once()
-        ->withArgs(fn (Contact $to, string $text) => $text === 'Какая цена или тариф за смену?');
+    fakeCollectorMessenger()->shouldReceive('sendButtons')->once()
+        ->withArgs(fn (Contact $to, string $text, array $buttons) => $text === 'Какая цена или тариф за смену?'
+            && $buttons === [['id' => SupplierListingCollector::BUTTON_MENU, 'title' => SupplierListingCollector::BUTTON_MENU_TITLE]]);
 
     $outcome = app(SupplierListingCollector::class)
         ->resume($session, supplierAiNode(), new InboundMessage(text: 'Сдаю трактор в Шымкенте'));
@@ -263,7 +267,7 @@ test('exhausting the clarification limit saves the partial draft and hands off t
     $session = collectorSession(['attempts' => 3, 'transcript' => ['Сдаю трактор в Шымкенте']]);
 
     fakeCollectorMessenger()->shouldReceive('sendCtaUrl')->once()
-        ->withArgs(fn (Contact $to, string $text, string $button, string $url) => str_contains($text, 'заполните объявление вручную')
+        ->withArgs(fn (Contact $to, string $text, string $button, string $url) => $text === 'Часть данных из переписки собрать не вышло. Удобнее закончить в форме по кнопке ниже — всё собранное уже там.'
             && mb_strlen($button) <= 20
             && str_contains($url, '/supplier/listings/')
             && str_contains($url, 'signature='));
@@ -283,7 +287,7 @@ test('the submit button sends the confirmed draft to moderation', function () {
     $session = collectorSession(['phase' => 'confirming', 'draft_id' => $draft->id]);
 
     fakeCollectorMessenger()->shouldReceive('sendText')->once()
-        ->withArgs(fn (Contact $to, string $text) => str_contains($text, 'отправлено на проверку'));
+        ->withArgs(fn (Contact $to, string $text) => $text === 'Готово! Объявление ушло на проверку. Как только модератор решит — сразу напишем.');
 
     $outcome = app(SupplierListingCollector::class)
         ->resume($session, supplierAiNode(), new InboundMessage(text: 'Да, отправить', replyId: SupplierListingCollector::BUTTON_SUBMIT));
@@ -297,7 +301,8 @@ test('the edit button sends the signed web link and finishes the collection', fu
     $session = collectorSession(['phase' => 'confirming', 'draft_id' => $draft->id]);
 
     fakeCollectorMessenger()->shouldReceive('sendCtaUrl')->once()
-        ->withArgs(fn (Contact $to, string $text, string $button, string $url) => mb_strlen($button) <= 20
+        ->withArgs(fn (Contact $to, string $text, string $button, string $url) => $text === 'Дальше удобнее в форме — она по кнопке ниже, всё собранное уже там. Диалог в чате на этом закончим, черновик сохранён.'
+            && mb_strlen($button) <= 20
             && str_contains($url, "/supplier/listings/{$draft->id}/edit")
             && str_contains($url, 'signature='));
 
@@ -307,6 +312,21 @@ test('the edit button sends the signed web link and finishes the collection', fu
 
     expect($outcome)->toBe(AiOutcome::Completed)
         ->and($draft->fresh()->status)->toBe(ListingStatus::Draft);
+});
+
+test('the edit button on a deleted draft explains instead of staying silent', function () {
+    // Черновик мог быть удалён (например, поставщик отправил объявление и
+    // затем снял его) между показом сводки и нажатием «Исправить» — молчание
+    // здесь было бы необъяснимым тупиком.
+    $session = collectorSession(['phase' => 'confirming', 'draft_id' => null]);
+
+    fakeCollectorMessenger()->shouldReceive('sendText')->once()
+        ->withArgs(fn (Contact $to, string $text) => $text === 'Этот черновик уже удалён — править нечего. Если нужно, начните заново из меню.');
+
+    $outcome = app(SupplierListingCollector::class)
+        ->resume($session, supplierAiNode(), new InboundMessage(text: 'Исправить', replyId: SupplierListingCollector::BUTTON_EDIT));
+
+    expect($outcome)->toBe(AiOutcome::Completed);
 });
 
 test('extra details during confirmation are re-extracted and confirmed again', function () {
@@ -369,8 +389,8 @@ test('an undownloadable voice message asks to rephrase without spending an attem
         ->shouldReceive('download')->once()->with('media-403')
         ->andThrow(new RuntimeException('403 Медиа принадлежит другой компании'));
 
-    fakeCollectorMessenger()->shouldReceive('sendText')->once()
-        ->withArgs(fn (Contact $to, string $text) => str_contains($text, 'Не удалось разобрать'));
+    fakeCollectorMessenger()->shouldReceive('sendButtons')->once()
+        ->withArgs(fn (Contact $to, string $text) => str_contains($text, 'Сообщение не разобралось'));
 
     $outcome = app(ScenarioAiAssistant::class)
         ->resume($session, supplierAiNode(), new InboundMessage(mediaType: ListingMediaType::Audio, mediaId: 'media-403'));
@@ -418,8 +438,8 @@ test('an undownloadable photo asks to rephrase without spending an attempt', fun
         ->shouldReceive('download')->once()->with('media-403')
         ->andThrow(new RuntimeException('403 Медиа принадлежит другой компании'));
 
-    fakeCollectorMessenger()->shouldReceive('sendText')->once()
-        ->withArgs(fn (Contact $to, string $text) => str_contains($text, 'Не удалось разобрать'));
+    fakeCollectorMessenger()->shouldReceive('sendButtons')->once()
+        ->withArgs(fn (Contact $to, string $text) => str_contains($text, 'Сообщение не разобралось'));
 
     $outcome = app(SupplierListingCollector::class)
         ->resume($session, supplierAiNode(), new InboundMessage(mediaType: ListingMediaType::Photo, mediaId: 'media-403'));
@@ -439,7 +459,7 @@ test('a failed photo download still feeds the caption to the extraction', functi
         ->andThrow(new RuntimeException('403 Медиа принадлежит другой компании'));
 
     fakeCollectorMessenger()->shouldReceive('sendButtons')->once()
-        ->withArgs(fn (Contact $to, string $text) => str_contains($text, 'Всё верно?'));
+        ->withArgs(fn (Contact $to, string $text) => str_contains($text, 'Проверьте, всё ли верно'));
 
     $outcome = app(SupplierListingCollector::class)->resume($session, supplierAiNode(), new InboundMessage(
         text: 'Сдаю трактор в Шымкенте, 10000 тг/час',
@@ -494,7 +514,7 @@ test('a caption-less photo is never treated as leaving the block', function () {
         ->andReturn(['contents' => 'JPEG-BYTES', 'mime_type' => 'image/jpeg']);
 
     fakeCollectorMessenger()->shouldReceive('sendButtons')->once()
-        ->withArgs(fn (Contact $to, string $text) => str_contains($text, 'Всё верно?'));
+        ->withArgs(fn (Contact $to, string $text) => str_contains($text, 'Проверьте, всё ли верно'));
 
     $outcome = app(SupplierListingCollector::class)->resume($session, supplierAiNode(), new InboundMessage(
         mediaType: ListingMediaType::Photo,
@@ -537,8 +557,8 @@ test('the confirmation asks for photos when the draft has none', function () {
     // без фотографий уходит на модерацию так же, как и с ними.
     fakeCollectorMessenger()->shouldReceive('sendButtons')->once()
         ->withArgs(fn (Contact $to, string $text, array $buttons) => str_contains($text, 'Фотографий пока нет')
-            && str_contains($text, 'Всё верно?')
-            && array_column($buttons, 'title') === ['Да, отправить', 'Исправить']);
+            && str_contains($text, 'Проверьте, всё ли верно')
+            && array_column($buttons, 'title') === ['Да, отправить', 'Исправить', 'В меню']);
 
     $outcome = app(SupplierListingCollector::class)
         ->resume($session, supplierAiNode(), new InboundMessage(text: 'Сдаю трактор в Шымкенте, 10000 тг/час'));
@@ -555,7 +575,7 @@ test('the confirmation does not ask for photos when the draft already has one', 
     $session = collectorSession(['draft_id' => $draft->id]);
 
     fakeCollectorMessenger()->shouldReceive('sendButtons')->once()
-        ->withArgs(fn (Contact $to, string $text) => str_contains($text, 'Всё верно?')
+        ->withArgs(fn (Contact $to, string $text) => str_contains($text, 'Проверьте, всё ли верно')
             && ! str_contains($text, 'Фотографий пока нет'));
 
     $outcome = app(SupplierListingCollector::class)
@@ -581,7 +601,7 @@ test('a photo sent at confirmation drops the request from the repeated summary',
         ->andReturn(['contents' => 'JPEG-BYTES', 'mime_type' => 'image/jpeg']);
 
     fakeCollectorMessenger()->shouldReceive('sendButtons')->once()
-        ->withArgs(fn (Contact $to, string $text) => str_contains($text, 'Всё верно?')
+        ->withArgs(fn (Contact $to, string $text) => str_contains($text, 'Проверьте, всё ли верно')
             && ! str_contains($text, 'Фотографий пока нет'));
 
     $outcome = app(SupplierListingCollector::class)->resume($session, supplierAiNode(), new InboundMessage(
@@ -597,8 +617,8 @@ test('an unreadable follow-up does not spend a clarification attempt', function 
     ListingExtractionAgent::fake()->preventStrayPrompts();
     $session = collectorSession(['attempts' => 1, 'transcript' => ['Сдаю трактор в Шымкенте']]);
 
-    fakeCollectorMessenger()->shouldReceive('sendText')->once()
-        ->withArgs(fn (Contact $to, string $text) => str_contains($text, 'Не удалось разобрать'));
+    fakeCollectorMessenger()->shouldReceive('sendButtons')->once()
+        ->withArgs(fn (Contact $to, string $text) => str_contains($text, 'Сообщение не разобралось'));
 
     $outcome = app(SupplierListingCollector::class)
         ->resume($session, supplierAiNode(), new InboundMessage);
@@ -643,7 +663,7 @@ test('a category outside the dictionary never reaches the draft and is asked aga
     ]);
     $session = collectorSession();
 
-    fakeCollectorMessenger()->shouldReceive('sendText')->once()
+    fakeCollectorMessenger()->shouldReceive('sendButtons')->once()
         ->withArgs(fn (Contact $to, string $text) => $text === 'Что именно за техника?');
 
     $outcome = app(SupplierListingCollector::class)
@@ -725,7 +745,7 @@ test('a brand outside the dictionary is dropped without a clarifying question', 
 
     // Марка необязательна: подтверждение отправляется сразу, попытки не тратятся.
     fakeCollectorMessenger()->shouldReceive('sendButtons')->once()
-        ->withArgs(fn (Contact $to, string $text) => str_contains($text, 'Всё верно?'));
+        ->withArgs(fn (Contact $to, string $text) => str_contains($text, 'Проверьте, всё ли верно'));
 
     $outcome = app(SupplierListingCollector::class)
         ->resume($session, supplierAiNode(), new InboundMessage(text: 'Сдаю трактор Цеппелин в Шымкенте, 10000 тг/час'));
@@ -776,9 +796,23 @@ test('промпт извлечения собирается из вида', fun
         ->not->toContain('Доступные марки');
 });
 
+test('промпт извлечения знает про intent «menu» и несёт правила тона уточняющего вопроса', function () {
+    // Симметрично SearchQueryExtractionAgent (Задача 2): menu — семантическая
+    // классификация («просит меню/другой раздел»), а не список фраз; тон и
+    // языковой гвард — в тех же словах, что у поискового агента.
+    $instructions = (string) (new ListingExtractionAgent(ListingKind::Rental))->instructions();
+
+    expect($instructions)
+        ->toContain('"menu"')
+        ->toContain('меню')
+        ->toContain('ТОЛЬКО на русском')
+        ->toContain('канцелярита')
+        ->toContain('первого лица в прошедшем времени');
+});
+
 test('вид узла попадает в состояние и в черновик, приветствие — своё', function () {
     $session = collectorSession();
-    fakeCollectorMessenger()->shouldReceive('sendText')->once()
+    fakeCollectorMessenger()->shouldReceive('sendButtons')->once()
         ->withArgs(fn ($to, string $text) => str_contains($text, 'на какой технике'));
 
     app(SupplierListingCollector::class)->start($session, driverAiNode());
@@ -809,7 +843,7 @@ test('у ремонта сбор завершается без цены и ка�
 test('лимит уточнений у водителя — шесть', function () {
     ListingExtractionAgent::fake([driverExtraction(['person_name' => null])]);
     $session = collectorSession(['kind' => 'driver', 'attempts' => 5]);
-    fakeCollectorMessenger()->shouldReceive('sendText')->once();      // ещё вопрос, не веб-форма
+    fakeCollectorMessenger()->shouldReceive('sendButtons')->once();      // ещё вопрос, не веб-форма
 
     app(SupplierListingCollector::class)->resume($session, driverAiNode(), new InboundMessage(text: 'стаж 8 лет'));
 
@@ -894,7 +928,7 @@ test('нажатие кнопки заполняет поле и ведёт да
 test('кнопочный вопрос уходит максимум дважды, потом обычный путь недостающего поля', function () {
     ListingExtractionAgent::fake([repairExtraction(['repair_place' => null])]);
     $session = collectorSession(['kind' => 'repair', 'button_prompts' => ['repair_place' => 2]]);
-    fakeCollectorMessenger()->shouldReceive('sendText')->once();      // текстовый вопрос, тратит попытку
+    fakeCollectorMessenger()->shouldReceive('sendButtons')->once();      // текстовый вопрос, тратит попытку
 
     app(SupplierListingCollector::class)->resume($session, repairAiNode(), new InboundMessage(text: 'ещё делаю сварку'));
 
@@ -926,7 +960,7 @@ test('водителю со всеми полями, но без докумен�
     $session = collectorSession(['kind' => 'driver']);
     fakeCollectorMessenger()->shouldReceive('sendButtons')->once()
         ->withArgs(fn ($to, string $text, array $buttons) => str_contains($text, 'фото удостоверения')
-            && count($buttons) === 1 && $buttons[0]['id'] === SupplierListingCollector::BUTTON_EDIT);
+            && array_column($buttons, 'id') === [SupplierListingCollector::BUTTON_EDIT, SupplierListingCollector::BUTTON_MENU]);
 
     app(SupplierListingCollector::class)->resume($session, driverAiNode(), new InboundMessage(text: 'Иван, экскаватор, 8 лет, Алматы, выезжаю'));
 
@@ -941,7 +975,7 @@ test('фотография в ответ на просьбу о документ
     $session = collectorSession(['kind' => 'driver', 'phase' => 'confirming', 'awaiting_document' => true,
         'fields' => driverExtraction(), 'draft_id' => ($draft = driverDraft())->id]);
     fakeCollectorMessenger()->shouldReceive('sendButtons')->once()
-        ->withArgs(fn ($to, $text, array $buttons) => count($buttons) === 2);   // полная сводка: документ есть
+        ->withArgs(fn ($to, $text, array $buttons) => count($buttons) === 3);   // полная сводка: документ есть
 
     app(SupplierListingCollector::class)->resume($session, driverAiNode(),
         new InboundMessage(mediaId: 'wamid-doc', mediaType: ListingMediaType::Photo));
@@ -963,7 +997,7 @@ test('фото на уточняющем крюке остаётся обычн�
     $session = collectorSession(['kind' => 'driver', 'awaiting_document' => true,
         'fields' => driverExtraction(), 'draft_id' => $draft->id]);
 
-    fakeCollectorMessenger()->shouldReceive('sendText')->once();   // уточняющий вопрос
+    fakeCollectorMessenger()->shouldReceive('sendButtons')->once();   // уточняющий вопрос
 
     app(SupplierListingCollector::class)->resume($session, driverAiNode(),
         new InboundMessage(text: 'на фото мой экскаватор', mediaId: 'wamid-detour', mediaType: ListingMediaType::Photo));
@@ -1005,7 +1039,7 @@ test('набранное руками «Да, отправить» без док
 
     fakeCollectorMessenger()->shouldReceive('sendButtons')->once()
         ->withArgs(fn ($to, string $text, array $buttons) => str_contains($text, 'фото удостоверения')
-            && count($buttons) === 1);
+            && count($buttons) === 2);
 
     $outcome = app(SupplierListingCollector::class)
         ->resume($session, driverAiNode(), new InboundMessage(text: 'Да, отправить'));
@@ -1060,9 +1094,9 @@ test('кнопочный ответ переживает следующее со
         'button_prompts' => ['repair_place' => 1]]);
 
     $messenger = fakeCollectorMessenger();
-    $messenger->shouldReceive('sendText')->once();      // вопрос про имя
+    $messenger->shouldReceive('sendButtons')->once();      // вопрос про имя
     $messenger->shouldReceive('sendButtons')->once()
-        ->withArgs(fn ($to, string $text) => str_contains($text, 'Всё верно?'));
+        ->withArgs(fn ($to, string $text) => str_contains($text, 'Проверьте, всё ли верно'));
 
     $collector = app(SupplierListingCollector::class);
     $collector->resume($session, repairAiNode(), new InboundMessage(replyId: 'kind_choice:repair_place:own_service', text: 'В своём сервисе'));
@@ -1107,7 +1141,7 @@ test('a missing title never blocks confirmation and never spends an attempt', fu
     // Название составляет сама модель: коллектор не считает его обязательным
     // и вопросов про него не задаёт — черновик уходит на подтверждение без него.
     fakeCollectorMessenger()->shouldReceive('sendButtons')->once()
-        ->withArgs(fn (Contact $to, string $text) => str_contains($text, 'Всё верно?'));
+        ->withArgs(fn (Contact $to, string $text) => str_contains($text, 'Проверьте, всё ли верно'));
 
     $outcome = app(SupplierListingCollector::class)
         ->resume($session, supplierAiNode(), new InboundMessage(text: 'Сдаю трактор в Шымкенте, 10000 тг/час'));
@@ -1164,9 +1198,10 @@ test('an ambiguous location sends a pick list without spending an attempt', func
 
     fakeCollectorMessenger()->shouldReceive('sendList')->once()
         ->withArgs(fn (Contact $to, string $text, string $button, array $rows) => str_contains($text, 'уточните')
-            && count($rows) === 2
+            && count($rows) === 3
             && collect($rows)->pluck('id')->contains('listing_location:'.$abaiDistrict->id)
-            && collect($rows)->pluck('id')->contains('listing_location:'.$shymkentDistrict->id));
+            && collect($rows)->pluck('id')->contains('listing_location:'.$shymkentDistrict->id)
+            && end($rows) === ['id' => SupplierListingCollector::BUTTON_MENU, 'title' => SupplierListingCollector::BUTTON_MENU_TITLE]);
 
     $outcome = app(SupplierListingCollector::class)
         ->resume($session, supplierAiNode(), new InboundMessage(text: 'Трактор, Абайский район, 10000 тг/час'));
@@ -1192,7 +1227,7 @@ test('the third same-named place list is replaced by a clarifying question', fun
     // Место в справочнике есть — именно поэтому список показывали дважды.
     // Формулировка «Не нашли» здесь была бы неправдой, а проверка на одно
     // лишь название места её бы пропустила.
-    $messenger->shouldReceive('sendText')->once()
+    $messenger->shouldReceive('sendButtons')->once()
         ->withArgs(fn (Contact $to, string $text) => $text === 'Мест с названием «Абайский район» в справочнике несколько, и мы не поняли, какое из них ваше. Напишите точнее — вместе с областью или районом.');
 
     $outcome = app(SupplierListingCollector::class)
@@ -1216,7 +1251,7 @@ test('a confident AI pick resolves same-named places without asking', function (
     // Привязанное место названо с цепочкой родителей: выбор сделан без
     // вопроса, и поставщик должен видеть, какой именно из тёзок это был.
     $messenger->shouldReceive('sendButtons')->once()
-        ->withArgs(fn (Contact $to, string $text) => str_contains($text, 'Всё верно?')
+        ->withArgs(fn (Contact $to, string $text) => str_contains($text, 'Проверьте, всё ли верно')
             && str_contains($text, 'Место: Абайский район, Карагандинская область'));
 
     $outcome = app(SupplierListingCollector::class)->resume(
@@ -1281,8 +1316,7 @@ test('a remembered AI pick is not put to the model again on later messages', fun
 
     $messenger = fakeCollectorMessenger();
     $messenger->shouldReceive('sendList')->never();
-    $messenger->shouldReceive('sendText')->once();
-    $messenger->shouldReceive('sendButtons')->once();
+    $messenger->shouldReceive('sendButtons')->twice();
 
     $collector = app(SupplierListingCollector::class);
     $collector->resume($session, supplierAiNode(), new InboundMessage(text: 'Трактор, Абайский район Карагандинской области'));
@@ -1349,7 +1383,7 @@ test('picking a location from the list resolves it and continues to confirmation
     $messenger = fakeCollectorMessenger();
     $messenger->shouldReceive('sendList')->once();
     $messenger->shouldReceive('sendButtons')->once()
-        ->withArgs(fn (Contact $to, string $text) => str_contains($text, 'Всё верно?'));
+        ->withArgs(fn (Contact $to, string $text) => str_contains($text, 'Проверьте, всё ли верно'));
 
     $collector = app(SupplierListingCollector::class);
     $collector->resume($session, supplierAiNode(), new InboundMessage(text: 'Трактор, Абайский район, 10000 тг/час'));
@@ -1380,10 +1414,10 @@ test('a picked location survives later messages without re-asking the list', fun
 
     $messenger = fakeCollectorMessenger();
     $messenger->shouldReceive('sendList')->once();
-    $messenger->shouldReceive('sendText')->once()
+    $messenger->shouldReceive('sendButtons')->once()
         ->withArgs(fn (Contact $to, string $text) => $text === 'Какая цена?');
     $messenger->shouldReceive('sendButtons')->once()
-        ->withArgs(fn (Contact $to, string $text) => str_contains($text, 'Всё верно?'));
+        ->withArgs(fn (Contact $to, string $text) => str_contains($text, 'Проверьте, всё ли верно'));
 
     $collector = app(SupplierListingCollector::class);
     $collector->resume($session, supplierAiNode(), new InboundMessage(text: 'Трактор, Абайский район'));
@@ -1409,8 +1443,7 @@ test('naming a different place after a pick rebinds instead of keeping the pick'
 
     $messenger = fakeCollectorMessenger();
     $messenger->shouldReceive('sendList')->once();
-    $messenger->shouldReceive('sendText')->once();
-    $messenger->shouldReceive('sendButtons')->once();
+    $messenger->shouldReceive('sendButtons')->twice();
 
     $collector = app(SupplierListingCollector::class);
     $collector->resume($session, supplierAiNode(), new InboundMessage(text: 'Трактор, Абайский район'));
@@ -1438,7 +1471,7 @@ test('correcting to a same-named place after a pick reopens the list', function 
 
     $messenger = fakeCollectorMessenger();
     $messenger->shouldReceive('sendList')->twice();
-    $messenger->shouldReceive('sendText')->once();
+    $messenger->shouldReceive('sendButtons')->once();
 
     $collector = app(SupplierListingCollector::class);
     $collector->resume($session, supplierAiNode(), new InboundMessage(text: 'Трактор, Абайский район'));
@@ -1466,10 +1499,11 @@ test('too many namesakes for a list are cut to their biggest disputed level', fu
     $session = collectorSession();
 
     fakeCollectorMessenger()->shouldReceive('sendList')->once()
-        ->withArgs(fn (Contact $to, string $text, string $button, array $rows) => count($rows) === 3
+        ->withArgs(fn (Contact $to, string $text, string $button, array $rows) => count($rows) === 4
             && collect($rows)->pluck('id')->contains('listing_location:'.$districtA->id)
             && collect($rows)->pluck('id')->contains('listing_location:'.$districtB->id)
-            && collect($rows)->pluck('id')->contains('listing_location:'.$districtC->id));
+            && collect($rows)->pluck('id')->contains('listing_location:'.$districtC->id)
+            && end($rows) === ['id' => SupplierListingCollector::BUTTON_MENU, 'title' => SupplierListingCollector::BUTTON_MENU_TITLE]);
 
     $outcome = app(SupplierListingCollector::class)
         ->resume($session, supplierAiNode(), new InboundMessage(text: 'Трактор, Абайский район, 10000 тг/час'));
@@ -1487,7 +1521,7 @@ test('namesakes beyond the list even at their biggest level ask for a bigger uni
     ListingExtractionAgent::fake([fullExtraction(['location' => 'Абайский район'])]);
     $session = collectorSession();
 
-    fakeCollectorMessenger()->shouldReceive('sendText')->once()
+    fakeCollectorMessenger()->shouldReceive('sendButtons')->once()
         ->withArgs(fn (Contact $to, string $text) => str_contains($text, 'Мест с названием «Абайский район» в справочнике слишком много'));
 
     $outcome = app(SupplierListingCollector::class)
@@ -1502,7 +1536,7 @@ test('a location outside the dictionary is asked again with the not-found hint',
     ListingExtractionAgent::fake([fullExtraction(['location' => 'Хогвартс'])]);
     $session = collectorSession();
 
-    fakeCollectorMessenger()->shouldReceive('sendText')->once()
+    fakeCollectorMessenger()->shouldReceive('sendButtons')->once()
         ->withArgs(fn (Contact $to, string $text) => str_contains($text, 'Не нашли «Хогвартс»'));
 
     $outcome = app(SupplierListingCollector::class)
@@ -1543,8 +1577,8 @@ test('a photo with a caption is attached to the draft and the caption is extract
 test('an unusable message asks the supplier to describe the offer without spending an attempt', function () {
     $session = collectorSession();
 
-    fakeCollectorMessenger()->shouldReceive('sendText')->once()
-        ->withArgs(fn (Contact $to, string $text) => str_contains($text, 'Не удалось разобрать'));
+    fakeCollectorMessenger()->shouldReceive('sendButtons')->once()
+        ->withArgs(fn (Contact $to, string $text) => str_contains($text, 'Сообщение не разобралось'));
 
     $outcome = app(SupplierListingCollector::class)
         ->resume($session, supplierAiNode(), new InboundMessage);
@@ -1641,6 +1675,87 @@ test('a refusal never lands in the listing description', function () {
         ->toBe(['Сдаю трактор в Шымкенте, 10000 тг/час']);
 });
 
+test('the «В меню» button saves the draft and ends the block, honestly', function (array $stateOverrides) {
+    // Каждая фаза анкеты — свой набор данных, дошедших до черновика:
+    // «В меню» сохраняет их точно так же, как явный отказ.
+    ListingExtractionAgent::fake()->preventStrayPrompts();
+    $session = collectorSession($stateOverrides);
+
+    fakeCollectorMessenger()->shouldReceive('sendText')->once()
+        ->withArgs(fn (Contact $to, string $text) => $text === 'Черновик сохранили — он ждёт в кабинете.');
+
+    $outcome = app(SupplierListingCollector::class)->resume(
+        $session,
+        supplierAiNode(),
+        new InboundMessage(text: 'В меню', replyId: SupplierListingCollector::BUTTON_MENU),
+    );
+
+    expect($outcome)->toBe(AiOutcome::Completed)
+        ->and(Listing::count())->toBe(1);
+    ListingExtractionAgent::assertNeverPrompted();
+})->with([
+    'сбор данных' => [['phase' => 'collecting', 'fields' => ['description' => 'Трактор в аренду']]],
+    'подтверждение' => [['phase' => 'confirming', 'fields' => ['description' => 'Трактор в аренду']]],
+    'выбор места' => [['phase' => 'locating', 'fields' => ['description' => 'Трактор в аренду', 'location_candidates' => [1, 2]]]],
+    'выбор кнопкой' => [['phase' => 'choosing', 'button_field' => 'repair_place', 'fields' => ['description' => 'Трактор в аренду']]],
+]);
+
+test('the typed title of «В меню» equals pressing it — the scenario-wide convention', function () {
+    ListingExtractionAgent::fake()->preventStrayPrompts();
+    $session = collectorSession(['fields' => ['description' => 'Трактор в аренду']]);
+
+    fakeCollectorMessenger()->shouldReceive('sendText')->once()
+        ->withArgs(fn (Contact $to, string $text) => $text === 'Черновик сохранили — он ждёт в кабинете.');
+
+    // Без replyId — только текст, регистронезависимо и с пробелами по краям.
+    $outcome = app(SupplierListingCollector::class)
+        ->resume($session, supplierAiNode(), new InboundMessage(text: '  в МЕНЮ  '));
+
+    expect($outcome)->toBe(AiOutcome::Completed);
+    ListingExtractionAgent::assertNeverPrompted();
+});
+
+test('«В меню» with nothing collected releases the supplier silently — the menu answers for itself', function () {
+    ListingExtractionAgent::fake()->preventStrayPrompts();
+    $session = collectorSession();
+
+    $messenger = fakeCollectorMessenger();
+    $messenger->shouldReceive('sendText')->never();
+    $messenger->shouldReceive('sendButtons')->never();
+    $messenger->shouldReceive('sendCtaUrl')->never();
+
+    $outcome = app(SupplierListingCollector::class)->resume(
+        $session,
+        supplierAiNode(),
+        new InboundMessage(text: 'В меню', replyId: SupplierListingCollector::BUTTON_MENU),
+    );
+
+    expect($outcome)->toBe(AiOutcome::Completed)
+        ->and(Listing::count())->toBe(0);
+});
+
+test('a worded request for the menu (user_intent «menu») exits the block exactly like the button', function () {
+    ListingExtractionAgent::fake([fullExtraction(['user_intent' => 'menu'])]);
+    $session = collectorSession([
+        'transcript' => ['Сдаю трактор в Шымкенте, 10000 тг/час'],
+        'fields' => fullExtraction(),
+    ]);
+
+    fakeCollectorMessenger()->shouldReceive('sendText')->once()
+        ->withArgs(fn (Contact $to, string $text) => $text === 'Черновик сохранили — он ждёт в кабинете.');
+
+    $outcome = app(SupplierListingCollector::class)
+        ->resume($session, supplierAiNode(), new InboundMessage(text: 'хочу в другой раздел'));
+
+    expect($outcome)->toBe(AiOutcome::Completed)
+        ->and(Listing::sole())
+        ->status->toBe(ListingStatus::Draft)
+        ->category->name->toBe('Трактор')
+        // Сообщение с просьбой меню изъято: транскрипт остался как был до него.
+        ->and($session->fresh()->state['transcript'])
+        ->toBe(['Сдаю трактор в Шымкенте, 10000 тг/час']);
+});
+
 test('a question about the service does not spend a clarification attempt', function () {
     ListingExtractionAgent::fake([fullExtraction(['price' => null, 'user_intent' => 'service_question'])]);
     $session = collectorSession([
@@ -1652,7 +1767,7 @@ test('a question about the service does not spend a clarification attempt', func
     $messenger = fakeCollectorMessenger();
     $messenger->shouldReceive('sendText')->once()
         ->withArgs(fn (Contact $to, string $text) => str_contains($text, 'оператор'));
-    $messenger->shouldReceive('sendText')->once()
+    $messenger->shouldReceive('sendButtons')->once()
         ->withArgs(fn (Contact $to, string $text) => $text === 'Какая цена или тариф?');
 
     $outcome = app(SupplierListingCollector::class)
@@ -1682,7 +1797,7 @@ test('a fourth service question in a row walks the ordinary collection path', fu
     $messenger->shouldReceive('sendText')->times(3)
         ->withArgs(fn (Contact $to, string $text) => str_contains($text, 'оператор'));
     // Три повтора текущего вопроса плюс он же как уточнение на четвёртом ходе.
-    $messenger->shouldReceive('sendText')->times(4)
+    $messenger->shouldReceive('sendButtons')->times(4)
         ->withArgs(fn (Contact $to, string $text) => $text === 'Какая цена или тариф?');
 
     $collector = app(SupplierListingCollector::class);
@@ -1715,7 +1830,7 @@ test('a service question before any clarifying question repeats the operator gre
     $messenger = fakeCollectorMessenger();
     $messenger->shouldReceive('sendText')->once()
         ->withArgs(fn (Contact $to, string $text) => str_contains($text, 'оператор'));
-    $messenger->shouldReceive('sendText')->once()
+    $messenger->shouldReceive('sendButtons')->once()
         ->withArgs(fn (Contact $to, string $text) => $text === 'Что сдаёте? Напишите или наговорите.');
 
     $outcome = app(SupplierListingCollector::class)->resume(
@@ -1748,7 +1863,7 @@ test('a service question while a place pick list is open resends the same list',
         ->withArgs(fn (Contact $to, string $text) => str_contains($text, 'оператор'));
     $messenger->shouldReceive('sendList')->once()
         ->withArgs(fn (Contact $to, string $text, string $button, array $rows) => str_contains($text, 'уточните')
-            && count($rows) === 2);
+            && count($rows) === 3);
 
     $outcome = app(SupplierListingCollector::class)
         ->resume($session, supplierAiNode(), new InboundMessage(text: 'а как это у вас работает?'));
@@ -1772,7 +1887,7 @@ test('a hand-off from the confirmation phase does not claim the data is missing'
     ]);
 
     fakeCollectorMessenger()->shouldReceive('sendCtaUrl')->once()
-        ->withArgs(fn (Contact $to, string $text, string $button, string $url) => $text === 'Данные объявления собраны. Откройте форму, чтобы проверить и отправить объявление.'
+        ->withArgs(fn (Contact $to, string $text, string $button, string $url) => $text === 'Всё собрано. Осталось проверить и отправить — это в форме по кнопке ниже.'
             && mb_strlen($button) <= 20
             && str_contains($url, "/supplier/listings/{$draft->id}/edit"));
 
@@ -1795,10 +1910,10 @@ test('an unreadable message during confirmation keeps the phase and the submit b
     ]);
 
     $messenger = fakeCollectorMessenger();
+    $messenger->shouldReceive('sendButtons')->once()
+        ->withArgs(fn (Contact $to, string $text) => str_contains($text, 'Сообщение не разобралось'));
     $messenger->shouldReceive('sendText')->once()
-        ->withArgs(fn (Contact $to, string $text) => str_contains($text, 'Не удалось разобрать'));
-    $messenger->shouldReceive('sendText')->once()
-        ->withArgs(fn (Contact $to, string $text) => str_contains($text, 'отправлено на проверку'));
+        ->withArgs(fn (Contact $to, string $text) => str_contains($text, 'ушло на проверку'));
 
     $collector = app(SupplierListingCollector::class);
     $collector->resume($session, supplierAiNode(), new InboundMessage);
@@ -1842,8 +1957,8 @@ test('a question during confirmation repeats the summary instead of re-collectin
     $messenger->shouldReceive('sendText')->once()
         ->withArgs(fn (Contact $to, string $text) => str_contains($text, 'оператор'));
     $messenger->shouldReceive('sendButtons')->once()
-        ->withArgs(fn (Contact $to, string $text, array $buttons) => str_contains($text, 'Всё верно?')
-            && array_column($buttons, 'title') === ['Да, отправить', 'Исправить']);
+        ->withArgs(fn (Contact $to, string $text, array $buttons) => str_contains($text, 'Проверьте, всё ли верно')
+            && array_column($buttons, 'title') === ['Да, отправить', 'Исправить', 'В меню']);
 
     $outcome = app(SupplierListingCollector::class)
         ->resume($session, supplierAiNode(), new InboundMessage(text: 'а сколько объявление висит?'));
@@ -1871,7 +1986,7 @@ test('the operator can override the service question reply', function () {
     $messenger = fakeCollectorMessenger();
     $messenger->shouldReceive('sendText')->once()
         ->withArgs(fn (Contact $to, string $text) => $text === 'Условия — на нашем сайте.');
-    $messenger->shouldReceive('sendText')->once()
+    $messenger->shouldReceive('sendButtons')->once()
         ->withArgs(fn (Contact $to, string $text) => $text === 'Какая цена или тариф?');
 
     app(SupplierListingCollector::class)
@@ -1884,8 +1999,8 @@ test('a single AI provider failure asks to repeat without spending an attempt', 
     ListingExtractionAgent::fake([fn () => throw new RuntimeException('AI недоступен')]);
     $session = collectorSession(['transcript' => ['Сдаю трактор']]);
 
-    fakeCollectorMessenger()->shouldReceive('sendText')->once()
-        ->withArgs(fn (Contact $to, string $text) => str_contains($text, 'Повторите его'));
+    fakeCollectorMessenger()->shouldReceive('sendButtons')->once()
+        ->withArgs(fn (Contact $to, string $text) => str_contains($text, 'Что-то сбоит на нашей стороне'));
 
     $outcome = app(SupplierListingCollector::class)
         ->resume($session, supplierAiNode(), new InboundMessage(text: 'в Шымкенте, 10000 тг/час'));

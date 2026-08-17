@@ -12,6 +12,7 @@ use App\Models\BotSession;
 use App\Models\Contact;
 use App\Models\CustomerRequest;
 use App\Models\Listing;
+use App\Models\Location;
 use App\Models\WhatsappTemplate;
 use App\Services\Ai\CustomerSearchAssistant;
 use App\Services\Ai\ScenarioAiAssistant;
@@ -724,8 +725,7 @@ test('пустое поддерево места присылает ссылку
     // WhatsApp не смешивает reply-кнопки и URL-кнопку: выход «В меню»
     // едет отдельным сообщением перед CTA в каталог.
     $messenger->shouldReceive('sendButtons')->once()->withArgs(
-        fn (Contact $contact, string $text, array $buttons): bool => str_contains($text, 'В «с.Карааул» пока пусто')
-            && str_contains($text, '«Абайский район»')
+        fn (Contact $contact, string $text, array $buttons): bool => $text === 'В «с.Карааул» пока пусто. Посмотрите шире: в каталоге уже подставлены ваш запрос и «Абайский район».'
             && $buttons[0]['id'] === CustomerSearchAssistant::BUTTON_MENU
             && $buttons[0]['title'] === CustomerSearchAssistant::BUTTON_MENU_TITLE,
     );
@@ -789,7 +789,7 @@ test('старая кнопка при пустом уровне выше при
 
     $messenger = fakeSearchMessenger();
     $messenger->shouldReceive('sendButtons')->once()->withArgs(
-        fn (Contact $contact, string $text, array $buttons): bool => str_contains($text, 'В «Абайский район» пока пусто')
+        fn (Contact $contact, string $text, array $buttons): bool => $text === 'В «Абайский район» пока пусто. Посмотрите шире: в каталоге уже подставлены ваш запрос и «область Абай».'
             && $buttons[0]['id'] === CustomerSearchAssistant::BUTTON_MENU,
     );
     $messenger->shouldReceive('sendCtaUrl')->once()->withArgs(
@@ -1085,8 +1085,7 @@ test('picking a place with an empty subtree sends the wider catalog link', funct
 
     $messenger = fakeSearchMessenger();
     $messenger->shouldReceive('sendButtons')->once()->withArgs(
-        fn (Contact $contact, string $text, array $buttons): bool => str_contains($text, 'В «Абайский район» пока пусто')
-            && str_contains($text, '«Карагандинская область»')
+        fn (Contact $contact, string $text, array $buttons): bool => $text === 'В «Абайский район» пока пусто. Посмотрите шире: в каталоге уже подставлены ваш запрос и «Карагандинская область».'
             && $buttons[0]['id'] === CustomerSearchAssistant::BUTTON_MENU,
     );
     $messenger->shouldReceive('sendCtaUrl')->once()->withArgs(
@@ -1193,6 +1192,72 @@ test('an ordinal digit picks the N-th place candidate while picking a place', fu
     expect($outcome)->toBe(AiOutcome::InProgress)
         ->and($session->refresh()->state['phase'])->toBe('choosing')
         ->and($session->state['location_id'])->toBe($districtA->id);
+});
+
+test('an ordinal at the last displayed row picks it, even with a tenth hidden candidate behind it', function () {
+    SearchQueryExtractionAgent::fake()->preventStrayPrompts();
+    // Список мест держит максимум 9 строк (плюс «В меню»); state хранит
+    // до 10 (LocationResolver::MAX_CANDIDATES) — «9» должна попадать в
+    // последнюю ПОКАЗАННУЮ строку, а не быть отклонена из-за того, что
+    // где-то за пределами экрана есть ещё один кандидат.
+    $districts = collect(range(1, 10))
+        ->map(fn (int $i): Location => locationNamed('Абайский район', locationNamed("Область {$i}")))
+        ->values();
+    $ninth = $districts[8];
+    $inNinth = Listing::factory()->published()->create([
+        'category_id' => categoryNamed('Автокран')->id, 'description' => 'Кран 25 тонн', 'location_id' => $ninth->id,
+    ]);
+
+    $messenger = fakeSearchMessenger();
+    $messenger->shouldReceive('sendList')->once()->withArgs(
+        fn (Contact $contact, string $text, string $button, array $rows): bool => $rows[0]['id'] === "listing:{$inNinth->id}",
+    );
+    expectCatalogCta($messenger);
+
+    $session = searchSession([
+        'phase' => 'locating',
+        'query' => 'кран 25 тонн, Абайский район',
+        'location_candidates' => $districts->pluck('id')->all(),
+    ]);
+    $outcome = app(CustomerSearchAssistant::class)
+        ->resume($session, customerAiNode(), new InboundMessage(text: '9'));
+
+    expect($outcome)->toBe(AiOutcome::InProgress)
+        ->and($session->refresh()->state['phase'])->toBe('choosing')
+        ->and($session->state['location_id'])->toBe($ninth->id);
+});
+
+test('an ordinal past the displayed rows does not pick the hidden tenth location candidate', function () {
+    // «10» не входит в отображённые 9 строк списка мест (MAX_OFFERED_ROWS),
+    // хотя в state лежит все 10 кандидатов (LocationResolver::MAX_CANDIDATES)
+    // — цифра не должна вслепую выбирать скрытого десятого кандидата, а
+    // должна уйти обычным текстом в интейк.
+    SearchQueryExtractionAgent::fake([[
+        'subject' => null, 'location' => null, 'location_any' => false,
+        'clarifying_question' => '', 'user_intent' => 'task',
+    ]]);
+    $districts = collect(range(1, 10))
+        ->map(fn (int $i): Location => locationNamed('Абайский район', locationNamed("Область {$i}")))
+        ->values();
+    $tenth = $districts[9];
+
+    $messenger = fakeSearchMessenger();
+    $messenger->shouldReceive('sendButtons')->once()->withArgs(
+        fn (Contact $contact, string $text, array $buttons): bool => $text === 'Какая техника нужна?'
+            && $buttons[0]['id'] === CustomerSearchAssistant::BUTTON_MENU,
+    );
+
+    $session = searchSession([
+        'phase' => 'locating',
+        'query' => 'кран, Абайский район',
+        'location_candidates' => $districts->pluck('id')->all(),
+    ]);
+    $outcome = app(CustomerSearchAssistant::class)
+        ->resume($session, customerAiNode(), new InboundMessage(text: '10'));
+
+    expect($outcome)->toBe(AiOutcome::InProgress)
+        ->and($session->refresh()->state['location_id'])->not->toBe($tenth->id)
+        ->and($session->state['location_id'])->toBeNull();
 });
 
 test('any other text while picking a place is treated as a refined search', function () {

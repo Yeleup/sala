@@ -689,7 +689,12 @@ class CustomerSearchAssistant
             return $byName->first();
         }
 
-        $ordinal = $this->matchOrdinal($candidates, $message);
+        // Ordinal position is 1-indexed over what the customer actually
+        // sees: sendLocationChoices() renders at most MAX_OFFERED_ROWS
+        // candidates, while $candidates here can hold up to
+        // LocationResolver::MAX_CANDIDATES (10) — a hidden 10th candidate
+        // stays reachable only by its exact typed name, matched above.
+        $ordinal = $this->matchOrdinal(array_slice($candidates, 0, self::MAX_OFFERED_ROWS), $message);
 
         return $ordinal !== null ? Location::find($ordinal) : null;
     }

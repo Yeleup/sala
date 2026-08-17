@@ -69,6 +69,13 @@ class CustomerSearchAssistant
 
     private const int ROW_DESCRIPTION_LIMIT = 72;
 
+    /**
+     * WhatsApp lists hold at most 10 rows: every offered list (search
+     * results, location candidates) shows at most this many entries, the
+     * last slot reserved for the «В меню» exit row.
+     */
+    public const int MAX_OFFERED_ROWS = 9;
+
     public const string LIST_BUTTON = 'Варианты';
 
     /**
@@ -142,9 +149,9 @@ class CustomerSearchAssistant
         $state = is_array($session->state) ? $session->state : [];
         $state += $this->defaultState();
 
-        // «В меню» from a dead-end search releases the contact to the main
-        // dialog regardless of the phase — routed strictly by button id.
-        if ($message->replyId === self::BUTTON_MENU) {
+        // «В меню» — by button tap or its typed name — releases the contact
+        // to the main dialog regardless of the phase.
+        if ($this->matchesMenuButton($message)) {
             return AiOutcome::Completed;
         }
 
@@ -188,9 +195,10 @@ class CustomerSearchAssistant
             // attempt or a clarifying question.
             if ($input === '') {
                 $this->persist($session, $state);
-                $this->messenger->sendText(
+                $this->messenger->sendButtons(
                     $session->contact,
                     'Не удалось распознать голосовое сообщение. Напишите, пожалуйста, текстом: что нужно и в каком городе.',
+                    [['id' => self::BUTTON_MENU, 'title' => self::BUTTON_MENU_TITLE]],
                 );
 
                 return AiOutcome::InProgress;
@@ -199,9 +207,10 @@ class CustomerSearchAssistant
 
         if ($input === '') {
             $this->persist($session, $state);
-            $this->messenger->sendText(
+            $this->messenger->sendButtons(
                 $session->contact,
                 'Опишите, пожалуйста, текстом: что нужно и в каком городе.',
+                [['id' => self::BUTTON_MENU, 'title' => self::BUTTON_MENU_TITLE]],
             );
 
             return AiOutcome::InProgress;
@@ -232,6 +241,16 @@ class CustomerSearchAssistant
             $state['transcript'] = array_slice($state['transcript'], 0, $intakeMark);
             $this->persist($session, $state);
             $this->messenger->sendText($session->contact, 'Хорошо, остановимся.');
+
+            return AiOutcome::Completed;
+        }
+
+        // A worded request for the menu is the same exit as the «В меню»
+        // button, just spelled out instead of tapped — the graph carries
+        // the contact to the main dialog, so no message goes out here.
+        if ($intent === UserIntent::MenuRequested) {
+            $state['transcript'] = array_slice($state['transcript'], 0, $intakeMark);
+            $this->persist($session, $state);
 
             return AiOutcome::Completed;
         }
@@ -310,7 +329,11 @@ class CustomerSearchAssistant
             $state['clarifications']++;
             $state['last_question'] = $this->clarifyingQuestion($requirements, $missing, $candidates);
             $this->persist($session, $state);
-            $this->messenger->sendText($session->contact, $state['last_question']);
+            $this->messenger->sendButtons(
+                $session->contact,
+                $state['last_question'],
+                [['id' => self::BUTTON_MENU, 'title' => self::BUTTON_MENU_TITLE]],
+            );
 
             return AiOutcome::InProgress;
         }
@@ -383,6 +406,10 @@ class CustomerSearchAssistant
      */
     protected function offerMatches(BotSession $session, array $state, string $query, Collection $matches, ?Location $location = null): AiOutcome
     {
+        // WhatsApp lists hold at most 10 rows: at most 9 matches, the last
+        // row reserved for the «В меню» exit.
+        $matches = $matches->take(self::MAX_OFFERED_ROWS);
+
         $state['phase'] = 'choosing';
         $state['query'] = $query;
         $state['offered'] = $matches->pluck('id')->all();
@@ -397,7 +424,10 @@ class CustomerSearchAssistant
                 ? sprintf('Не нашли «%s» в справочнике мест, поэтому показываем варианты без учёта места. Выберите вариант — и мы отправим заявку поставщику:', $unresolvedLocation)
                 : 'Вот что нашлось по вашему запросу. Выберите вариант — и мы отправим заявку поставщику:',
             self::LIST_BUTTON,
-            $matches->map(fn (Listing $listing): array => $this->listRow($listing))->all(),
+            [
+                ...$matches->map(fn (Listing $listing): array => $this->listRow($listing))->all(),
+                ['id' => self::BUTTON_MENU, 'title' => self::BUTTON_MENU_TITLE],
+            ],
         );
 
         $this->sendCatalogCta(
@@ -430,9 +460,18 @@ class CustomerSearchAssistant
         $state['expand_location_id'] = null;
         $this->persist($session, $state);
 
+        // WhatsApp cannot mix reply buttons with a URL button: the «В
+        // меню» exit rides its own message ahead of the catalog CTA,
+        // mirroring sendDeadEnd.
+        $this->messenger->sendButtons(
+            $session->contact,
+            sprintf('По «%s» сейчас ничего нет. Посмотрите шире — в каталоге уже подставлены ваш запрос и «%s».', $location->name, $parent->name),
+            [['id' => self::BUTTON_MENU, 'title' => self::BUTTON_MENU_TITLE]],
+        );
+
         $this->sendCatalogCta(
             $session,
-            sprintf('По «%s» сейчас ничего нет. Посмотрите шире — в каталоге уже подставлены ваш запрос и «%s».', $location->name, $parent->name),
+            'А ещё можно посмотреть весь каталог — вдруг подойдёт что-то из него.',
             self::CATALOG_BUTTON_DEAD_END,
             (($state['subject'] ?? null) ?: $query),
             $parent,
@@ -471,21 +510,29 @@ class CustomerSearchAssistant
      */
     protected function sendLocationChoices(BotSession $session, EloquentCollection $candidates): void
     {
+        // WhatsApp lists hold at most 10 rows: at most 9 candidates, the
+        // last row reserved for the «В меню» exit. A candidate left out
+        // is still pickable by typing its exact name (matchLocationChoice
+        // matches against the full stored list, not just what is shown).
         $this->messenger->sendList(
             $session->contact,
             'Нашли несколько подходящих мест — уточните, в каком из них искать.',
             self::LOCATION_LIST_BUTTON,
-            $candidates
-                ->map(fn (Location $location): array => array_filter([
-                    'id' => self::LOCATION_ROW_PREFIX.$location->id,
-                    'title' => WhatsappText::clamp($location->name, self::ROW_TITLE_LIMIT),
-                    'description' => WhatsappText::clamp(
-                        $location->ancestors()->sortByDesc('depth')->pluck('name')->implode(', '),
-                        self::ROW_DESCRIPTION_LIMIT,
-                    ) ?: null,
-                ]))
-                ->values()
-                ->all(),
+            [
+                ...$candidates
+                    ->take(self::MAX_OFFERED_ROWS)
+                    ->map(fn (Location $location): array => array_filter([
+                        'id' => self::LOCATION_ROW_PREFIX.$location->id,
+                        'title' => WhatsappText::clamp($location->name, self::ROW_TITLE_LIMIT),
+                        'description' => WhatsappText::clamp(
+                            $location->ancestors()->sortByDesc('depth')->pluck('name')->implode(', '),
+                            self::ROW_DESCRIPTION_LIMIT,
+                        ) ?: null,
+                    ]))
+                    ->values()
+                    ->all(),
+                ['id' => self::BUTTON_MENU, 'title' => self::BUTTON_MENU_TITLE],
+            ],
         );
     }
 
@@ -513,9 +560,10 @@ class CustomerSearchAssistant
         }
 
         if ($state['phase'] === 'choosing') {
-            $this->messenger->sendText(
+            $this->messenger->sendButtons(
                 $session->contact,
                 'Выберите вариант из списка выше или уточните запрос.',
+                [['id' => self::BUTTON_MENU, 'title' => self::BUTTON_MENU_TITLE]],
             );
 
             return;
@@ -687,6 +735,17 @@ class CustomerSearchAssistant
     {
         return $message->replyId === self::BUTTON_EXPAND
             || mb_strtolower(trim((string) $message->text)) === mb_strtolower(self::BUTTON_EXPAND_TITLE);
+    }
+
+    /**
+     * The «В меню» exit — by row/button id or its typed title, the
+     * scenario-wide convention that typing a button's name equals
+     * pressing it (matchesExpandButton, matchChoice).
+     */
+    private function matchesMenuButton(InboundMessage $message): bool
+    {
+        return $message->replyId === self::BUTTON_MENU
+            || mb_strtolower(trim((string) $message->text)) === mb_strtolower(self::BUTTON_MENU_TITLE);
     }
 
     /**

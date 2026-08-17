@@ -18,6 +18,9 @@ enum UserIntent: string
     /** A question about the service itself, not about the offer or the search. */
     case ServiceQuestion = 'service_question';
 
+    /** The person asks for the main menu or another section. */
+    case MenuRequested = 'menu';
+
     /**
      * A missing or unknown value is an ordinary task message: the schema
      * enum already constrains the model, and guessing an exit from a

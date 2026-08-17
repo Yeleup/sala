@@ -125,11 +125,14 @@ test('a complete query returns a ranked list of matching published listings', fu
 
     $messenger = fakeSearchMessenger();
     $messenger->shouldReceive('sendList')->once()->withArgs(function (Contact $contact, string $text, string $button, array $rows) use ($crane25, $crane10): bool {
-        return count($rows) === 2
+        return count($rows) === 3
             && $rows[0]['id'] === "listing:{$crane25->id}"
             && $rows[0]['title'] === 'Автокран'
             && str_contains($rows[0]['description'], 'Шымкент')
-            && $rows[1]['id'] === "listing:{$crane10->id}";
+            && $rows[1]['id'] === "listing:{$crane10->id}"
+            // Последняя строка списка всегда «В меню».
+            && $rows[2]['id'] === CustomerSearchAssistant::BUTTON_MENU
+            && $rows[2]['title'] === CustomerSearchAssistant::BUTTON_MENU_TITLE;
     });
     expectCatalogCta($messenger);
 
@@ -140,6 +143,29 @@ test('a complete query returns a ranked list of matching published listings', fu
     expect($outcome)->toBe(AiOutcome::InProgress)
         ->and($session->refresh()->state['phase'])->toBe('choosing')
         ->and($session->state['offered'])->toBe([$crane25->id, $crane10->id]);
+});
+
+test('ten or more matches are capped at nine plus the menu row', function () {
+    SearchQueryExtractionAgent::fake([fullSearchIntake(['subject' => 'кран', 'location' => null, 'location_any' => true])]);
+    Listing::factory()->count(11)->published()->create(['category_id' => categoryNamed('Автокран')->id, 'description' => 'Кран']);
+
+    $messenger = fakeSearchMessenger();
+    $messenger->shouldReceive('sendList')->once()->withArgs(
+        // Матчер сам отдаёт не больше 10 (ListingMatcher::MAX_RESULTS);
+        // выдача дополнительно обрезается до 9 объявлений — десятая
+        // строка списка всегда «В меню».
+        fn (Contact $contact, string $text, string $button, array $rows): bool => count($rows) === 10
+            && $rows[9]['id'] === CustomerSearchAssistant::BUTTON_MENU
+            && $rows[9]['title'] === CustomerSearchAssistant::BUTTON_MENU_TITLE,
+    );
+    expectCatalogCta($messenger);
+
+    $session = searchSession();
+    $outcome = app(CustomerSearchAssistant::class)
+        ->resume($session, customerAiNode(), new InboundMessage(text: 'нужен кран'));
+
+    expect($outcome)->toBe(AiOutcome::InProgress)
+        ->and($session->refresh()->state['offered'])->toHaveCount(9);
 });
 
 test('a listing title leads the search result row instead of the category name', function () {
@@ -175,8 +201,9 @@ test('the query words match the listing title alone', function () {
 
     $messenger = fakeSearchMessenger();
     $messenger->shouldReceive('sendList')->once()->withArgs(
-        fn (Contact $contact, string $text, string $button, array $rows): bool => count($rows) === 1
-            && $rows[0]['id'] === "listing:{$listing->id}",
+        fn (Contact $contact, string $text, string $button, array $rows): bool => count($rows) === 2
+            && $rows[0]['id'] === "listing:{$listing->id}"
+            && $rows[1]['id'] === CustomerSearchAssistant::BUTTON_MENU,
     );
     expectCatalogCta($messenger);
 
@@ -200,9 +227,10 @@ test('a brand in the query ranks the branded listing first', function () {
 
     $messenger = fakeSearchMessenger();
     $messenger->shouldReceive('sendList')->once()->withArgs(
-        fn (Contact $contact, string $text, string $button, array $rows): bool => count($rows) === 2
+        fn (Contact $contact, string $text, string $button, array $rows): bool => count($rows) === 3
             && $rows[0]['id'] === "listing:{$hitachi->id}"
-            && $rows[1]['id'] === "listing:{$noBrand->id}",
+            && $rows[1]['id'] === "listing:{$noBrand->id}"
+            && $rows[2]['id'] === CustomerSearchAssistant::BUTTON_MENU,
     );
     expectCatalogCta($messenger);
 
@@ -252,8 +280,9 @@ test('an undownloadable voice message asks to type the query without spending an
         ->andThrow(new RuntimeException('403 Медиа принадлежит другой компании'));
 
     $messenger = fakeSearchMessenger();
-    $messenger->shouldReceive('sendText')->once()->withArgs(
-        fn (Contact $contact, string $text): bool => str_contains($text, 'Не удалось распознать голосовое'),
+    $messenger->shouldReceive('sendButtons')->once()->withArgs(
+        fn (Contact $contact, string $text, array $buttons): bool => str_contains($text, 'Не удалось распознать голосовое')
+            && $buttons[0]['id'] === CustomerSearchAssistant::BUTTON_MENU,
     );
 
     $session = searchSession();
@@ -273,8 +302,9 @@ test('a silent voice message asks to type the query', function () {
         ->andReturn(['contents' => 'OGG-BYTES', 'mime_type' => 'audio/ogg']);
 
     $messenger = fakeSearchMessenger();
-    $messenger->shouldReceive('sendText')->once()->withArgs(
-        fn (Contact $contact, string $text): bool => str_contains($text, 'Не удалось распознать голосовое'),
+    $messenger->shouldReceive('sendButtons')->once()->withArgs(
+        fn (Contact $contact, string $text, array $buttons): bool => str_contains($text, 'Не удалось распознать голосовое')
+            && $buttons[0]['id'] === CustomerSearchAssistant::BUTTON_MENU,
     );
 
     $outcome = app(ScenarioAiAssistant::class)
@@ -311,6 +341,24 @@ test('pressing «В меню» at a dead-end releases the contact from the searc
 
     expect($outcome)->toBe(AiOutcome::Completed);
 });
+
+test('typing «в меню» equals pressing it, in every phase', function (string $phase, array $extraState) {
+    SearchQueryExtractionAgent::fake()->preventStrayPrompts();
+    fakeSearchMessenger()->shouldNotReceive('sendText', 'sendButtons', 'sendList', 'sendCtaUrl');
+
+    $session = searchSession(['phase' => $phase, ...$extraState]);
+    $outcome = app(CustomerSearchAssistant::class)
+        ->resume($session, customerAiNode(), new InboundMessage(text: '  в МЕНЮ  '));
+
+    // Набранное название кнопки — без регистра и с тримом — не запускает
+    // поиск и не тратит попытку/уточнение: та же конвенция, что и у
+    // matchesExpandButton/matchChoice.
+    expect($outcome)->toBe(AiOutcome::Completed);
+})->with([
+    'searching' => ['searching', []],
+    'choosing' => ['choosing', ['query' => 'кран', 'offered' => [999999]]],
+    'locating' => ['locating', ['query' => 'кран, тест', 'location_candidates' => [999999]]],
+]);
 
 test('the third fruitless search releases the contact back to the scenario with the catalog CTA', function () {
     SearchQueryExtractionAgent::fake([fullSearchIntake(['subject' => 'вертолёт', 'location' => null, 'location_any' => true])]);
@@ -523,8 +571,9 @@ test('any other text while choosing is treated as a refined search', function ()
 
     $messenger = fakeSearchMessenger();
     $messenger->shouldReceive('sendList')->once()->withArgs(
-        fn (Contact $contact, string $text, string $button, array $rows): bool => count($rows) === 1
-            && $rows[0]['id'] === "listing:{$digger->id}",
+        fn (Contact $contact, string $text, string $button, array $rows): bool => count($rows) === 2
+            && $rows[0]['id'] === "listing:{$digger->id}"
+            && $rows[1]['id'] === CustomerSearchAssistant::BUTTON_MENU,
     );
     expectCatalogCta($messenger);
 
@@ -548,8 +597,9 @@ test('a city query covers listings in the city districts', function () {
 
     $messenger = fakeSearchMessenger();
     $messenger->shouldReceive('sendList')->once()->withArgs(
-        fn (Contact $contact, string $text, string $button, array $rows): bool => count($rows) === 1
-            && $rows[0]['id'] === "listing:{$listing->id}",
+        fn (Contact $contact, string $text, string $button, array $rows): bool => count($rows) === 2
+            && $rows[0]['id'] === "listing:{$listing->id}"
+            && $rows[1]['id'] === CustomerSearchAssistant::BUTTON_MENU,
     );
     expectCatalogCta($messenger);
 
@@ -591,10 +641,16 @@ test('пустое поддерево места присылает ссылку
     locationNamed('с.Карааул', $district);
 
     $messenger = fakeSearchMessenger();
-    $messenger->shouldReceive('sendCtaUrl')->once()->withArgs(
-        fn (Contact $contact, string $text, string $button, string $url): bool => str_contains($text, 'По «с.Карааул» сейчас ничего нет')
+    // WhatsApp не смешивает reply-кнопки и URL-кнопку: выход «В меню»
+    // едет отдельным сообщением перед CTA в каталог.
+    $messenger->shouldReceive('sendButtons')->once()->withArgs(
+        fn (Contact $contact, string $text, array $buttons): bool => str_contains($text, 'По «с.Карааул» сейчас ничего нет')
             && str_contains($text, '«Абайский район»')
-            && $button === CustomerSearchAssistant::CATALOG_BUTTON_DEAD_END
+            && $buttons[0]['id'] === CustomerSearchAssistant::BUTTON_MENU
+            && $buttons[0]['title'] === CustomerSearchAssistant::BUTTON_MENU_TITLE,
+    );
+    $messenger->shouldReceive('sendCtaUrl')->once()->withArgs(
+        fn (Contact $contact, string $text, string $button, string $url): bool => $button === CustomerSearchAssistant::CATALOG_BUTTON_DEAD_END
             && str_contains($url, "location_id={$district->id}")
             && str_contains(urldecode($url), 'кран')
             && ! str_contains(urldecode($url), 'Карааул'),
@@ -651,9 +707,12 @@ test('старая кнопка при пустом уровне выше при
     $district = locationNamed('Абайский район', $region);
 
     $messenger = fakeSearchMessenger();
+    $messenger->shouldReceive('sendButtons')->once()->withArgs(
+        fn (Contact $contact, string $text, array $buttons): bool => str_contains($text, 'По «Абайский район» сейчас ничего нет')
+            && $buttons[0]['id'] === CustomerSearchAssistant::BUTTON_MENU,
+    );
     $messenger->shouldReceive('sendCtaUrl')->once()->withArgs(
-        fn (Contact $contact, string $text, string $button, string $url): bool => str_contains($text, 'По «Абайский район» сейчас ничего нет')
-            && str_contains($url, "location_id={$region->id}"),
+        fn (Contact $contact, string $text, string $button, string $url): bool => str_contains($url, "location_id={$region->id}"),
     );
 
     $session = searchSession([
@@ -696,7 +755,9 @@ test('a selection of a listing that expired after the search is not accepted', f
     $listing = Listing::factory()->expired()->create(['category_id' => categoryNamed('Автокран')->id]);
 
     $messenger = fakeSearchMessenger();
-    $messenger->shouldReceive('sendText')->once(); // «ничего не нашлось» from the re-search fallback
+    // Реплай без текста не подбирает объявление (уже не searchable) и
+    // проваливается в обычную ветку пустого ввода.
+    $messenger->shouldReceive('sendButtons')->once();
 
     $session = searchSession(['phase' => 'choosing', 'query' => 'кран', 'offered' => [$listing->id]]);
     $outcome = app(CustomerSearchAssistant::class)
@@ -715,8 +776,11 @@ test('a query without a place asks a clarifying question before showing listings
     ]);
 
     $messenger = fakeSearchMessenger();
-    $messenger->shouldReceive('sendText')->once()->withArgs(
-        fn (Contact $contact, string $text): bool => $text === 'В каком городе нужен кран?',
+    $messenger->shouldReceive('sendButtons')->once()->withArgs(
+        fn (Contact $contact, string $text, array $buttons): bool => $text === 'В каком городе нужен кран?'
+            && count($buttons) === 1
+            && $buttons[0]['id'] === CustomerSearchAssistant::BUTTON_MENU
+            && $buttons[0]['title'] === CustomerSearchAssistant::BUTTON_MENU_TITLE,
     );
 
     $session = searchSession();
@@ -735,7 +799,7 @@ test('the intake extractor sees the bot\'s last question as context for a short 
         fullSearchIntake(['location' => null, 'clarifying_question' => 'В каком городе нужен кран?']),
     ]);
 
-    fakeSearchMessenger()->shouldReceive('sendText')->once();
+    fakeSearchMessenger()->shouldReceive('sendButtons')->once();
 
     $session = searchSession(['last_question' => 'В каком городе нужна техника?', 'transcript' => ['нужен кран']]);
     app(CustomerSearchAssistant::class)
@@ -781,8 +845,9 @@ test('a place missing from the dictionary asks to name it precisely instead of s
     ]);
 
     $messenger = fakeSearchMessenger();
-    $messenger->shouldReceive('sendText')->once()->withArgs(
-        fn (Contact $contact, string $text): bool => str_contains($text, 'Не нашли «Сарыагаш» в справочнике мест'),
+    $messenger->shouldReceive('sendButtons')->once()->withArgs(
+        fn (Contact $contact, string $text, array $buttons): bool => str_contains($text, 'Не нашли «Сарыагаш» в справочнике мест')
+            && $buttons[0]['id'] === CustomerSearchAssistant::BUTTON_MENU,
     );
 
     $session = searchSession();
@@ -810,8 +875,9 @@ test('a voice-distorted place name is corrected to the dictionary and filters th
     $messenger = fakeSearchMessenger();
     $messenger->shouldReceive('sendList')->once()->withArgs(
         fn (Contact $contact, string $text, string $button, array $rows): bool => str_starts_with($text, 'Вот что нашлось')
-            && count($rows) === 1
-            && $rows[0]['id'] === "listing:{$inPlace->id}",
+            && count($rows) === 2
+            && $rows[0]['id'] === "listing:{$inPlace->id}"
+            && $rows[1]['id'] === CustomerSearchAssistant::BUTTON_MENU,
     );
     expectCatalogCta($messenger);
 
@@ -858,12 +924,15 @@ test('an ambiguous place offers the same-named locations to pick without spendin
     $messenger->shouldReceive('sendList')->once()->withArgs(
         fn (Contact $contact, string $text, string $button, array $rows): bool => str_contains($text, 'Нашли несколько подходящих мест')
             && $button === CustomerSearchAssistant::LOCATION_LIST_BUTTON
-            && count($rows) === 2
+            && count($rows) === 3
             && $rows[0]['id'] === "search_location:{$districtA->id}"
             && $rows[0]['title'] === 'Абайский район'
             && $rows[0]['description'] === 'Карагандинская область'
             && $rows[1]['id'] === "search_location:{$districtB->id}"
-            && $rows[1]['description'] === 'г.Шымкент',
+            && $rows[1]['description'] === 'г.Шымкент'
+            // Последняя строка списка мест — тоже «В меню».
+            && $rows[2]['id'] === CustomerSearchAssistant::BUTTON_MENU
+            && $rows[2]['title'] === CustomerSearchAssistant::BUTTON_MENU_TITLE,
     );
 
     $session = searchSession();
@@ -893,8 +962,9 @@ test('picking a place from the list searches inside the picked subtree', functio
     $messenger = fakeSearchMessenger();
     $messenger->shouldReceive('sendList')->once()->withArgs(
         fn (Contact $contact, string $text, string $button, array $rows): bool => str_starts_with($text, 'Вот что нашлось')
-            && count($rows) === 1
-            && $rows[0]['id'] === "listing:{$inPicked->id}",
+            && count($rows) === 2
+            && $rows[0]['id'] === "listing:{$inPicked->id}"
+            && $rows[1]['id'] === CustomerSearchAssistant::BUTTON_MENU,
     );
     expectCatalogCta($messenger);
 
@@ -922,10 +992,13 @@ test('picking a place with an empty subtree sends the wider catalog link', funct
     $districtB = locationNamed('Абайский район', locationNamed('г.Шымкент'));
 
     $messenger = fakeSearchMessenger();
-    $messenger->shouldReceive('sendCtaUrl')->once()->withArgs(
-        fn (Contact $contact, string $text, string $button, string $url): bool => str_contains($text, 'По «Абайский район» сейчас ничего нет')
+    $messenger->shouldReceive('sendButtons')->once()->withArgs(
+        fn (Contact $contact, string $text, array $buttons): bool => str_contains($text, 'По «Абайский район» сейчас ничего нет')
             && str_contains($text, '«Карагандинская область»')
-            && $button === CustomerSearchAssistant::CATALOG_BUTTON_DEAD_END
+            && $buttons[0]['id'] === CustomerSearchAssistant::BUTTON_MENU,
+    );
+    $messenger->shouldReceive('sendCtaUrl')->once()->withArgs(
+        fn (Contact $contact, string $text, string $button, string $url): bool => $button === CustomerSearchAssistant::CATALOG_BUTTON_DEAD_END
             && str_contains($url, "location_id={$regionA->id}"),
     );
 
@@ -1071,8 +1144,9 @@ test('a subject question outranks the place pick list', function () {
     locationNamed('Абайский район', locationNamed('г.Шымкент'));
 
     $messenger = fakeSearchMessenger();
-    $messenger->shouldReceive('sendText')->once()->withArgs(
-        fn (Contact $contact, string $text): bool => $text === 'Что именно вам нужно?',
+    $messenger->shouldReceive('sendButtons')->once()->withArgs(
+        fn (Contact $contact, string $text, array $buttons): bool => $text === 'Что именно вам нужно?'
+            && $buttons[0]['id'] === CustomerSearchAssistant::BUTTON_MENU,
     );
 
     $session = searchSession();
@@ -1091,8 +1165,9 @@ test('more than ten same-named places ask for a bigger unit instead of the false
     }
 
     $messenger = fakeSearchMessenger();
-    $messenger->shouldReceive('sendText')->once()->withArgs(
-        fn (Contact $contact, string $text): bool => str_contains($text, 'Мест с названием «Абайский район» в справочнике слишком много'),
+    $messenger->shouldReceive('sendButtons')->once()->withArgs(
+        fn (Contact $contact, string $text, array $buttons): bool => str_contains($text, 'Мест с названием «Абайский район» в справочнике слишком много')
+            && $buttons[0]['id'] === CustomerSearchAssistant::BUTTON_MENU,
     );
 
     $session = searchSession();
@@ -1106,7 +1181,7 @@ test('more than ten same-named places ask for a bigger unit instead of the false
         ->and($session->state['phase'])->toBe('searching');
 });
 
-test('exactly ten same-named places still fit the pick list', function () {
+test('exactly ten same-named places still fit the pick list, capped at nine plus the menu row', function () {
     SearchQueryExtractionAgent::fake([fullSearchIntake(['location' => 'Абайский район'])]);
     foreach (range(1, 10) as $i) {
         locationNamed('Абайский район', locationNamed("Область {$i}"));
@@ -1114,8 +1189,13 @@ test('exactly ten same-named places still fit the pick list', function () {
 
     $messenger = fakeSearchMessenger();
     $messenger->shouldReceive('sendList')->once()->withArgs(
+        // Список WhatsApp держит максимум 10 строк: девять кандидатов и
+        // последней строкой — «В меню» (десятый кандидат остаётся в
+        // state и доступен по точному набранному названию).
         fn (Contact $contact, string $text, string $button, array $rows): bool => count($rows) === 10
-            && str_contains($text, 'Нашли несколько подходящих мест'),
+            && str_contains($text, 'Нашли несколько подходящих мест')
+            && $rows[9]['id'] === CustomerSearchAssistant::BUTTON_MENU
+            && $rows[9]['title'] === CustomerSearchAssistant::BUTTON_MENU_TITLE,
     );
 
     $session = searchSession();
@@ -1123,7 +1203,8 @@ test('exactly ten same-named places still fit the pick list', function () {
         ->resume($session, customerAiNode(), new InboundMessage(text: 'нужен кран в Абайском районе'));
 
     expect($outcome)->toBe(AiOutcome::InProgress)
-        ->and($session->refresh()->state['phase'])->toBe('locating');
+        ->and($session->refresh()->state['phase'])->toBe('locating')
+        ->and($session->state['location_candidates'])->toHaveCount(10);
 });
 
 test('equally close spelling corrections offer the pick list through the intake', function () {
@@ -1154,8 +1235,9 @@ test('a location row id outside the offered candidates is not a pick and keeps t
     $foreign = locationNamed('г.Астана');
 
     $messenger = fakeSearchMessenger();
-    $messenger->shouldReceive('sendText')->once()->withArgs(
-        fn (Contact $contact, string $text): bool => str_contains($text, 'Опишите, пожалуйста, текстом'),
+    $messenger->shouldReceive('sendButtons')->once()->withArgs(
+        fn (Contact $contact, string $text, array $buttons): bool => str_contains($text, 'Опишите, пожалуйста, текстом')
+            && $buttons[0]['id'] === CustomerSearchAssistant::BUTTON_MENU,
     );
 
     $session = searchSession([
@@ -1208,8 +1290,9 @@ test('a refinement after the pick keeps the picked place without re-offering the
     $messenger = fakeSearchMessenger();
     $messenger->shouldReceive('sendList')->once()->withArgs(
         fn (Contact $contact, string $text, string $button, array $rows): bool => str_starts_with($text, 'Вот что нашлось')
-            && count($rows) === 1
-            && $rows[0]['id'] === "listing:{$inPicked->id}",
+            && count($rows) === 2
+            && $rows[0]['id'] === "listing:{$inPicked->id}"
+            && $rows[1]['id'] === CustomerSearchAssistant::BUTTON_MENU,
     );
     expectCatalogCta($messenger);
 
@@ -1295,7 +1378,7 @@ test('an unavailable AI provider searches the raw text right away', function () 
 test('the intake extraction is recorded in the AI audit with dialog links', function () {
     SearchQueryExtractionAgent::fake([fullSearchIntake(['location' => null, 'clarifying_question' => 'Где нужен кран?'])]);
 
-    fakeSearchMessenger()->shouldReceive('sendText')->once();
+    fakeSearchMessenger()->shouldReceive('sendButtons')->once();
 
     $session = searchSession();
     app(CustomerSearchAssistant::class)
@@ -1417,6 +1500,24 @@ test('an explicit refusal releases the customer', function () {
     expect($outcome)->toBe(AiOutcome::Completed);
 });
 
+test('a worded request for the menu releases the customer without a message, transcript rolled back', function () {
+    SearchQueryExtractionAgent::fake([[
+        'subject' => null, 'location' => null, 'location_any' => false,
+        'clarifying_question' => '', 'user_intent' => 'menu',
+    ]]);
+    $session = searchSession(['transcript' => ['нужен кран']]);
+
+    // Как и нажатие кнопки: словесная просьба меню не оставляет
+    // сообщения — граф сам приводит контакта в главное меню.
+    fakeSearchMessenger()->shouldNotReceive('sendText', 'sendButtons', 'sendList', 'sendCtaUrl');
+
+    $outcome = app(CustomerSearchAssistant::class)
+        ->resume($session, customerAiNode(), new InboundMessage(text: 'хочу в главное меню'));
+
+    expect($outcome)->toBe(AiOutcome::Completed)
+        ->and($session->refresh()->state['transcript'])->toBe(['нужен кран']);
+});
+
 test('a question about the service spends neither a clarification nor a fruitless attempt', function () {
     SearchQueryExtractionAgent::fake([[
         'subject' => null, 'location' => null, 'location_any' => false,
@@ -1457,9 +1558,14 @@ test('a fourth service question in a row walks the ordinary intake path', functi
     $messenger = fakeSearchMessenger();
     $messenger->shouldReceive('sendText')->times(3)
         ->withArgs(fn (Contact $to, string $text) => str_contains($text, 'оператор'));
-    // Три повтора текущего вопроса плюс он же как уточнение на четвёртом ходе.
-    $messenger->shouldReceive('sendText')->times(4)
+    // Три повтора текущего вопроса (без выхода «В меню» — repeatCurrentStep
+    // просто повторяет ожидаемый ответ) плюс он же как свежее уточнение на
+    // четвёртом ходе — уже с кнопкой «В меню».
+    $messenger->shouldReceive('sendText')->times(3)
         ->withArgs(fn (Contact $to, string $text) => $text === 'Что именно вам нужно — какая техника?');
+    $messenger->shouldReceive('sendButtons')->once()
+        ->withArgs(fn (Contact $to, string $text, array $buttons) => $text === 'Что именно вам нужно — какая техника?'
+            && $buttons[0]['id'] === CustomerSearchAssistant::BUTTON_MENU);
 
     $assistant = app(CustomerSearchAssistant::class);
     $question = new InboundMessage(text: 'ну я и спрашиваю, как это у вас устроено');
@@ -1518,7 +1624,8 @@ test('a service question while a place pick list is open resends the same list',
     $messenger->shouldReceive('sendList')->once()->withArgs(
         fn (Contact $contact, string $text, string $button, array $rows): bool => str_contains($text, 'Нашли несколько подходящих мест')
             && $button === CustomerSearchAssistant::LOCATION_LIST_BUTTON
-            && count($rows) === 2,
+            && count($rows) === 3
+            && $rows[2]['id'] === CustomerSearchAssistant::BUTTON_MENU,
     );
 
     $outcome = app(CustomerSearchAssistant::class)
@@ -1547,8 +1654,9 @@ test('a service question while a results list is open sends a hint instead of re
     $messenger->shouldReceive('sendList')->never();
     $messenger->shouldReceive('sendText')->once()
         ->withArgs(fn (Contact $to, string $text) => str_contains($text, 'оператор'));
-    $messenger->shouldReceive('sendText')->once()
-        ->withArgs(fn (Contact $to, string $text) => $text === 'Выберите вариант из списка выше или уточните запрос.');
+    $messenger->shouldReceive('sendButtons')->once()
+        ->withArgs(fn (Contact $to, string $text, array $buttons) => $text === 'Выберите вариант из списка выше или уточните запрос.'
+            && $buttons[0]['id'] === CustomerSearchAssistant::BUTTON_MENU);
 
     $outcome = app(CustomerSearchAssistant::class)
         ->resume($session, customerAiNode(), new InboundMessage(text: 'а вы берёте комиссию?'));
@@ -1583,8 +1691,9 @@ test('ветка «ищу водителя» ищет только водите�
 
     $messenger = fakeSearchMessenger();
     $messenger->shouldReceive('sendList')->once()->withArgs(
-        fn (Contact $contact, string $text, string $button, array $rows): bool => count($rows) === 1
-            && $rows[0]['id'] === "listing:{$driver->id}",
+        fn (Contact $contact, string $text, string $button, array $rows): bool => count($rows) === 2
+            && $rows[0]['id'] === "listing:{$driver->id}"
+            && $rows[1]['id'] === CustomerSearchAssistant::BUTTON_MENU,
     );
     $messenger->shouldReceive('sendCtaUrl')->once()->withArgs(
         fn (Contact $contact, string $text, string $button, string $url): bool => str_contains($url, 'kind=driver'),
@@ -1611,9 +1720,10 @@ test('строка выдачи мастера — имя, услуги и ме�
 
     $messenger = fakeSearchMessenger();
     $messenger->shouldReceive('sendList')->once()->withArgs(
-        fn (Contact $contact, string $text, string $button, array $rows): bool => count($rows) === 1
+        fn (Contact $contact, string $text, string $button, array $rows): bool => count($rows) === 2
             && $rows[0]['title'] === 'Сергей'
-            && $rows[0]['description'] === 'гидравлика, двигатели · г.Шымкент',
+            && $rows[0]['description'] === 'гидравлика, двигатели · г.Шымкент'
+            && $rows[1]['id'] === CustomerSearchAssistant::BUTTON_MENU,
     );
     expectCatalogCta($messenger, 'kind=repair');
 
@@ -1638,9 +1748,10 @@ test('строка выдачи водителя — имя, техника, с�
 
     $messenger = fakeSearchMessenger();
     $messenger->shouldReceive('sendList')->once()->withArgs(
-        fn (Contact $contact, string $text, string $button, array $rows): bool => count($rows) === 1
+        fn (Contact $contact, string $text, string $button, array $rows): bool => count($rows) === 2
             && $rows[0]['title'] === 'Серик'
-            && $rows[0]['description'] === 'Экскаватор · стаж 8 л. · г.Шымкент',
+            && $rows[0]['description'] === 'Экскаватор · стаж 8 л. · г.Шымкент'
+            && $rows[1]['id'] === CustomerSearchAssistant::BUTTON_MENU,
     );
     expectCatalogCta($messenger, 'kind=driver');
 
@@ -1668,8 +1779,9 @@ test('сказанный заказчиком выезд превращаетс�
 
     $messenger = fakeSearchMessenger();
     $messenger->shouldReceive('sendList')->once()->withArgs(
-        fn (Contact $contact, string $text, string $button, array $rows): bool => count($rows) === 1
-            && $rows[0]['id'] === "listing:{$travels->id}",
+        fn (Contact $contact, string $text, string $button, array $rows): bool => count($rows) === 2
+            && $rows[0]['id'] === "listing:{$travels->id}"
+            && $rows[1]['id'] === CustomerSearchAssistant::BUTTON_MENU,
     );
     expectCatalogCta($messenger, 'kind=repair');
 

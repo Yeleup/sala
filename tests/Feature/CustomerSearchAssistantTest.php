@@ -64,7 +64,7 @@ function fakeSearchMessenger(): MockInterface
  * ожидания. Текст CTA пиннуется байт-в-байт (по умолчанию — CTA выдачи);
  * `$text` переопределяется для тупиковых сценариев (DEAD_END_CTA_TEXT).
  */
-function expectCatalogCta(MockInterface $messenger, ?string $urlContains = null, string $text = 'Здесь — до 9 самых подходящих. Весь каталог с поиском и фильтрами по месту и категории — по кнопке ниже.'): void
+function expectCatalogCta(MockInterface $messenger, ?string $urlContains = null, string $text = 'Весь каталог с поиском и фильтрами по месту и категории — по кнопке ниже, ваш запрос уже подставлен.'): void
 {
     $messenger->shouldReceive('sendCtaUrl')->once()->withArgs(
         fn (Contact $contact, string $sentText, string $button, string $url): bool => $sentText === $text
@@ -72,6 +72,24 @@ function expectCatalogCta(MockInterface $messenger, ?string $urlContains = null,
             && str_contains($url, 'signature=')
             && mb_strlen($button) <= 20
             && ($urlContains === null || str_contains(urldecode($url), $urlContains)),
+    );
+}
+
+/**
+ * Выдача не приходит списком в чат: заказчику уходит сообщение-заголовок
+ * с кнопкой «В меню» (reply-кнопки и URL-кнопка не совмещаются в одном
+ * сообщении WhatsApp), следом — CTA «Все варианты» в веб-каталог, где и
+ * происходит выбор объявления. Без `$exactText` пиннуется только зачин
+ * заголовка.
+ */
+function expectResultsHeader(MockInterface $messenger, ?string $exactText = null): void
+{
+    $messenger->shouldReceive('sendButtons')->once()->withArgs(
+        fn (Contact $contact, string $text, array $buttons): bool => ($exactText === null
+            ? str_starts_with($text, 'Нашлись варианты по запросу')
+            : $text === $exactText)
+            && $buttons[0]['id'] === CustomerSearchAssistant::BUTTON_MENU
+            && $buttons[0]['title'] === CustomerSearchAssistant::BUTTON_MENU_TITLE,
     );
 }
 
@@ -117,80 +135,26 @@ test('the search AI block sends the operator text instead of the built-in prompt
     app(CustomerSearchAssistant::class)->start($session, customerAiNode() + ['text' => 'Что ищете и где?']);
 });
 
-test('a complete query returns a ranked list of matching published listings', function () {
+test('a complete query hands the ranked results off to the web catalog', function () {
     SearchQueryExtractionAgent::fake([fullSearchIntake()]);
     $shymkent = locationNamed('г.Шымкент');
-    $crane25 = Listing::factory()->published()->create([
+    Listing::factory()->published()->create([
         'category_id' => categoryNamed('Автокран')->id, 'description' => 'Кран 25 тонн со стрелой', 'location_id' => $shymkent->id, 'price' => '20000 тг/ч',
     ]);
-    $crane10 = Listing::factory()->published()->create([
-        'category_id' => categoryNamed('Автокран')->id, 'description' => 'Кран 10 тонн', 'location_id' => $shymkent->id,
-    ]);
-    Listing::factory()->published()->create(['category_id' => categoryNamed('Экскаватор')->id, 'description' => 'Гусеничный', 'location_id' => locationNamed('г.Астана')->id]);
-    Listing::factory()->create(['category_id' => categoryNamed('Автокран')->id, 'description' => 'Черновик крана', 'location_id' => $shymkent->id]);
 
     $messenger = fakeSearchMessenger();
-    $messenger->shouldReceive('sendList')->once()->withArgs(function (Contact $contact, string $text, string $button, array $rows) use ($crane25, $crane10): bool {
-        return count($rows) === 3
-            && $rows[0]['id'] === "listing:{$crane25->id}"
-            && $rows[0]['title'] === 'Автокран'
-            && str_contains($rows[0]['description'], 'Шымкент')
-            && $rows[1]['id'] === "listing:{$crane10->id}"
-            // Последняя строка списка всегда «В меню».
-            && $rows[2]['id'] === CustomerSearchAssistant::BUTTON_MENU
-            && $rows[2]['title'] === CustomerSearchAssistant::BUTTON_MENU_TITLE;
-    });
-    expectCatalogCta($messenger);
+    expectResultsHeader($messenger, 'Нашлись варианты по запросу «кран 25 тонн» в г.Шымкент. Выбирайте в каталоге — заявка сразу уйдёт поставщику.');
+    expectCatalogCta($messenger, 'кран 25 тонн');
 
     $session = searchSession();
     $outcome = app(CustomerSearchAssistant::class)
         ->resume($session, customerAiNode(), new InboundMessage(text: 'нужен кран 25 тонн, Шымкент'));
 
+    // Список в чат не отправляется: выбор объявления происходит в
+    // каталоге, а диалог ждёт уточнение запроса или «В меню».
     expect($outcome)->toBe(AiOutcome::InProgress)
-        ->and($session->refresh()->state['phase'])->toBe('choosing')
-        ->and($session->state['offered'])->toBe([$crane25->id, $crane10->id]);
-});
-
-test('ten or more matches are capped at nine plus the menu row', function () {
-    SearchQueryExtractionAgent::fake([fullSearchIntake(['subject' => 'кран', 'location' => null, 'location_any' => true])]);
-    Listing::factory()->count(11)->published()->create(['category_id' => categoryNamed('Автокран')->id, 'description' => 'Кран']);
-
-    $messenger = fakeSearchMessenger();
-    $messenger->shouldReceive('sendList')->once()->withArgs(
-        // Матчер сам отдаёт не больше 10 (ListingMatcher::MAX_RESULTS);
-        // выдача дополнительно обрезается до 9 объявлений — десятая
-        // строка списка всегда «В меню».
-        fn (Contact $contact, string $text, string $button, array $rows): bool => count($rows) === 10
-            && $rows[9]['id'] === CustomerSearchAssistant::BUTTON_MENU
-            && $rows[9]['title'] === CustomerSearchAssistant::BUTTON_MENU_TITLE,
-    );
-    expectCatalogCta($messenger);
-
-    $session = searchSession();
-    $outcome = app(CustomerSearchAssistant::class)
-        ->resume($session, customerAiNode(), new InboundMessage(text: 'нужен кран'));
-
-    expect($outcome)->toBe(AiOutcome::InProgress)
-        ->and($session->refresh()->state['offered'])->toHaveCount(9);
-});
-
-test('the results header counts the matches, names the subject and the resolved place', function () {
-    SearchQueryExtractionAgent::fake([fullSearchIntake(['subject' => 'кран'])]);
-    $shymkent = locationNamed('Шымкент');
-    Listing::factory()->count(3)->published()->create([
-        'category_id' => categoryNamed('Автокран')->id, 'description' => 'Кран', 'location_id' => $shymkent->id,
-    ]);
-
-    $messenger = fakeSearchMessenger();
-    $messenger->shouldReceive('sendList')->once()->withArgs(
-        fn (Contact $contact, string $text, string $button, array $rows): bool => $text === 'Нашлось 3 варианта по запросу «кран» в Шымкент. Выберите подходящий — заявка сразу уйдёт поставщику.',
-    );
-    expectCatalogCta($messenger);
-
-    $outcome = app(CustomerSearchAssistant::class)
-        ->resume(searchSession(), customerAiNode(), new InboundMessage(text: 'нужен кран, Шымкент'));
-
-    expect($outcome)->toBe(AiOutcome::InProgress);
+        ->and($session->refresh()->state['phase'])->toBe('searching')
+        ->and($session->state['offered'])->toBe([]);
 });
 
 test('the results header falls back to the raw query as the subject when it was never extracted', function () {
@@ -202,9 +166,7 @@ test('the results header falls back to the raw query as the subject when it was 
     $messenger = fakeSearchMessenger();
     // Место не встречается в справочнике внутри самого запроса — заголовок
     // остаётся без «в …», предмет — вся сырая фраза.
-    $messenger->shouldReceive('sendList')->once()->withArgs(
-        fn (Contact $contact, string $text, string $button, array $rows): bool => $text === 'Нашёлся 1 вариант по запросу «нужен кран». Выберите подходящий — заявка сразу уйдёт поставщику.',
-    );
+    expectResultsHeader($messenger, 'Нашлись варианты по запросу «нужен кран». Выбирайте в каталоге — заявка сразу уйдёт поставщику.');
     expectCatalogCta($messenger);
 
     $outcome = app(CustomerSearchAssistant::class)
@@ -213,26 +175,11 @@ test('the results header falls back to the raw query as the subject when it was 
     expect($outcome)->toBe(AiOutcome::InProgress);
 });
 
-test('the results header pluralizes the count correctly', function (int $matchCount, string $expectedWord) {
-    SearchQueryExtractionAgent::fake([fullSearchIntake(['subject' => 'кран', 'location' => null, 'location_any' => true])]);
-    Listing::factory()->count($matchCount)->published()->create(['category_id' => categoryNamed('Автокран')->id, 'description' => 'Кран']);
-
-    $messenger = fakeSearchMessenger();
-    $messenger->shouldReceive('sendList')->once()->withArgs(
-        fn (Contact $contact, string $text, string $button, array $rows): bool => str_contains($text, "{$matchCount} {$expectedWord}"),
-    );
-    expectCatalogCta($messenger);
-
-    app(CustomerSearchAssistant::class)
-        ->resume(searchSession(), customerAiNode(), new InboundMessage(text: 'нужен кран'));
-})->with([
-    '2 → варианта' => [2, 'варианта'],
-    '4 → варианта' => [4, 'варианта'],
-    '5 → вариантов' => [5, 'вариантов'],
-    '9 → вариантов' => [9, 'вариантов'],
-]);
-
-test('an ordinal digit picks the N-th offered row, title matching still taking priority', function () {
+// Нажатия и набранные заголовки строк СТАРЫХ списков выдачи (сообщения,
+// отправленные до передачи выдачи каталогу) продолжают работать: фаза
+// choosing с offered в state — легаси уже отправленных сообщений, как и
+// кнопка «Искать шире».
+test('an ordinal digit picks the N-th offered row of a legacy list, title matching still taking priority', function () {
     $supplier = Contact::factory()->withOpenSessionWindow()->create();
     $first = Listing::factory()->published()->for($supplier, 'supplier')->create(['category_id' => categoryNamed('Автокран')->id]);
     $second = Listing::factory()->published()->for($supplier, 'supplier')->create(['category_id' => categoryNamed('Экскаватор')->id]);
@@ -249,31 +196,9 @@ test('an ordinal digit picks the N-th offered row, title matching still taking p
         ->and(CustomerRequest::sole()->listing_id)->toBe($second->id);
 });
 
-test('a listing title leads the search result row instead of the category name', function () {
-    SearchQueryExtractionAgent::fake([fullSearchIntake()]);
-    $listing = Listing::factory()->published()->create([
-        'title' => 'Аренда крана 25 т',
-        'category_id' => categoryNamed('Автокран')->id,
-        'description' => 'Кран 25 тонн со стрелой',
-        'location_id' => locationNamed('г.Шымкент')->id,
-    ]);
-
-    $messenger = fakeSearchMessenger();
-    $messenger->shouldReceive('sendList')->once()->withArgs(
-        fn (Contact $contact, string $text, string $button, array $rows): bool => $rows[0]['id'] === "listing:{$listing->id}"
-            && $rows[0]['title'] === 'Аренда крана 25 т',
-    );
-    expectCatalogCta($messenger);
-
-    $outcome = app(CustomerSearchAssistant::class)
-        ->resume(searchSession(), customerAiNode(), new InboundMessage(text: 'нужен кран 25 тонн, Шымкент'));
-
-    expect($outcome)->toBe(AiOutcome::InProgress);
-});
-
 test('the query words match the listing title alone', function () {
     SearchQueryExtractionAgent::fake([fullSearchIntake(['subject' => 'манипулятор', 'location' => null, 'location_any' => true])]);
-    $listing = Listing::factory()->published()->create([
+    Listing::factory()->published()->create([
         'title' => 'Кран-манипулятор 5 т',
         'category_id' => categoryNamed('Автокран')->id,
         'description' => 'Борт 6 м',
@@ -281,11 +206,9 @@ test('the query words match the listing title alone', function () {
     ]);
 
     $messenger = fakeSearchMessenger();
-    $messenger->shouldReceive('sendList')->once()->withArgs(
-        fn (Contact $contact, string $text, string $button, array $rows): bool => count($rows) === 2
-            && $rows[0]['id'] === "listing:{$listing->id}"
-            && $rows[1]['id'] === CustomerSearchAssistant::BUTTON_MENU,
-    );
+    // Совпадение только по названию: без него выдача была бы пуста и
+    // пришёл бы тупик — заголовок выдачи доказывает матч.
+    expectResultsHeader($messenger);
     expectCatalogCta($messenger);
 
     $outcome = app(CustomerSearchAssistant::class)
@@ -294,37 +217,10 @@ test('the query words match the listing title alone', function () {
     expect($outcome)->toBe(AiOutcome::InProgress);
 });
 
-test('a brand in the query ranks the branded listing first', function () {
-    SearchQueryExtractionAgent::fake([fullSearchIntake(['subject' => 'экскаватор Hitachi'])]);
-    $shymkent = locationNamed('г.Шымкент');
-    $hitachi = Listing::factory()->published()->create([
-        'category_id' => categoryNamed('Экскаватор')->id, 'brand_id' => brandNamed('Hitachi')->id,
-        'description' => 'Гусеничный', 'location_id' => $shymkent->id,
-    ]);
-    $noBrand = Listing::factory()->published()->create([
-        'category_id' => categoryNamed('Экскаватор')->id, 'brand_id' => null,
-        'description' => 'Колёсный', 'location_id' => $shymkent->id,
-    ]);
-
-    $messenger = fakeSearchMessenger();
-    $messenger->shouldReceive('sendList')->once()->withArgs(
-        fn (Contact $contact, string $text, string $button, array $rows): bool => count($rows) === 3
-            && $rows[0]['id'] === "listing:{$hitachi->id}"
-            && $rows[1]['id'] === "listing:{$noBrand->id}"
-            && $rows[2]['id'] === CustomerSearchAssistant::BUTTON_MENU,
-    );
-    expectCatalogCta($messenger);
-
-    $outcome = app(CustomerSearchAssistant::class)
-        ->resume(searchSession(), customerAiNode(), new InboundMessage(text: 'нужен экскаватор Hitachi, Шымкент'));
-
-    expect($outcome)->toBe(AiOutcome::InProgress);
-});
-
 test('a voice message is transcribed and used as the search query', function () {
     Transcription::fake(['нужен кран, Шымкент']);
     SearchQueryExtractionAgent::fake([fullSearchIntake(['subject' => 'кран'])]);
-    $crane = Listing::factory()->published()->create([
+    Listing::factory()->published()->create([
         'category_id' => categoryNamed('Автокран')->id,
         'description' => 'Кран 25 тонн',
         'location_id' => locationNamed('г.Шымкент')->id,
@@ -335,9 +231,7 @@ test('a voice message is transcribed and used as the search query', function () 
         ->andReturn(['contents' => 'OGG-BYTES', 'mime_type' => 'audio/ogg']);
 
     $messenger = fakeSearchMessenger();
-    $messenger->shouldReceive('sendList')->once()->withArgs(
-        fn (Contact $contact, string $text, string $button, array $rows): bool => $rows[0]['id'] === "listing:{$crane->id}",
-    );
+    expectResultsHeader($messenger);
     expectCatalogCta($messenger);
 
     $session = searchSession();
@@ -586,48 +480,6 @@ test('typing the full title of a listing whose row title is clamped still equals
         ->and(CustomerRequest::count())->toBe(1);
 });
 
-test('a long category name is truncated with an ellipsis within the row title limit', function () {
-    SearchQueryExtractionAgent::fake([fullSearchIntake(['subject' => 'экскаватор погрузчик', 'location' => null, 'location_any' => true])]);
-    $longName = 'Гидравлические экскаваторы-погрузчики'; // 38 chars, over the 24-char WhatsApp limit
-    $listing = Listing::factory()->published()->create([
-        'category_id' => categoryNamed($longName), 'description' => 'Модель', 'location_id' => locationNamed('г.Шымкент')->id,
-    ]);
-
-    $messenger = fakeSearchMessenger();
-    $messenger->shouldReceive('sendList')->once()->withArgs(function (Contact $contact, string $text, string $button, array $rows) {
-        expect(mb_strlen($rows[0]['title']))->toBeLessThanOrEqual(24)
-            ->and($rows[0]['title'])->toEndWith('…');
-
-        return true;
-    });
-    expectCatalogCta($messenger);
-
-    $session = searchSession();
-    app(CustomerSearchAssistant::class)
-        ->resume($session, customerAiNode(), new InboundMessage(text: 'нужен экскаватор погрузчик'));
-});
-
-test('a long location and price are truncated with an ellipsis within the row description limit', function () {
-    SearchQueryExtractionAgent::fake([fullSearchIntake(['subject' => 'автокран', 'location' => null, 'location_any' => true])]);
-    $longLocation = locationNamed('Каратауский район Шымкент, промышленная зона №5, въезд с южной стороны');
-    $listing = Listing::factory()->published()->create([
-        'category_id' => categoryNamed('Автокран'), 'location_id' => $longLocation->id, 'price' => '20000 тг/ч',
-    ]);
-
-    $messenger = fakeSearchMessenger();
-    $messenger->shouldReceive('sendList')->once()->withArgs(function (Contact $contact, string $text, string $button, array $rows) {
-        expect(mb_strlen($rows[0]['description']))->toBeLessThanOrEqual(72)
-            ->and($rows[0]['description'])->toEndWith('…');
-
-        return true;
-    });
-    expectCatalogCta($messenger);
-
-    $session = searchSession();
-    app(CustomerSearchAssistant::class)
-        ->resume($session, customerAiNode(), new InboundMessage(text: 'нужен автокран'));
-});
-
 test('typing the truncated title of a listing with a long category name still equals picking it', function () {
     $longName = 'Гидравлические экскаваторы-погрузчики';
     $supplier = Contact::factory()->withOpenSessionWindow()->create();
@@ -648,41 +500,38 @@ test('typing the truncated title of a listing with a long category name still eq
 test('any other text while choosing is treated as a refined search', function () {
     SearchQueryExtractionAgent::fake([fullSearchIntake(['subject' => 'экскаватор', 'location' => null, 'location_any' => true])]);
     $crane = Listing::factory()->published()->create(['category_id' => categoryNamed('Автокран')->id, 'description' => 'Кран 25 тонн']);
-    $digger = Listing::factory()->published()->create(['category_id' => categoryNamed('Экскаватор')->id, 'description' => 'Гусеничный экскаватор']);
+    Listing::factory()->published()->create(['category_id' => categoryNamed('Экскаватор')->id, 'description' => 'Гусеничный экскаватор']);
 
     $messenger = fakeSearchMessenger();
-    $messenger->shouldReceive('sendList')->once()->withArgs(
-        fn (Contact $contact, string $text, string $button, array $rows): bool => count($rows) === 2
-            && $rows[0]['id'] === "listing:{$digger->id}"
-            && $rows[1]['id'] === CustomerSearchAssistant::BUTTON_MENU,
-    );
-    expectCatalogCta($messenger);
+    expectResultsHeader($messenger, 'Нашлись варианты по запросу «экскаватор». Выбирайте в каталоге — заявка сразу уйдёт поставщику.');
+    expectCatalogCta($messenger, 'экскаватор');
 
     $session = searchSession(['phase' => 'choosing', 'query' => 'кран', 'offered' => [$crane->id]]);
     $outcome = app(CustomerSearchAssistant::class)
         ->resume($session, customerAiNode(), new InboundMessage(text: 'лучше экскаватор'));
 
+    // Новая выдача гасит легаси-список: остатки offered затираются, чтобы
+    // старые строки не выбирались после смены запроса.
     expect($outcome)->toBe(AiOutcome::InProgress)
-        ->and($session->refresh()->state['offered'])->toBe([$digger->id]);
+        ->and($session->refresh()->state['phase'])->toBe('searching')
+        ->and($session->state['offered'])->toBe([]);
 });
 
 test('a city query covers listings in the city districts', function () {
     SearchQueryExtractionAgent::fake([fullSearchIntake(['subject' => 'кран'])]);
     $city = locationNamed('г.Шымкент');
     $district = locationNamed('Каратауский район', $city);
-    $listing = Listing::factory()->published()->create([
+    Listing::factory()->published()->create([
         'category_id' => categoryNamed('Автокран')->id,
         'description' => 'Кран 25 тонн',
         'location_id' => $district->id,
     ]);
 
     $messenger = fakeSearchMessenger();
-    $messenger->shouldReceive('sendList')->once()->withArgs(
-        fn (Contact $contact, string $text, string $button, array $rows): bool => count($rows) === 2
-            && $rows[0]['id'] === "listing:{$listing->id}"
-            && $rows[1]['id'] === CustomerSearchAssistant::BUTTON_MENU,
-    );
-    expectCatalogCta($messenger);
+    // Единственное объявление лежит в районе города: непустая выдача
+    // доказывает, что запрос по городу накрыл поддерево.
+    expectResultsHeader($messenger, 'Нашлись варианты по запросу «кран» в г.Шымкент. Выбирайте в каталоге — заявка сразу уйдёт поставщику.');
+    expectCatalogCta($messenger, "location_id={$city->id}");
 
     $session = searchSession();
     $outcome = app(CustomerSearchAssistant::class)
@@ -752,7 +601,7 @@ test('нажатие старой кнопки «Искать шире» из п
     SearchQueryExtractionAgent::fake()->preventStrayPrompts();
     $region = locationNamed('область Абай');
     $district = locationNamed('Абайский район', $region);
-    $listing = Listing::factory()->published()->create([
+    Listing::factory()->published()->create([
         'category_id' => categoryNamed('Автокран')->id,
         'description' => 'Кран в райцентре',
         'price' => 'договорная',
@@ -760,10 +609,8 @@ test('нажатие старой кнопки «Искать шире» из п
     ]);
 
     $messenger = fakeSearchMessenger();
-    $messenger->shouldReceive('sendList')->once()->withArgs(
-        fn (Contact $contact, string $text, string $button, array $rows): bool => $rows[0]['id'] === "listing:{$listing->id}",
-    );
-    expectCatalogCta($messenger);
+    expectResultsHeader($messenger);
+    expectCatalogCta($messenger, "location_id={$district->id}");
 
     // Сессия, ждущая на кнопке прежней версии (фаза expanding).
     $session = searchSession([
@@ -776,7 +623,7 @@ test('нажатие старой кнопки «Искать шире» из п
         ->resume($session, customerAiNode(), new InboundMessage(replyId: CustomerSearchAssistant::BUTTON_EXPAND));
 
     expect($outcome)->toBe(AiOutcome::InProgress)
-        ->and($session->refresh()->state['phase'])->toBe('choosing')
+        ->and($session->refresh()->state['phase'])->toBe('searching')
         // Расширение — наша собственная подсказка: попытка потрачена только
         // на первоначальную пустую выдачу.
         ->and($session->state['attempts'])->toBe(1);
@@ -903,17 +750,14 @@ test('the intake extractor sees the bot\'s last question as context for a short 
     );
 });
 
-test('the answer to the clarifying question completes the intake and lists the listings', function () {
+test('the answer to the clarifying question completes the intake and hands the results off', function () {
     SearchQueryExtractionAgent::fake([fullSearchIntake()]);
-    $listing = Listing::factory()->published()->create([
+    Listing::factory()->published()->create([
         'category_id' => categoryNamed('Автокран')->id, 'description' => 'Кран 25 тонн', 'location_id' => locationNamed('г.Шымкент')->id,
     ]);
 
     $messenger = fakeSearchMessenger();
-    $messenger->shouldReceive('sendList')->once()->withArgs(
-        fn (Contact $contact, string $text, string $button, array $rows): bool => str_starts_with($text, 'Нашёлся 1 вариант')
-            && $rows[0]['id'] === "listing:{$listing->id}",
-    );
+    expectResultsHeader($messenger);
     expectCatalogCta($messenger);
 
     $session = searchSession(['transcript' => ['нужен кран 25 тонн'], 'clarifications' => 1]);
@@ -956,21 +800,16 @@ test('a place missing from the dictionary asks to name it precisely instead of s
 test('a voice-distorted place name is corrected to the dictionary and filters the results', function () {
     SearchQueryExtractionAgent::fake([fullSearchIntake(['subject' => 'погрузчик', 'location' => 'Сарагаш'])]);
     $district = locationNamed('Сарыагашский район', locationNamed('Туркестанская область'));
-    $inPlace = Listing::factory()->published()->create([
-        'category_id' => categoryNamed('Погрузчик')->id, 'description' => 'Фронтальный погрузчик', 'location_id' => locationNamed('г.Сарыагаш', $district)->id,
-    ]);
+    $city = locationNamed('г.Сарыагаш', $district);
     Listing::factory()->published()->create([
-        'category_id' => categoryNamed('Погрузчик')->id, 'description' => 'Фронтальный погрузчик', 'location_id' => locationNamed('г.Алматы')->id,
+        'category_id' => categoryNamed('Погрузчик')->id, 'description' => 'Фронтальный погрузчик', 'location_id' => $city->id,
     ]);
 
     $messenger = fakeSearchMessenger();
-    $messenger->shouldReceive('sendList')->once()->withArgs(
-        fn (Contact $contact, string $text, string $button, array $rows): bool => str_starts_with($text, 'Нашёлся 1 вариант')
-            && count($rows) === 2
-            && $rows[0]['id'] === "listing:{$inPlace->id}"
-            && $rows[1]['id'] === CustomerSearchAssistant::BUTTON_MENU,
-    );
-    expectCatalogCta($messenger);
+    // Заголовок и префилл каталога называют исправленное место из
+    // справочника, а не искажённое «Сарагаш».
+    expectResultsHeader($messenger, 'Нашлись варианты по запросу «погрузчик» в г.Сарыагаш. Выбирайте в каталоге — заявка сразу уйдёт поставщику.');
+    expectCatalogCta($messenger, "location_id={$city->id}");
 
     $session = searchSession();
     $outcome = app(CustomerSearchAssistant::class)
@@ -979,21 +818,18 @@ test('a voice-distorted place name is corrected to the dictionary and filters th
     expect($outcome)->toBe(AiOutcome::InProgress);
 });
 
-test('the exhausted clarification limit searches without the place and labels the list honestly', function () {
+test('the exhausted clarification limit searches without the place and labels the results honestly', function () {
     SearchQueryExtractionAgent::fake([fullSearchIntake(['subject' => 'погрузчик', 'location' => 'Сарыагаш'])]);
-    $listing = Listing::factory()->published()->create([
+    Listing::factory()->published()->create([
         'category_id' => categoryNamed('Погрузчик')->id, 'description' => 'Фронтальный погрузчик', 'location_id' => locationNamed('г.Алматы')->id,
     ]);
 
     $messenger = fakeSearchMessenger();
-    $messenger->shouldReceive('sendList')->once()->withArgs(
-        fn (Contact $contact, string $text, string $button, array $rows): bool => str_contains($text, 'Место «Сарыагаш» не нашлось в справочнике')
-            && str_contains($text, 'без учёта места')
-            && $rows[0]['id'] === "listing:{$listing->id}",
-    );
-    // Место так и не разрешилось — CTA приходит без префилла места.
+    expectResultsHeader($messenger, 'Место «Сарыагаш» не нашлось в справочнике, поэтому подобрали варианты без учёта места. Выбирайте в каталоге — заявка сразу уйдёт поставщику.');
+    // Место так и не разрешилось — CTA приходит без префилла места, слово
+    // остаётся в строке поиска ссылки.
     $messenger->shouldReceive('sendCtaUrl')->once()->withArgs(
-        fn (Contact $contact, string $text, string $button, string $url): bool => $text === 'Здесь — до 9 самых подходящих. Весь каталог с поиском и фильтрами по месту и категории — по кнопке ниже.'
+        fn (Contact $contact, string $text, string $button, string $url): bool => $button === CustomerSearchAssistant::CATALOG_BUTTON_RESULTS
             && ! str_contains($url, 'location_id='),
     );
 
@@ -1002,7 +838,7 @@ test('the exhausted clarification limit searches without the place and labels th
         ->resume($session, customerAiNode(), new InboundMessage(text: 'город Сарыагаш'));
 
     expect($outcome)->toBe(AiOutcome::InProgress)
-        ->and($session->refresh()->state['phase'])->toBe('choosing')
+        ->and($session->refresh()->state['phase'])->toBe('searching')
         ->and($session->state['unresolved_location'])->toBe('Сарыагаш')
         ->and($session->state['query'])->toBe('погрузчик, Сарыагаш');
 });
@@ -1044,7 +880,7 @@ test('picking a place from the list searches inside the picked subtree', functio
     SearchQueryExtractionAgent::fake()->preventStrayPrompts();
     $districtA = locationNamed('Абайский район', locationNamed('Карагандинская область'));
     $districtB = locationNamed('Абайский район', locationNamed('г.Шымкент'));
-    $inPicked = Listing::factory()->published()->create([
+    Listing::factory()->published()->create([
         'category_id' => categoryNamed('Автокран')->id, 'description' => 'Кран 25 тонн', 'location_id' => $districtA->id,
     ]);
     Listing::factory()->published()->create([
@@ -1052,13 +888,9 @@ test('picking a place from the list searches inside the picked subtree', functio
     ]);
 
     $messenger = fakeSearchMessenger();
-    $messenger->shouldReceive('sendList')->once()->withArgs(
-        fn (Contact $contact, string $text, string $button, array $rows): bool => str_starts_with($text, 'Нашёлся 1 вариант')
-            && count($rows) === 2
-            && $rows[0]['id'] === "listing:{$inPicked->id}"
-            && $rows[1]['id'] === CustomerSearchAssistant::BUTTON_MENU,
-    );
-    expectCatalogCta($messenger);
+    expectResultsHeader($messenger);
+    // Каталог открывается с фильтром по выбранному месту.
+    expectCatalogCta($messenger, "location_id={$districtA->id}");
 
     $session = searchSession([
         'phase' => 'locating',
@@ -1069,7 +901,7 @@ test('picking a place from the list searches inside the picked subtree', functio
         ->resume($session, customerAiNode(), new InboundMessage(replyId: "search_location:{$districtA->id}"));
 
     expect($outcome)->toBe(AiOutcome::InProgress)
-        ->and($session->refresh()->state['phase'])->toBe('choosing')
+        ->and($session->refresh()->state['phase'])->toBe('searching')
         ->and($session->state['location_candidates'])->toBe([])
         // Выбранное место запоминается для последующих уточнений.
         ->and($session->state['location_id'])->toBe($districtA->id)
@@ -1140,15 +972,13 @@ test('typing the exact name of one distinct candidate equals picking it', functi
     $region = locationNamed('Туркестанская область');
     $bulan = locationNamed('с.Карабулан', $region);
     $bulat = locationNamed('с.Карабулат', $region);
-    $listing = Listing::factory()->published()->create([
+    Listing::factory()->published()->create([
         'category_id' => categoryNamed('Погрузчик')->id, 'description' => 'Фронтальный погрузчик', 'location_id' => $bulan->id,
     ]);
 
     $messenger = fakeSearchMessenger();
-    $messenger->shouldReceive('sendList')->once()->withArgs(
-        fn (Contact $contact, string $text, string $button, array $rows): bool => $rows[0]['id'] === "listing:{$listing->id}",
-    );
-    expectCatalogCta($messenger);
+    expectResultsHeader($messenger);
+    expectCatalogCta($messenger, "location_id={$bulan->id}");
 
     $session = searchSession([
         'phase' => 'locating',
@@ -1159,14 +989,15 @@ test('typing the exact name of one distinct candidate equals picking it', functi
         ->resume($session, customerAiNode(), new InboundMessage(text: 'с.Карабулан'));
 
     expect($outcome)->toBe(AiOutcome::InProgress)
-        ->and($session->refresh()->state['phase'])->toBe('choosing');
+        ->and($session->refresh()->state['phase'])->toBe('searching')
+        ->and($session->state['location_id'])->toBe($bulan->id);
 });
 
 test('an ordinal digit picks the N-th place candidate while picking a place', function () {
     SearchQueryExtractionAgent::fake()->preventStrayPrompts();
     $districtA = locationNamed('Абайский район', locationNamed('Карагандинская область'));
     $districtB = locationNamed('Абайский район', locationNamed('г.Шымкент'));
-    $inA = Listing::factory()->published()->create([
+    Listing::factory()->published()->create([
         'category_id' => categoryNamed('Автокран')->id, 'description' => 'Кран 25 тонн', 'location_id' => $districtA->id,
     ]);
     Listing::factory()->published()->create([
@@ -1174,10 +1005,8 @@ test('an ordinal digit picks the N-th place candidate while picking a place', fu
     ]);
 
     $messenger = fakeSearchMessenger();
-    $messenger->shouldReceive('sendList')->once()->withArgs(
-        fn (Contact $contact, string $text, string $button, array $rows): bool => $rows[0]['id'] === "listing:{$inA->id}",
-    );
-    expectCatalogCta($messenger);
+    expectResultsHeader($messenger);
+    expectCatalogCta($messenger, "location_id={$districtA->id}");
 
     $session = searchSession([
         'phase' => 'locating',
@@ -1190,7 +1019,7 @@ test('an ordinal digit picks the N-th place candidate while picking a place', fu
         ->resume($session, customerAiNode(), new InboundMessage(text: '1'));
 
     expect($outcome)->toBe(AiOutcome::InProgress)
-        ->and($session->refresh()->state['phase'])->toBe('choosing')
+        ->and($session->refresh()->state['phase'])->toBe('searching')
         ->and($session->state['location_id'])->toBe($districtA->id);
 });
 
@@ -1204,15 +1033,13 @@ test('an ordinal at the last displayed row picks it, even with a tenth hidden ca
         ->map(fn (int $i): Location => locationNamed('Абайский район', locationNamed("Область {$i}")))
         ->values();
     $ninth = $districts[8];
-    $inNinth = Listing::factory()->published()->create([
+    Listing::factory()->published()->create([
         'category_id' => categoryNamed('Автокран')->id, 'description' => 'Кран 25 тонн', 'location_id' => $ninth->id,
     ]);
 
     $messenger = fakeSearchMessenger();
-    $messenger->shouldReceive('sendList')->once()->withArgs(
-        fn (Contact $contact, string $text, string $button, array $rows): bool => $rows[0]['id'] === "listing:{$inNinth->id}",
-    );
-    expectCatalogCta($messenger);
+    expectResultsHeader($messenger);
+    expectCatalogCta($messenger, "location_id={$ninth->id}");
 
     $session = searchSession([
         'phase' => 'locating',
@@ -1223,7 +1050,7 @@ test('an ordinal at the last displayed row picks it, even with a tenth hidden ca
         ->resume($session, customerAiNode(), new InboundMessage(text: '9'));
 
     expect($outcome)->toBe(AiOutcome::InProgress)
-        ->and($session->refresh()->state['phase'])->toBe('choosing')
+        ->and($session->refresh()->state['phase'])->toBe('searching')
         ->and($session->state['location_id'])->toBe($ninth->id);
 });
 
@@ -1264,16 +1091,14 @@ test('any other text while picking a place is treated as a refined search', func
     SearchQueryExtractionAgent::fake([fullSearchIntake(['subject' => 'кран 25 тонн', 'location' => 'Астана'])]);
     $districtA = locationNamed('Абайский район', locationNamed('Карагандинская область'));
     $districtB = locationNamed('Абайский район', locationNamed('г.Шымкент'));
-    $listing = Listing::factory()->published()->create([
-        'category_id' => categoryNamed('Автокран')->id, 'description' => 'Кран 25 тонн', 'location_id' => locationNamed('г.Астана')->id,
+    $astana = locationNamed('г.Астана');
+    Listing::factory()->published()->create([
+        'category_id' => categoryNamed('Автокран')->id, 'description' => 'Кран 25 тонн', 'location_id' => $astana->id,
     ]);
 
     $messenger = fakeSearchMessenger();
-    $messenger->shouldReceive('sendList')->once()->withArgs(
-        fn (Contact $contact, string $text, string $button, array $rows): bool => str_starts_with($text, 'Нашёлся 1 вариант')
-            && $rows[0]['id'] === "listing:{$listing->id}",
-    );
-    expectCatalogCta($messenger);
+    expectResultsHeader($messenger);
+    expectCatalogCta($messenger, "location_id={$astana->id}");
 
     $session = searchSession([
         'phase' => 'locating',
@@ -1285,7 +1110,7 @@ test('any other text while picking a place is treated as a refined search', func
         ->resume($session, customerAiNode(), new InboundMessage(text: 'лучше в Астане'));
 
     expect($outcome)->toBe(AiOutcome::InProgress)
-        ->and($session->refresh()->state['phase'])->toBe('choosing')
+        ->and($session->refresh()->state['phase'])->toBe('searching')
         ->and($session->state['location_candidates'])->toBe([]);
 });
 
@@ -1470,7 +1295,7 @@ test('a refinement after the pick keeps the picked place without re-offering the
     SearchQueryExtractionAgent::fake([fullSearchIntake(['subject' => 'кран дешевле', 'location' => 'Абайский район'])]);
     $districtA = locationNamed('Абайский район', locationNamed('Карагандинская область'));
     $districtB = locationNamed('Абайский район', locationNamed('г.Шымкент'));
-    $inPicked = Listing::factory()->published()->create([
+    Listing::factory()->published()->create([
         'category_id' => categoryNamed('Автокран')->id, 'description' => 'Кран 25 тонн', 'location_id' => $districtA->id,
     ]);
     Listing::factory()->published()->create([
@@ -1478,13 +1303,8 @@ test('a refinement after the pick keeps the picked place without re-offering the
     ]);
 
     $messenger = fakeSearchMessenger();
-    $messenger->shouldReceive('sendList')->once()->withArgs(
-        fn (Contact $contact, string $text, string $button, array $rows): bool => str_starts_with($text, 'Нашёлся 1 вариант')
-            && count($rows) === 2
-            && $rows[0]['id'] === "listing:{$inPicked->id}"
-            && $rows[1]['id'] === CustomerSearchAssistant::BUTTON_MENU,
-    );
-    expectCatalogCta($messenger);
+    expectResultsHeader($messenger);
+    expectCatalogCta($messenger, "location_id={$districtA->id}");
 
     $session = searchSession([
         'transcript' => ['нужен кран 25 тонн в Абайском районе'],
@@ -1495,20 +1315,18 @@ test('a refinement after the pick keeps the picked place without re-offering the
 
     expect($outcome)->toBe(AiOutcome::InProgress)
         // Сделанный ранее выбор места действует и на уточнения — список
-        // повторно не приходит, лишний AI-вызов не тратится.
-        ->and($session->refresh()->state['phase'])->toBe('choosing');
+        // мест повторно не приходит, лишний AI-вызов не тратится.
+        ->and($session->refresh()->state['phase'])->toBe('searching');
 });
 
 test('an explicit «any place» satisfies the intake and searches the whole base', function () {
     SearchQueryExtractionAgent::fake([fullSearchIntake(['subject' => 'кран', 'location' => null, 'location_any' => true])]);
-    $listing = Listing::factory()->published()->create([
+    Listing::factory()->published()->create([
         'category_id' => categoryNamed('Автокран')->id, 'description' => 'Кран 25 тонн', 'location_id' => locationNamed('г.Астана')->id,
     ]);
 
     $messenger = fakeSearchMessenger();
-    $messenger->shouldReceive('sendList')->once()->withArgs(
-        fn (Contact $contact, string $text, string $button, array $rows): bool => $rows[0]['id'] === "listing:{$listing->id}",
-    );
+    expectResultsHeader($messenger);
     expectCatalogCta($messenger);
 
     $session = searchSession(['transcript' => ['нужен кран'], 'clarifications' => 1]);
@@ -1523,14 +1341,12 @@ test('the exhausted clarification limit searches with whatever was collected', f
     SearchQueryExtractionAgent::fake([
         fullSearchIntake(['subject' => null, 'location' => null, 'clarifying_question' => 'Что именно вам нужно?']),
     ]);
-    $listing = Listing::factory()->published()->create([
+    Listing::factory()->published()->create([
         'category_id' => categoryNamed('Автокран')->id, 'description' => 'Кран 25 тонн', 'location_id' => locationNamed('г.Шымкент')->id,
     ]);
 
     $messenger = fakeSearchMessenger();
-    $messenger->shouldReceive('sendList')->once()->withArgs(
-        fn (Contact $contact, string $text, string $button, array $rows): bool => $rows[0]['id'] === "listing:{$listing->id}",
-    );
+    expectResultsHeader($messenger);
     expectCatalogCta($messenger);
 
     $session = searchSession(['transcript' => ['нужен кран'], 'clarifications' => 3]);
@@ -1545,14 +1361,12 @@ test('the exhausted clarification limit searches with whatever was collected', f
 
 test('an unavailable AI provider searches the raw text right away', function () {
     SearchQueryExtractionAgent::fake([fn () => throw new RuntimeException('AI недоступен')]);
-    $listing = Listing::factory()->published()->create([
+    Listing::factory()->published()->create([
         'category_id' => categoryNamed('Автокран')->id, 'description' => 'Кран 25 тонн', 'location_id' => locationNamed('г.Шымкент')->id,
     ]);
 
     $messenger = fakeSearchMessenger();
-    $messenger->shouldReceive('sendList')->once()->withArgs(
-        fn (Contact $contact, string $text, string $button, array $rows): bool => $rows[0]['id'] === "listing:{$listing->id}",
-    );
+    expectResultsHeader($messenger);
     expectCatalogCta($messenger);
 
     $session = searchSession();
@@ -1588,9 +1402,9 @@ test('the results CTA link carries the subject and the resolved place without du
     ]);
 
     $messenger = fakeSearchMessenger();
-    $messenger->shouldReceive('sendList')->once();
+    $messenger->shouldReceive('sendButtons')->once();
     $messenger->shouldReceive('sendCtaUrl')->once()->withArgs(
-        fn (Contact $contact, string $text, string $button, string $url): bool => $text === 'Здесь — до 9 самых подходящих. Весь каталог с поиском и фильтрами по месту и категории — по кнопке ниже.'
+        fn (Contact $contact, string $text, string $button, string $url): bool => $text === 'Весь каталог с поиском и фильтрами по месту и категории — по кнопке ниже, ваш запрос уже подставлен.'
             && $button === CustomerSearchAssistant::CATALOG_BUTTON_RESULTS
             && str_contains($url, "/customer/{$contact->id}/listings")
             && str_contains($url, 'signature=')
@@ -1609,22 +1423,22 @@ test('the results CTA link carries the subject and the resolved place without du
 
 test('a failing catalog CTA does not break the delivered выдача', function () {
     SearchQueryExtractionAgent::fake([fullSearchIntake()]);
-    $listing = Listing::factory()->published()->create([
+    Listing::factory()->published()->create([
         'category_id' => categoryNamed('Автокран')->id, 'description' => 'Кран 25 тонн', 'location_id' => locationNamed('г.Шымкент')->id,
     ]);
 
     $messenger = fakeSearchMessenger();
-    $messenger->shouldReceive('sendList')->once();
+    $messenger->shouldReceive('sendButtons')->once();
     $messenger->shouldReceive('sendCtaUrl')->once()->andThrow(new RuntimeException('Dereu недоступен'));
 
     $session = searchSession();
     $outcome = app(CustomerSearchAssistant::class)
         ->resume($session, customerAiNode(), new InboundMessage(text: 'нужен кран 25 тонн, Шымкент'));
 
-    // Кнопка — дополнение к выдаче: её сбой не гасит открытый список.
+    // Сбой кнопки логируется и не роняет уже отправленный заголовок
+    // выдачи: диалог живёт дальше, заказчик может уточнить запрос.
     expect($outcome)->toBe(AiOutcome::InProgress)
-        ->and($session->refresh()->state['phase'])->toBe('choosing')
-        ->and($session->state['offered'])->toBe([$listing->id]);
+        ->and($session->refresh()->state['phase'])->toBe('searching');
 });
 
 test('a chat pick with a pending web request for the same listing does not ping the supplier twice', function () {
@@ -1888,81 +1702,16 @@ test('вход в ветку поиска водителя пишет вид в 
         ->and($session->refresh()->state['kind'])->toBe('driver');
 });
 
-test('ветка «ищу водителя» ищет только водителей и передаёт вид в каталожной ссылке', function () {
+test('ветка «ищу водителя» передаёт вид ветки в каталожную ссылку', function () {
     SearchQueryExtractionAgent::fake([fullSearchIntake([
         'subject' => 'машинист экскаватора', 'location' => null, 'location_any' => true,
     ])]);
-    Listing::factory()->published()->create([
-        'title' => 'Аренда экскаватора', 'category_id' => categoryNamed('Экскаватор')->id,
-        'description' => 'Гусеничный экскаватор в аренду.', 'price' => '10000 тг/ч',
-    ]);
-    $driver = Listing::factory()->driver()->published()->create(['title' => 'Машинист экскаватора']);
+    Listing::factory()->driver()->published()->create(['title' => 'Машинист экскаватора']);
 
     $messenger = fakeSearchMessenger();
-    $messenger->shouldReceive('sendList')->once()->withArgs(
-        fn (Contact $contact, string $text, string $button, array $rows): bool => count($rows) === 2
-            && $rows[0]['id'] === "listing:{$driver->id}"
-            && $rows[1]['id'] === CustomerSearchAssistant::BUTTON_MENU,
-    );
-    $messenger->shouldReceive('sendCtaUrl')->once()->withArgs(
-        fn (Contact $contact, string $text, string $button, string $url): bool => $text === 'Здесь — до 9 самых подходящих. Весь каталог с поиском и фильтрами по месту и категории — по кнопке ниже.'
-            && str_contains($url, 'kind=driver'),
-    );
-
-    $outcome = app(CustomerSearchAssistant::class)->resume(
-        searchSession(['kind' => 'driver']),
-        customerAiNode() + ['kind' => 'driver'],
-        new InboundMessage(text: 'нужен машинист экскаватора'),
-    );
-
-    expect($outcome)->toBe(AiOutcome::InProgress);
-});
-
-test('строка выдачи мастера — имя, услуги и место вместо категории и цены', function () {
-    SearchQueryExtractionAgent::fake([fullSearchIntake([
-        'subject' => 'ремонт гидравлики', 'location' => null, 'location_any' => true,
-    ])]);
-    Listing::factory()->repair()->published()->create([
-        'person_name' => 'Сергей', 'services' => 'гидравлика, двигатели',
-        'title' => 'Ремонт гидравлики', 'description' => 'Ремонт гидравлики спецтехники.',
-        'location_id' => locationNamed('г.Шымкент')->id,
-    ]);
-
-    $messenger = fakeSearchMessenger();
-    $messenger->shouldReceive('sendList')->once()->withArgs(
-        fn (Contact $contact, string $text, string $button, array $rows): bool => count($rows) === 2
-            && $rows[0]['title'] === 'Сергей'
-            && $rows[0]['description'] === 'гидравлика, двигатели · г.Шымкент'
-            && $rows[1]['id'] === CustomerSearchAssistant::BUTTON_MENU,
-    );
-    expectCatalogCta($messenger, 'kind=repair');
-
-    $outcome = app(CustomerSearchAssistant::class)->resume(
-        searchSession(['kind' => 'repair']),
-        customerAiNode() + ['kind' => 'repair'],
-        new InboundMessage(text: 'нужен ремонт гидравлики'),
-    );
-
-    expect($outcome)->toBe(AiOutcome::InProgress);
-});
-
-test('строка выдачи водителя — имя, техника, стаж и место', function () {
-    SearchQueryExtractionAgent::fake([fullSearchIntake([
-        'subject' => 'машинист экскаватора', 'location' => null, 'location_any' => true,
-    ])]);
-    $driver = Listing::factory()->driver()->published()->create([
-        'person_name' => 'Серик', 'title' => 'Машинист экскаватора',
-        'location_id' => locationNamed('г.Шымкент')->id,
-    ]);
-    $driver->machineCategories()->attach(categoryNamed('Экскаватор'));
-
-    $messenger = fakeSearchMessenger();
-    $messenger->shouldReceive('sendList')->once()->withArgs(
-        fn (Contact $contact, string $text, string $button, array $rows): bool => count($rows) === 2
-            && $rows[0]['title'] === 'Серик'
-            && $rows[0]['description'] === 'Экскаватор · стаж 8 л. · г.Шымкент'
-            && $rows[1]['id'] === CustomerSearchAssistant::BUTTON_MENU,
-    );
+    expectResultsHeader($messenger);
+    // Каталог по ссылке открывается отфильтрованным по виду ветки —
+    // заказчик из «ищу водителя» видит только водителей.
     expectCatalogCta($messenger, 'kind=driver');
 
     $outcome = app(CustomerSearchAssistant::class)->resume(
@@ -1982,17 +1731,13 @@ test('сказанный заказчиком выезд превращаетс�
         'repair_place' => RepairPlace::OwnService, 'services' => 'гидравлика',
         'title' => 'Ремонт гидравлики', 'description' => 'Ремонт гидравлики в своём сервисе.',
     ]);
-    $travels = Listing::factory()->repair()->published()->create([
+    Listing::factory()->repair()->published()->create([
         'repair_place' => RepairPlace::Travels, 'services' => 'гидравлика',
         'title' => 'Ремонт гидравлики с выездом', 'description' => 'Ремонт гидравлики с выездом.',
     ]);
 
     $messenger = fakeSearchMessenger();
-    $messenger->shouldReceive('sendList')->once()->withArgs(
-        fn (Contact $contact, string $text, string $button, array $rows): bool => count($rows) === 2
-            && $rows[0]['id'] === "listing:{$travels->id}"
-            && $rows[1]['id'] === CustomerSearchAssistant::BUTTON_MENU,
-    );
+    expectResultsHeader($messenger);
     expectCatalogCta($messenger, 'kind=repair');
 
     $session = searchSession(['kind' => 'repair']);

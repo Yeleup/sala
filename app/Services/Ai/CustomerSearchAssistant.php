@@ -30,10 +30,12 @@ use Throwable;
  * collects what the customer needs and where over a short intake dialog
  * (typed or voice messages, transcribed upstream by ScenarioAiAssistant),
  * asking clarifying questions about the missing pieces, and only then
- * matches the settled query against published listings, offers the ranked
- * results as a WhatsApp list, and turns the chosen option into a customer
- * request with a supplier notification. Equipment is never locked by a
- * request.
+ * matches the settled query against published listings and hands the
+ * results off to the personal web catalog (the «Все варианты» CTA with
+ * the query prefilled) — there the chosen option becomes a customer
+ * request with a supplier notification. Rows of legacy in-chat result
+ * lists (sent before the catalog handoff) keep working until a new
+ * search supersedes them. Equipment is never locked by a request.
  */
 class CustomerSearchAssistant
 {
@@ -71,13 +73,11 @@ class CustomerSearchAssistant
     private const int ROW_DESCRIPTION_LIMIT = 72;
 
     /**
-     * WhatsApp lists hold at most 10 rows: every offered list (search
-     * results, location candidates) shows at most this many entries, the
-     * last slot reserved for the «В меню» exit row.
+     * WhatsApp lists hold at most 10 rows: the location pick list shows
+     * at most this many candidates, the last slot reserved for the
+     * «В меню» exit row.
      */
     public const int MAX_OFFERED_ROWS = 9;
-
-    public const string LIST_BUTTON = 'Варианты';
 
     /**
      * Legacy: the «Искать шире» button of messages sent before the
@@ -161,6 +161,9 @@ class CustomerSearchAssistant
             return $this->handleLocating($session, $state, $message, $node);
         }
 
+        // Легаси: списки выдачи, отправленные до передачи выдачи каталогу,
+        // остаются в чатах — их строки продолжают размещать заявку (или
+        // честно сообщают об устаревании), пока новая выдача не сменит фазу.
         if ($state['phase'] === 'choosing') {
             $chosen = $this->matchChoice($state['offered'], $message);
 
@@ -407,51 +410,51 @@ class CustomerSearchAssistant
             return AiOutcome::InProgress;
         }
 
-        return $this->offerMatches($session, $state, $query, $matches, $location);
+        return $this->offerCatalogResults($session, $state, $query, $location);
     }
 
     /**
-     * The catalog CTA rides with every результат: the chat list holds at
-     * most 10 rows, the catalog shows everything. The prefill mirrors
-     * what this search ranked by, without duplication: with a resolved
-     * place the link carries the subject alone plus the place as the
-     * location filter; an unresolved place stays in the search text
-     * (there it can still match the listings' location wording).
+     * The выдача lives in the web catalog: the chat gets an honest header
+     * (what matched and where) with the «В меню» exit, then the «Все
+     * варианты» CTA into the catalog — there the customer picks a listing
+     * and the «Выбрать» button places the request. WhatsApp cannot mix
+     * reply buttons with a URL button, so the pair mirrors
+     * offerWiderCatalog. The prefill carries what this search ranked by,
+     * without duplication: with a resolved place the link carries the
+     * subject alone plus the place as the location filter; an unresolved
+     * place stays in the search text (there it can still match the
+     * listings' location wording).
      *
      * @param  array<string, mixed>  $state
-     * @param  Collection<int, Listing>  $matches
      */
-    protected function offerMatches(BotSession $session, array $state, string $query, Collection $matches, ?Location $location = null): AiOutcome
+    protected function offerCatalogResults(BotSession $session, array $state, string $query, ?Location $location = null): AiOutcome
     {
-        // WhatsApp lists hold at most 10 rows: at most 9 matches, the last
-        // row reserved for the «В меню» exit.
-        $matches = $matches->take(self::MAX_OFFERED_ROWS);
-
-        $state['phase'] = 'choosing';
+        $state['phase'] = 'searching';
         $state['query'] = $query;
-        $state['offered'] = $matches->pluck('id')->all();
+        // Новая выдача гасит легаси-список прошлых сообщений: его строки
+        // не должны выбираться после смены запроса. Открытый уточняющий
+        // вопрос тоже закрыт — поиск по нему уже выполнен.
+        $state['offered'] = [];
         $state['expand_location_id'] = null;
+        $state['last_question'] = null;
         $this->persist($session, $state);
 
         $unresolvedLocation = $state['unresolved_location'] ?? null;
+        $subject = ($state['subject'] ?? null) ?: $query;
 
-        $this->messenger->sendList(
+        $this->messenger->sendButtons(
             $session->contact,
             filled($unresolvedLocation)
-                ? sprintf('Место «%s» не нашлось в справочнике, поэтому подобрали варианты без учёта места. Выберите подходящий — заявка сразу уйдёт поставщику.', $unresolvedLocation)
-                : $this->resultsHeader($matches->count(), ($state['subject'] ?? null) ?: $query, $location),
-            self::LIST_BUTTON,
-            [
-                ...$matches->map(fn (Listing $listing): array => $this->listRow($listing))->all(),
-                ['id' => self::BUTTON_MENU, 'title' => self::BUTTON_MENU_TITLE],
-            ],
+                ? sprintf('Место «%s» не нашлось в справочнике, поэтому подобрали варианты без учёта места. Выбирайте в каталоге — заявка сразу уйдёт поставщику.', $unresolvedLocation)
+                : $this->resultsHeader($subject, $location),
+            [['id' => self::BUTTON_MENU, 'title' => self::BUTTON_MENU_TITLE]],
         );
 
         $this->sendCatalogCta(
             $session,
-            'Здесь — до 9 самых подходящих. Весь каталог с поиском и фильтрами по месту и категории — по кнопке ниже.',
+            'Весь каталог с поиском и фильтрами по месту и категории — по кнопке ниже, ваш запрос уже подставлен.',
             self::CATALOG_BUTTON_RESULTS,
-            $location !== null ? (($state['subject'] ?? null) ?: $query) : $query,
+            $location !== null ? $subject : $query,
             $location,
             $this->kind($state),
         );
@@ -460,36 +463,22 @@ class CustomerSearchAssistant
     }
 
     /**
-     * The honest results header: how many matched, what for, and where —
-     * replaces the old fixed «Вот что нашлось» with real numbers (used
-     * only when the place is either unset or resolved — an unresolved
-     * named place gets its own fixed honesty string instead, see the
-     * caller).
+     * The honest results header: what matched and where. The count is
+     * gone together with the chat list — the catalog shows every match,
+     * so a chat-side number would describe nothing visible and disagree
+     * with the catalog. Used only when the place is either unset or
+     * resolved — an unresolved named place gets its own fixed honesty
+     * string instead, see the caller.
      */
-    private function resultsHeader(int $count, string $subject, ?Location $location): string
+    private function resultsHeader(string $subject, ?Location $location): string
     {
-        $header = ($count === 1 ? 'Нашёлся' : 'Нашлось')." {$count} ".$this->pluralVariants($count);
-        $header .= sprintf(' по запросу «%s»', $subject);
+        $header = sprintf('Нашлись варианты по запросу «%s»', $subject);
 
         if ($location !== null) {
             $header .= ' в '.$location->name;
         }
 
-        return $header.'. Выберите подходящий — заявка сразу уйдёт поставщику.';
-    }
-
-    /**
-     * The Russian noun form for a results count — bounded by
-     * MAX_OFFERED_ROWS (9), so the 11–14 exception of the full
-     * pluralization rule never applies here.
-     */
-    private function pluralVariants(int $count): string
-    {
-        return match (true) {
-            $count === 1 => 'вариант',
-            $count >= 2 && $count <= 4 => 'варианта',
-            default => 'вариантов',
-        };
+        return $header.'. Выбирайте в каталоге — заявка сразу уйдёт поставщику.';
     }
 
     /**
@@ -587,11 +576,11 @@ class CustomerSearchAssistant
     }
 
     /**
-     * Re-send whatever the assistant is waiting for. The results list is
-     * not resent — it is still visible in the chat, so a nudge is enough
-     * and cheaper than a second interactive message. Before the first
-     * clarifying question that is the block's greeting — the one the
-     * operator writes in the scenario editor, not the built-in text.
+     * Re-send whatever the assistant is waiting for. A legacy results
+     * list is not resent — it is still visible in the chat, so a nudge is
+     * enough and cheaper than a second interactive message. Before the
+     * first clarifying question that is the block's greeting — the one
+     * the operator writes in the scenario editor, not the built-in text.
      *
      * @param  array<string, mixed>  $state
      * @param  array<string, mixed>  $node
@@ -728,7 +717,7 @@ class CustomerSearchAssistant
         $matches = $this->matcher->match($query, $location, $this->kind($state), $this->matchFilters($state));
 
         if ($matches->isNotEmpty()) {
-            return $this->offerMatches($session, $state, $query, $matches, $location);
+            return $this->offerCatalogResults($session, $state, $query, $location);
         }
 
         if ($location->parent_id !== null) {
@@ -887,12 +876,12 @@ class CustomerSearchAssistant
     }
 
     /**
-     * A picked list row (by machine id), a typed text that exactly matches
-     * the title of exactly one offered row, or its ordinal position in the
-     * current list — the scenario-wide convention that typing a button's
-     * name equals pressing it (title matching takes priority, so a listing
-     * titled with a digit stays reachable by its title). Anything else is
-     * treated as a refined search query.
+     * A picked row of a legacy result list (by machine id), a typed text
+     * that exactly matches the title of exactly one offered row, or its
+     * ordinal position in that list — the scenario-wide convention that
+     * typing a button's name equals pressing it (title matching takes
+     * priority, so a listing titled with a digit stays reachable by its
+     * title). Anything else is treated as a refined search query.
      *
      * @param  list<int>  $offered
      */
@@ -932,36 +921,9 @@ class CustomerSearchAssistant
     }
 
     /**
-     * The list row speaks each kind's language: a rental shows the place
-     * and the price, a master — his services and place, a driver — his
-     * machines, the years of experience and place.
-     *
-     * @return array{id: string, title: string, description?: string}
+     * The row title of legacy result lists — still matched against typed
+     * replies while such a list awaits a choice (matchChoice).
      */
-    protected function listRow(Listing $listing): array
-    {
-        $row = [
-            'id' => self::ROW_ID_PREFIX.$listing->id,
-            'title' => $this->rowTitle($listing),
-        ];
-
-        $description = match ($listing->kind) {
-            ListingKind::Rental => implode(' · ', array_filter([$listing->locationLine(), $listing->price])),
-            ListingKind::Repair => implode(' · ', array_filter([$listing->services, $listing->locationLine()])),
-            ListingKind::Driver => implode(' · ', array_filter([
-                $listing->machineCategories->pluck('name')->implode(', ') ?: null,
-                $listing->experience_years !== null ? 'стаж '.$listing->experience_years.' л.' : null,
-                $listing->locationLine(),
-            ])),
-        };
-
-        if ($description !== '') {
-            $row['description'] = WhatsappText::clamp($description, self::ROW_DESCRIPTION_LIMIT);
-        }
-
-        return $row;
-    }
-
     protected function rowTitle(Listing $listing): string
     {
         return WhatsappText::clamp($this->fullRowTitle($listing), self::ROW_TITLE_LIMIT);

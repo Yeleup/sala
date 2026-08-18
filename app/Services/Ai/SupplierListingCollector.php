@@ -1534,7 +1534,19 @@ class SupplierListingCollector
                 );
         }
 
-        if (filled($fields['clarifying_question'] ?? null)) {
+        // The model's question is trusted only when its declared target
+        // (clarifying_field) is a field the collector itself still counts as
+        // missing. The model routinely second-guesses filled fields — asks
+        // to narrow several machine categories down to one, re-asks an
+        // answer given with a button it never saw — and such a question
+        // burns the clarification limit re-asking the answered while the
+        // actually missing field never gets asked at all. The model names
+        // the location by its own key; the collector misses the resolved
+        // location_id.
+        $target = $fields['clarifying_field'] ?? null;
+
+        if (filled($fields['clarifying_question'] ?? null)
+            && in_array($target === 'location' ? 'location_id' : $target, $missing, true)) {
             return (string) $fields['clarifying_question'];
         }
 

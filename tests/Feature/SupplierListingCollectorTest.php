@@ -106,6 +106,7 @@ function fullExtraction(array $overrides = []): array
         'location_detail' => null,
         'price' => '10000 тг/час',
         'clarifying_question' => '',
+        'clarifying_field' => null,
         'summary' => 'Трактор, Шымкент, 10000 тг/ч',
     ], $overrides);
 }
@@ -131,6 +132,7 @@ function repairExtraction(array $overrides = []): array
         'location_detail' => null,
         'price' => null,
         'clarifying_question' => '',
+        'clarifying_field' => null,
         'summary' => 'Ремонт гидравлики, с выездом, Алматы',
     ], $overrides);
 }
@@ -159,6 +161,7 @@ function driverExtraction(array $overrides = []): array
         'location' => 'Шымкент',
         'location_detail' => null,
         'clarifying_question' => '',
+        'clarifying_field' => null,
         'summary' => 'Машинист экскаватора, стаж 8 лет, Шымкент',
     ], $overrides);
 }
@@ -246,7 +249,7 @@ test('a complete description creates a draft and asks for confirmation', functio
 
 test('missing data triggers the clarifying question suggested by the extractor', function () {
     ListingExtractionAgent::fake([
-        fullExtraction(['price' => null, 'clarifying_question' => 'Какая цена или тариф за смену?']),
+        fullExtraction(['price' => null, 'clarifying_question' => 'Какая цена или тариф за смену?', 'clarifying_field' => 'price']),
     ]);
     $session = collectorSession();
 
@@ -260,6 +263,68 @@ test('missing data triggers the clarifying question suggested by the extractor',
     expect($outcome)->toBe(AiOutcome::InProgress)
         ->and($session->fresh()->state['attempts'])->toBe(1)
         ->and(Listing::count())->toBe(0);
+});
+
+test('вопрос модели про уже заполненное поле заменяется встроенным вопросом о недостающем', function () {
+    // Модель регулярно переспрашивает уже извлечённое: сужает несколько
+    // категорий техники до одной, заново спрашивает ответ, данный кнопкой,
+    // которого в её транскрипте нет. Такой вопрос гоняет поставщика по
+    // кругу и сжигает лимит, так и не спросив о действительно недостающем.
+    ListingExtractionAgent::fake([driverExtraction([
+        'person_name' => null,
+        'clarifying_question' => 'Какие именно у вас права: водительские или тракториста-машиниста?',
+        'clarifying_field' => 'licence_type',
+    ])]);
+    $session = collectorSession(['kind' => 'driver']);
+
+    fakeCollectorMessenger()->shouldReceive('sendButtons')->once()
+        ->withArgs(fn (Contact $to, string $text) => $text === 'Как вас зовут?');
+
+    $outcome = app(SupplierListingCollector::class)
+        ->resume($session, driverAiNode(), new InboundMessage(text: 'Права тракториста, экскаватор, 8 лет, Шымкент, не выезжаю'));
+
+    expect($outcome)->toBe(AiOutcome::InProgress)
+        ->and($session->fresh()->state['attempts'])->toBe(1)
+        ->and($session->fresh()->state['last_question'])->toBe('Как вас зовут?');
+});
+
+test('вопрос модели без объявленного целевого поля не используется', function () {
+    ListingExtractionAgent::fake([
+        fullExtraction(['price' => null, 'clarifying_question' => 'А сколько стоит доставка?', 'clarifying_field' => null]),
+    ]);
+    $session = collectorSession();
+
+    fakeCollectorMessenger()->shouldReceive('sendButtons')->once()
+        ->withArgs(fn (Contact $to, string $text) => $text === 'Какая цена или тариф?');
+
+    app(SupplierListingCollector::class)
+        ->resume($session, supplierAiNode(), new InboundMessage(text: 'Сдаю трактор в Шымкенте'));
+});
+
+test('целевое поле «location» модели отвечает недостающей локации анкеты', function () {
+    // Модель знает поле как location, коллектор проверяет разрешённый
+    // location_id — честный вопрос о месте не должен отбрасываться.
+    ListingExtractionAgent::fake([
+        fullExtraction(['location' => null, 'clarifying_question' => 'В каком городе техника?', 'clarifying_field' => 'location']),
+    ]);
+    $session = collectorSession();
+
+    fakeCollectorMessenger()->shouldReceive('sendButtons')->once()
+        ->withArgs(fn (Contact $to, string $text) => $text === 'В каком городе техника?');
+
+    app(SupplierListingCollector::class)
+        ->resume($session, supplierAiNode(), new InboundMessage(text: 'Сдаю трактор, 10000 тг/час'));
+});
+
+test('схема и промпт извлечения объявляют целевое поле уточняющего вопроса', function () {
+    $schema = new JsonSchemaTypeFactory;
+
+    $rental = (new ListingExtractionAgent(ListingKind::Rental, ['Автокран'], ['Hitachi']))->schema($schema)['clarifying_field']->toArray();
+    $driver = (new ListingExtractionAgent(ListingKind::Driver, ['Экскаватор']))->schema($schema)['clarifying_field']->toArray();
+
+    expect($rental['enum'])->toBe(['category', 'description', 'location', 'price'])
+        ->and($driver['enum'])->toBe(['person_name', 'machine_categories', 'licence_type', 'experience_years', 'location', 'travels_to_other_cities'])
+        ->and((string) (new ListingExtractionAgent(ListingKind::Repair))->instructions())->toContain('clarifying_field');
 });
 
 test('exhausting the clarification limit saves the partial draft and hands off to the web form', function () {
@@ -659,7 +724,7 @@ test('a readable message resets the unreadable streak', function () {
 
 test('a category outside the dictionary never reaches the draft and is asked again', function () {
     ListingExtractionAgent::fake([
-        fullExtraction(['category' => 'Дирижабль', 'clarifying_question' => 'Что именно за техника?']),
+        fullExtraction(['category' => 'Дирижабль', 'clarifying_question' => 'Что именно за техника?', 'clarifying_field' => 'category']),
     ]);
     $session = collectorSession();
 
@@ -1308,7 +1373,7 @@ test('a remembered AI pick is not put to the model again on later messages', fun
     $picked = locationNamed('Абайский район', locationNamed('Карагандинская область'));
 
     ListingExtractionAgent::fake([
-        fullExtraction(['location' => 'Абайский район', 'price' => null, 'clarifying_question' => 'Какая цена?']),
+        fullExtraction(['location' => 'Абайский район', 'price' => null, 'clarifying_question' => 'Какая цена?', 'clarifying_field' => 'price']),
         fullExtraction(['location' => 'Абайский район']),
     ]);
     fakeLocationChoice($picked->id);
@@ -1406,7 +1471,7 @@ test('a picked location survives later messages without re-asking the list', fun
     // пересобираются с нуля на каждом сообщении, и без удержания выбора
     // ответ про цену снова получил бы список одноимённых мест.
     ListingExtractionAgent::fake([
-        fullExtraction(['location' => 'Абайский район', 'price' => null, 'clarifying_question' => 'Какая цена?']),
+        fullExtraction(['location' => 'Абайский район', 'price' => null, 'clarifying_question' => 'Какая цена?', 'clarifying_field' => 'price']),
         fullExtraction(['location' => 'Абайский район']),
     ]);
     fakeLocationChoice();
@@ -1435,7 +1500,7 @@ test('naming a different place after a pick rebinds instead of keeping the pick'
     $karaganda = locationNamed('г.Караганда');
 
     ListingExtractionAgent::fake([
-        fullExtraction(['location' => 'Абайский район', 'price' => null, 'clarifying_question' => 'Какая цена?']),
+        fullExtraction(['location' => 'Абайский район', 'price' => null, 'clarifying_question' => 'Какая цена?', 'clarifying_field' => 'price']),
         fullExtraction(['location' => 'Караганда']),
     ]);
     fakeLocationChoice();
@@ -1463,7 +1528,7 @@ test('correcting to a same-named place after a pick reopens the list', function 
     // с тем же поисковым ключом: правка названия должна заново открыть
     // список, а не молча удержать прежний выбор.
     ListingExtractionAgent::fake([
-        fullExtraction(['location' => 'Абайский район', 'price' => null, 'clarifying_question' => 'Какая цена?']),
+        fullExtraction(['location' => 'Абайский район', 'price' => null, 'clarifying_question' => 'Какая цена?', 'clarifying_field' => 'price']),
         fullExtraction(['location' => 'Абайская г.а.']),
     ]);
     fakeLocationChoice();
@@ -1786,6 +1851,7 @@ test('a fourth service question in a row walks the ordinary collection path', fu
     ListingExtractionAgent::fake(fn (): array => fullExtraction([
         'price' => null,
         'clarifying_question' => 'Какая цена или тариф?',
+        'clarifying_field' => 'price',
         'user_intent' => 'service_question',
     ]));
     $session = collectorSession([

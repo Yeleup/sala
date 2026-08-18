@@ -7,8 +7,9 @@
     catalog.blade.php + components/customer/layout.blade.php): состояния
     desktop и mobile, панель фильтров, карточки с «Выбрать» и бейджем
     отправленной заявки, баннеры успеха/дубликата/ошибки, пустая выдача.
-    Отдельные состояния — каталог в ветке вида: подзаголовок называет вид,
-    даёт выход «Показать все виды», фильтра «Категория» в ветке нет.
+    Отдельные состояния — каталог в ветке вида: подзаголовок называет вид и
+    даёт выход «Показать все виды»; фильтр «Категория» остаётся только в
+    ветке аренды, у мастеров и водителей категорий не бывает.
     Тема — синяя (градиентная шапка, синие кнопки и акценты).
 
     Портал поставщика (resources/views/supplier/* +
@@ -480,6 +481,48 @@
                     </div>
                 </div>
             </div>
+        </main>
+    </div>
+</div>
+
+<div class="preview-section">
+    <h2>Каталог заказчика в ветке аренды — desktop (подпись вида и фильтр «Категория» вместе: категория бывает только у аренды)</h2>
+    <div class="viewport viewport-desktop">
+        <main>
+            <header class="page-header">
+                <h1>Каталог объявлений</h1>
+                <p>Аренда спецтехники — все опубликованные объявления этого вида. <a href="#">Показать все виды</a></p>
+            </header>
+
+            <div class="card">
+                <div class="field">
+                    <label>Поиск</label>
+                    <input value="кран 25 тонн" placeholder="Что ищете? Например: кран 25 тонн">
+                </div>
+                <div class="filter-row">
+                    <div class="field">
+                        <label>Категория</label>
+                        <select><option>— все категории —</option><option selected>Автокран</option><option>Экскаватор</option></select>
+                    </div>
+                    <div class="field">
+                        <label>Место</label>
+                        <div class="location-picker">
+                            <input class="lp-input" value="г.Шымкент" placeholder="Город, район или село">
+                            <button type="button" class="lp-clear">&times;</button>
+                        </div>
+                    </div>
+                    <div class="field">
+                        <label>Сортировка</label>
+                        <select><option selected>По соответствию запросу</option><option>Сначала новые</option><option>Сначала старые</option></select>
+                    </div>
+                </div>
+                <div class="actions" style="margin-top: 0.25rem;">
+                    <button class="btn btn-primary">Показать</button>
+                    <a class="btn btn-secondary" href="#">Сбросить</a>
+                </div>
+            </div>
+
+            <p class="muted result-count">Найдено объявлений: 233</p>
         </main>
     </div>
 </div>

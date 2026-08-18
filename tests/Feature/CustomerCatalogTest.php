@@ -1,6 +1,7 @@
 <?php
 
 use App\Enums\CustomerRequestStatus;
+use App\Enums\ListingKind;
 use App\Enums\ListingMediaType;
 use App\Exceptions\SessionWindowClosed;
 use App\Models\BotSession;
@@ -307,6 +308,18 @@ describe('виды объявлений в каталоге', function () {
 
         $this->get(catalogLinks()->catalogUrl($contact))->assertOk()->assertDontSee('doc.jpg');
         $this->get(catalogLinks()->listingUrl($contact, $driver))->assertOk()->assertDontSee('doc.jpg');
+    });
+
+    test('каталог по ссылке из ветки аренды показывает только аренду', function () {
+        $contact = Contact::factory()->create();
+        Listing::factory()->published()->create(['title' => 'Аренда крана из ветки']);
+        Listing::factory()->repair()->published()->create(['title' => 'Ремонт двигателей']);
+
+        $this->get(catalogLinks()->catalogUrl($contact, kind: ListingKind::Rental))
+            ->assertOk()
+            ->assertSee('Аренда спецтехники — все опубликованные объявления этого вида.')
+            ->assertSee('Аренда крана из ветки')
+            ->assertDontSee('Ремонт двигателей');
     });
 
     test('шапка каталога называет вид ветки и даёт выход ко всем видам', function () {

@@ -65,7 +65,10 @@ class CustomerCatalogController extends Controller
             'listings' => $listings,
             'categories' => Category::query()->orderBy('name')->get(),
             'locationLabel' => $filters['location']?->label(),
-            'resetUrl' => $this->catalogUrlInKind($contact, $filters['kind']),
+            // «Сбросить» clears the search and every filter but the kind: the
+            // header names the branch, so dropping it would swap the results
+            // for a different set with nothing on screen explaining why.
+            'resetUrl' => $this->links->catalogUrl($contact, kind: $filters['kind']),
             'allKindsUrl' => $this->links->catalogUrl($contact),
             'signature' => (string) $request->query('signature'),
             'expires' => (string) $request->query('expires'),
@@ -238,22 +241,6 @@ class CustomerCatalogController extends Controller
         }
 
         return $query->paginate(self::PER_PAGE)->withQueryString();
-    }
-
-    /**
-     * The catalog stripped of the search and every filter but the kind:
-     * «Сбросить» must not throw the customer out of the branch they
-     * arrived in — the выдача would change to a different one with
-     * nothing on screen explaining why. Built here instead of through
-     * catalogUrl, which drops the rental kind on purpose: the header
-     * names whatever kind the page filters by, so the reset owes the
-     * customer that same kind back.
-     */
-    protected function catalogUrlInKind(Contact $contact, ?ListingKind $kind): string
-    {
-        $url = $this->links->catalogUrl($contact);
-
-        return $kind === null ? $url : $url.'&kind='.$kind->value;
     }
 
     /**

@@ -67,9 +67,10 @@ class CtaLinkBuilder
         $prefill = http_build_query(array_filter([
             'q' => $query,
             'location_id' => $location?->getKey(),
-            // Rental is omitted on purpose: the rental branch's link keeps
-            // opening the full catalog exactly as before kinds existed.
-            'kind' => $kind !== null && $kind !== ListingKind::Rental ? $kind->value : null,
+            // Every branch carries its kind, rental included: the chat search
+            // filters hard by kind, so a catalog that quietly widened the
+            // results would contradict the very outcome it was handed off from.
+            'kind' => $kind?->value,
         ]));
 
         return $prefill === '' ? $url : $url.'&'.$prefill;

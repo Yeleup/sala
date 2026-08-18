@@ -1723,6 +1723,26 @@ test('ветка «ищу водителя» передаёт вид ветки 
     expect($outcome)->toBe(AiOutcome::InProgress);
 });
 
+test('ветка аренды передаёт вид ветки в каталожную ссылку', function () {
+    SearchQueryExtractionAgent::fake([fullSearchIntake()]);
+    $shymkent = locationNamed('г.Шымкент');
+    Listing::factory()->published()->create([
+        'category_id' => categoryNamed('Автокран')->id, 'description' => 'Кран 25 тонн со стрелой',
+        'location_id' => $shymkent->id, 'price' => '20000 тг/ч',
+    ]);
+
+    $messenger = fakeSearchMessenger();
+    expectResultsHeader($messenger);
+    // Чат в ветке аренды ищет жёстко по аренде, поэтому каталог по кнопке
+    // обязан показывать то же самое, а не подмешивать мастеров и водителей.
+    expectCatalogCta($messenger, 'kind=rental');
+
+    $outcome = app(CustomerSearchAssistant::class)
+        ->resume(searchSession(), customerAiNode(), new InboundMessage(text: 'нужен кран 25 тонн, Шымкент'));
+
+    expect($outcome)->toBe(AiOutcome::InProgress);
+});
+
 test('сказанный заказчиком выезд превращается в жёсткий фильтр', function () {
     SearchQueryExtractionAgent::fake([fullSearchIntake([
         'subject' => 'ремонт гидравлики', 'location' => null, 'location_any' => true, 'needs_travel' => true,

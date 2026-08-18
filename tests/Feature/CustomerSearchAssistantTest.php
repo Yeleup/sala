@@ -1634,6 +1634,7 @@ test('a chat pick with a pending web request for the same listing does not ping 
     CustomerRequest::create([
         'contact_id' => $session->contact->id,
         'listing_id' => $listing->id,
+        'supplier_contact_id' => $supplier->id,
         'query_text' => 'выбор в веб-каталоге',
     ]);
 
@@ -1649,6 +1650,24 @@ test('a chat pick with a pending web request for the same listing does not ping 
     // дубль не создаётся, поставщик повторно не уведомляется.
     expect($outcome)->toBe(AiOutcome::Completed)
         ->and(CustomerRequest::count())->toBe(1);
+});
+
+test('a failed supplier notification is admitted honestly in chat', function () {
+    $supplier = Contact::factory()->withClosedSessionWindow()->create();
+    $listing = Listing::factory()->published()->for($supplier, 'supplier')->create(['category_id' => categoryNamed('Автокран')->id]);
+    $session = searchSession(['phase' => 'choosing', 'query' => 'кран', 'offered' => [$listing->id]]);
+
+    // Окно поставщика закрыто, утверждённого шаблона нет — уведомить нечем.
+    $messenger = fakeSearchMessenger();
+    $messenger->shouldReceive('sendText')->once()->withArgs(
+        fn (Contact $contact, string $text): bool => str_contains($text, 'не получилось'),
+    );
+
+    $outcome = app(CustomerSearchAssistant::class)
+        ->resume($session, customerAiNode(), new InboundMessage(replyId: "listing:{$listing->id}"));
+
+    expect($outcome)->toBe(AiOutcome::Completed)
+        ->and(CustomerRequest::sole()->status)->toBe(CustomerRequestStatus::Expired);
 });
 
 test('a declined request does not block a new chat pick of the same listing', function () {

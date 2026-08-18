@@ -5,6 +5,7 @@ use App\Enums\CustomerRequestStatus;
 use App\Enums\ListingStatus;
 use App\Enums\ScenarioRunStatus;
 use App\Enums\WhatsappTemplateStatus;
+use App\Filament\Resources\CustomerRequests\Pages\ListCustomerRequests;
 use App\Filament\Resources\ScenarioRuns\ScenarioRunResource;
 use App\Models\BotScenario;
 use App\Models\Contact;
@@ -20,7 +21,9 @@ use App\Services\Bot\ScenarioRunReplyHandler;
 use App\Services\DereuMessenger;
 use App\Services\TemplateFallback;
 use App\Services\WhatsappTemplateLibrary;
+use Filament\Actions\Testing\TestAction;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Livewire\Livewire;
 use Mockery\MockInterface;
 
 uses(RefreshDatabase::class);
@@ -252,6 +255,99 @@ describe('ответы по токену flow:{token}:{option}', function () {
         );
 
         expect($request->refresh()->status)->toBe(CustomerRequestStatus::Accepted);
+    });
+
+    test('молчание поставщика: таймаут закрывает заявку «Без ответа» и честно говорит заказчику', function () {
+        [$run, $request, $supplier, $messenger] = launchedRequestRun();
+
+        expect($run->timeout_at)->not->toBeNull();
+
+        // Часовой свип срабатывает в течение часа после 22-часового
+        // таймаута — в прод-худшем случае это +23 часа.
+        $this->travel(22)->hours();
+        $this->travel(30)->minutes();
+
+        // Таймаут короче суток не случайно: уведомление заказчику —
+        // обычное сессионное сообщение, и оно обязано успеть в его
+        // 24-часовое окно, открытое выбором варианта.
+        expect($request->customer->refresh()->hasOpenSessionWindow())->toBeTrue();
+
+        $messenger->shouldReceive('sendText')->once()->withArgs(
+            fn (Contact $contact, string $text): bool => $contact->is($request->customer)
+                && str_contains($text, 'не ответил'),
+        );
+
+        $this->artisan('bot:process-run-timeouts')->assertSuccessful();
+
+        // Заявка закрыта без решения — дедуп отпущен, повторный выбор
+        // уведомит поставщика заново.
+        expect($request->refresh()->status)->toBe(CustomerRequestStatus::Expired)
+            ->and($run->refresh()->status)->toBe(ScenarioRunStatus::Completed);
+    });
+
+    test('оператор закрыл заявку — опрос гаснет, поздний клик получает честное «уже закрыт»', function () {
+        [$run, $request, $supplier, $messenger] = launchedRequestRun();
+        test()->actingAs(User::factory()->create());
+
+        Livewire::test(ListCustomerRequests::class)
+            ->callAction(TestAction::make('expire')->table($request));
+
+        expect($request->refresh()->status)->toBe(CustomerRequestStatus::Expired)
+            ->and($run->refresh()->status)->toBe(ScenarioRunStatus::Completed);
+
+        // Кнопки погашенного опроса мертвы честно: ни «вы уже ответили»
+        // (поставщик не отвечал), ни тихого поглощения.
+        $messenger->shouldReceive('sendText')->once()->withArgs(
+            fn (Contact $contact, string $text): bool => $contact->is($supplier) && str_contains($text, 'уже закрыт'),
+        );
+
+        app(ScenarioRunReplyHandler::class)->handle(
+            $supplier,
+            new InboundMessage(replyId: "flow:{$run->token}:accept"),
+        );
+
+        expect($request->refresh()->status)->toBe(CustomerRequestStatus::Expired);
+    });
+
+    test('прежний владелец не решает заявку по объявлению, переданному другому', function () {
+        [$run, $request, $supplier] = launchedRequestRun();
+        $newSupplier = Contact::factory()->withOpenSessionWindow()->create();
+        $request->listing->update(['contact_id' => $newSupplier->id]);
+
+        // Ни подтверждения, ни уведомления заказчика с номером нового
+        // владельца — клик по старой кнопке тихо проглатывается.
+        $handled = app(ScenarioRunReplyHandler::class)->handle(
+            $supplier,
+            new InboundMessage(replyId: "flow:{$run->token}:accept"),
+        );
+
+        expect($handled)->toBeTrue()
+            ->and($request->refresh()->status)->toBe(CustomerRequestStatus::Pending)
+            ->and($run->refresh()->status)->toBe(ScenarioRunStatus::Active);
+    });
+
+    test('прежний владелец не продлевает и не архивирует переданное объявление', function () {
+        installFlowScenarios();
+        $supplier = Contact::factory()->withOpenSessionWindow()->create();
+        $listing = Listing::factory()->published()->for($supplier, 'supplier')
+            ->create(['category_id' => categoryNamed('Экскаватор')->id, 'expires_at' => now()->addHours(12)]);
+
+        $messenger = runnerMessenger();
+        $messenger->shouldReceive('sendButtons')->once();
+
+        $scenario = BotScenario::publishedForTrigger(BotScenarioTrigger::ListingExpiring);
+        $run = app(ScenarioRunner::class)->launch($scenario, $supplier, $listing);
+
+        $listing->update(['contact_id' => Contact::factory()->create()->id]);
+        $expiresAt = $listing->refresh()->expires_at;
+
+        app(ScenarioRunReplyHandler::class)->handle(
+            $supplier,
+            new InboundMessage(replyId: "flow:{$run->token}:yes"),
+        );
+
+        expect($listing->refresh()->expires_at->equalTo($expiresAt))->toBeTrue()
+            ->and($run->refresh()->status)->toBe(ScenarioRunStatus::Active);
     });
 
     test('чужой контакт не может ответить по чужому токену', function () {

@@ -76,7 +76,7 @@ class CustomerCatalogController extends Controller
             ),
             'requestedListingIds' => CustomerRequest::query()
                 ->where('contact_id', $contact->id)
-                ->where('status', CustomerRequestStatus::Pending)
+                ->awaitingCurrentOwner()
                 ->whereIn('listing_id', $pageIds)
                 ->pluck('listing_id')
                 ->all(),
@@ -110,7 +110,7 @@ class CustomerCatalogController extends Controller
                 ->all(),
             'alreadyRequested' => CustomerRequest::query()
                 ->where('contact_id', $contact->id)
-                ->where('status', CustomerRequestStatus::Pending)
+                ->awaitingCurrentOwner()
                 ->where('listing_id', $listing->id)
                 ->exists(),
         ]);
@@ -145,6 +145,14 @@ class CustomerCatalogController extends Controller
         if (! $customerRequest->wasRecentlyCreated) {
             return redirect()->to($catalogUrl)
                 ->with('status', 'Вы уже отправляли заявку по этому объявлению — ждём ответа поставщика.');
+        }
+
+        // Уведомление провалилось прямо сейчас (закрытое окно без шаблона,
+        // сбой транспорта) — заявка закрыта как «Без ответа». Честное
+        // признание вместо ложного «отправлена»; повтор ничем не заблокирован.
+        if ($customerRequest->status === CustomerRequestStatus::Expired) {
+            return redirect()->to($catalogUrl)
+                ->with('error', 'Отправить заявку поставщику сейчас не получилось. Попробуйте, пожалуйста, ещё раз позже.');
         }
 
         $this->confirmInWhatsapp($contact, $listing);

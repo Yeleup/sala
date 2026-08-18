@@ -175,6 +175,13 @@ class InstallDefaultBotScenario extends Command
      * [Согласиться]/[Отказаться]; исход решает само действие — по уже
      * решённой заявке (в т.ч. при гонке двух ответов) запуск идёт по
      * выходу «Заявка уже решена», заказчик уведомляется об исходе.
+     * Молчание поставщика не длится вечно: под конец суток ожидания
+     * ветка таймаута закрывает заявку статусом «Без ответа» (повторная
+     * заявка того же заказчика по этому объявлению снова возможна), и
+     * заказчик честно узнаёт, что ответа не было. Таймаут 22 часа, а не
+     * 24, не случайно: уведомление заказчику — обычное сессионное
+     * сообщение, и с часовым шагом свипа оно обязано успеть в 24-часовое
+     * окно, которое заказчик открыл выбором варианта.
      *
      * @return array{nodes: list<array<string, mixed>>, edges: list<array<string, mixed>>}
      */
@@ -187,12 +194,14 @@ class InstallDefaultBotScenario extends Command
                     'channel' => 'adaptive',
                     'template_name' => WhatsappTemplateLibrary::NEW_CUSTOMER_REQUEST,
                     'variables' => ['listing.title', 'request.query'],
+                    'timeout_hours' => 22,
                     'options' => [
                         ['id' => 'accept', 'title' => 'Согласиться'],
                         ['id' => 'decline', 'title' => 'Отказаться'],
                     ]],
                 ['id' => 'do_accept', 'type' => 'action', 'action' => 'accept_request', 'x' => 540, 'y' => 80],
                 ['id' => 'do_decline', 'type' => 'action', 'action' => 'decline_request', 'x' => 540, 'y' => 400],
+                ['id' => 'do_expire', 'type' => 'action', 'action' => 'expire_request', 'x' => 540, 'y' => 560],
                 ['id' => 'accepted_text', 'type' => 'text', 'x' => 820, 'y' => 80,
                     'text' => 'Отлично! Мы сообщим заказчику, что вы готовы взять заказ.'],
                 ['id' => 'declined_text', 'type' => 'text', 'x' => 820, 'y' => 400,
@@ -201,12 +210,16 @@ class InstallDefaultBotScenario extends Command
                     'text' => 'По этой заявке вы уже ответили — первое решение осталось в силе.'],
                 ['id' => 'notify_accept', 'type' => 'action', 'action' => 'notify_customer', 'x' => 1100, 'y' => 80],
                 ['id' => 'notify_decline', 'type' => 'action', 'action' => 'notify_customer', 'x' => 1100, 'y' => 400],
+                ['id' => 'notify_timeout', 'type' => 'action', 'action' => 'notify_customer', 'x' => 1100, 'y' => 560],
                 ['id' => 'end', 'type' => 'end', 'x' => 1380, 'y' => 240],
             ],
             'edges' => [
                 ['from' => 'start', 'output' => 'continue', 'to' => 'poll'],
                 ['from' => 'poll', 'output' => 'option:accept', 'to' => 'do_accept'],
                 ['from' => 'poll', 'output' => 'option:decline', 'to' => 'do_decline'],
+                ['from' => 'poll', 'output' => 'timeout', 'to' => 'do_expire'],
+                ['from' => 'do_expire', 'output' => 'continue', 'to' => 'notify_timeout'],
+                ['from' => 'notify_timeout', 'output' => 'continue', 'to' => 'end'],
                 ['from' => 'do_accept', 'output' => 'continue', 'to' => 'accepted_text'],
                 ['from' => 'do_accept', 'output' => 'skipped', 'to' => 'already_decided'],
                 ['from' => 'do_decline', 'output' => 'continue', 'to' => 'declined_text'],

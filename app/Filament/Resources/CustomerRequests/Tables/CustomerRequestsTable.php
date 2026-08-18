@@ -3,7 +3,12 @@
 namespace App\Filament\Resources\CustomerRequests\Tables;
 
 use App\Enums\CustomerRequestStatus;
+use App\Enums\ScenarioRunStatus;
+use App\Models\CustomerRequest;
+use App\Models\ScenarioRun;
+use Filament\Actions\Action;
 use Filament\Actions\ViewAction;
+use Filament\Support\Icons\Heroicon;
 use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Filters\SelectFilter;
 use Filament\Tables\Table;
@@ -46,6 +51,29 @@ class CustomerRequestsTable
             ])
             ->recordActions([
                 ViewAction::make(),
+                // Единственный ручной выход для залипшей заявки: поставщик
+                // молчит или недостижим, а ожидание блокирует повторную
+                // заявку заказчика по этому объявлению.
+                Action::make('expire')
+                    ->label('Закрыть без ответа')
+                    ->icon(Heroicon::OutlinedNoSymbol)
+                    ->color('gray')
+                    ->visible(fn (CustomerRequest $record): bool => $record->status === CustomerRequestStatus::Pending)
+                    ->requiresConfirmation()
+                    ->modalHeading('Закрыть заявку без ответа?')
+                    ->modalDescription('Ожидание ответа поставщика снимется, заказчик сможет отправить заявку по этому объявлению снова.')
+                    ->action(function (CustomerRequest $record): void {
+                        $record->expire();
+
+                        // Активный опрос поставщика гаснет вместе с
+                        // ожиданием: его кнопки должны отвечать «вопрос
+                        // уже закрыт», а не «вы уже ответили».
+                        ScenarioRun::query()
+                            ->whereMorphedTo('subject', $record)
+                            ->where('status', ScenarioRunStatus::Active)
+                            ->get()
+                            ->each(fn (ScenarioRun $run) => $run->finish());
+                    }),
             ])
             ->defaultSort('created_at', 'desc');
     }

@@ -11,6 +11,13 @@ enum ScenarioAction: string
 {
     case AcceptRequest = 'accept_request';
     case DeclineRequest = 'decline_request';
+
+    /**
+     * Закрывает ожидающую заявку статусом «Без ответа» — ветка таймаута
+     * опроса поставщика: молчание не должно вечно блокировать повторную
+     * заявку того же заказчика по тому же объявлению.
+     */
+    case ExpireRequest = 'expire_request';
     case RenewListing = 'renew_listing';
     case ArchiveListing = 'archive_listing';
 
@@ -25,6 +32,7 @@ enum ScenarioAction: string
         return match ($this) {
             self::AcceptRequest,
             self::DeclineRequest,
+            self::ExpireRequest,
             self::NotifyCustomer => $trigger === BotScenarioTrigger::NewCustomerRequest,
             self::RenewListing,
             self::ArchiveListing => $trigger === BotScenarioTrigger::ListingExpiring,
@@ -37,6 +45,7 @@ enum ScenarioAction: string
         return match ($this) {
             self::AcceptRequest => 'Принять заявку',
             self::DeclineRequest => 'Отклонить заявку',
+            self::ExpireRequest => 'Закрыть заявку без ответа',
             self::RenewListing => 'Продлить объявление на 30 дней',
             self::ArchiveListing => 'Архивировать объявление',
             self::SendCabinetCta => 'Отправить CTA-ссылку на кабинет',
@@ -55,6 +64,7 @@ enum ScenarioAction: string
         return match ($this) {
             self::AcceptRequest,
             self::DeclineRequest,
+            self::ExpireRequest,
             self::RenewListing,
             self::ArchiveListing => true,
             self::SendCabinetCta,
@@ -67,7 +77,8 @@ enum ScenarioAction: string
     {
         return match ($this) {
             self::AcceptRequest,
-            self::DeclineRequest => 'Заявка уже решена',
+            self::DeclineRequest,
+            self::ExpireRequest => 'Заявка уже решена',
             self::RenewListing,
             self::ArchiveListing => 'Объявление уже в архиве',
             self::SendCabinetCta,

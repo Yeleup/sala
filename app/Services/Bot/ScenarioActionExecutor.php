@@ -47,6 +47,7 @@ class ScenarioActionExecutor
             $done = match ($action) {
                 ScenarioAction::AcceptRequest => $this->attempt($subject instanceof CustomerRequest, fn () => $subject->accept()),
                 ScenarioAction::DeclineRequest => $this->attempt($subject instanceof CustomerRequest, fn () => $subject->decline()),
+                ScenarioAction::ExpireRequest => $this->attempt($subject instanceof CustomerRequest, fn () => $subject->expire()),
                 ScenarioAction::RenewListing => $this->attempt($subject instanceof Listing, fn () => $subject->renew()),
                 ScenarioAction::ArchiveListing => $this->attempt($subject instanceof Listing, fn () => $subject->archive()),
                 ScenarioAction::SendCabinetCta => $this->attempt(true, fn () => $this->sendCabinetCta($run, $node)),
@@ -105,6 +106,9 @@ class ScenarioActionExecutor
                 ? sprintf('Поставщик согласился по вашей заявке («%s»). Свяжитесь с ним: +%s', $name, $phone)
                 : sprintf('Поставщик согласился по вашей заявке. Свяжитесь с ним: +%s', $phone),
             CustomerRequestStatus::Declined => 'К сожалению, поставщик отказался по вашей заявке. Напишите нам — подберём другие варианты.',
+            CustomerRequestStatus::Expired => $name
+                ? sprintf('Поставщик не ответил по вашей заявке («%s»). Напишите нам — подберём другие варианты.', $name)
+                : 'Поставщик не ответил по вашей заявке. Напишите нам — подберём другие варианты.',
             CustomerRequestStatus::Pending => null,
         };
 

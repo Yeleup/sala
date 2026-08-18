@@ -192,7 +192,12 @@ class NotificationReplyHandler
         }
 
         if ($request->status !== CustomerRequestStatus::Pending) {
-            $this->messenger->sendText($contact, 'Ответ по этой заявке уже зафиксирован — решение не меняется.');
+            // «Без ответа» — не решение поставщика: ожидание сняли без
+            // него (таймаут или оператор), говорить «ответ зафиксирован»
+            // было бы ложью.
+            $this->messenger->sendText($contact, $request->status === CustomerRequestStatus::Expired
+                ? 'Эта заявка уже закрыта без ответа — решение по ней не принимается.'
+                : 'Ответ по этой заявке уже зафиксирован — решение не меняется.');
 
             return true;
         }

@@ -6,6 +6,7 @@ use App\Ai\Agents\SearchQueryExtractionAgent;
 use App\Enums\AiOperationType;
 use App\Enums\AiOutcome;
 use App\Enums\BotReplyKey;
+use App\Enums\CustomerRequestStatus;
 use App\Enums\ListingKind;
 use App\Enums\UserIntent;
 use App\Models\BotSession;
@@ -868,14 +869,18 @@ class CustomerSearchAssistant
     {
         $request = $this->placer->place($session->contact, $listing, (string) $state['query']);
 
+        // Уведомление провалилось прямо сейчас — заявка закрыта как «Без
+        // ответа», повтор ничем не заблокирован. Честное признание вместо
+        // ложного «ушла поставщику».
+        $text = $request->wasRecentlyCreated && $request->status === CustomerRequestStatus::Expired
+            ? 'Передать заявку по «%s» поставщику сейчас не получилось. Попробуйте, пожалуйста, выбрать вариант ещё раз позже.'
+            : ($request->wasRecentlyCreated
+                ? 'Заявка по «%s» ушла поставщику. Как только он ответит — сразу напишем.'
+                : 'Заявка по «%s» уже у поставщика — ждём его ответа.');
+
         $this->messenger->sendText(
             $session->contact,
-            sprintf(
-                $request->wasRecentlyCreated
-                    ? 'Заявка по «%s» ушла поставщику. Как только он ответит — сразу напишем.'
-                    : 'Заявка по «%s» уже у поставщика — ждём его ответа.',
-                $listing->displayName() ?: 'объявление',
-            ),
+            sprintf($text, $listing->displayName() ?: 'объявление'),
         );
 
         return AiOutcome::Completed;

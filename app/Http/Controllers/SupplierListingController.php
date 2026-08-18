@@ -49,6 +49,8 @@ class SupplierListingController extends Controller
 
     public function edit(Listing $listing): View
     {
+        $this->assertLinkIssuedToCurrentOwner($listing);
+
         $listing->load(['photos', 'audioMessages', 'machineCategories']);
 
         return view('supplier.listing-edit', [
@@ -68,6 +70,7 @@ class SupplierListingController extends Controller
 
     public function update(UpdateSupplierListingRequest $request, Listing $listing): RedirectResponse
     {
+        $this->assertLinkIssuedToCurrentOwner($listing);
         abort_unless($this->isEditable($listing), 403);
 
         $listing->fill($request->safe()->except(['photos', 'remove_photos', 'document', 'machine_categories']));
@@ -107,6 +110,7 @@ class SupplierListingController extends Controller
 
     public function archive(Listing $listing): RedirectResponse
     {
+        $this->assertLinkIssuedToCurrentOwner($listing);
         abort_unless($listing->status === ListingStatus::Published, 403);
 
         $listing->archive();
@@ -164,5 +168,19 @@ class SupplierListingController extends Controller
     private function isEditable(Listing $listing): bool
     {
         return in_array($listing->status, [ListingStatus::Draft, ListingStatus::Rejected], true);
+    }
+
+    /**
+     * The per-listing link is signed together with the owner it was
+     * issued to (CtaLinkBuilder), so the signature itself proves the
+     * pair. A mismatch with the listing's current owner means the
+     * listing changed hands after the link went out — the previous
+     * owner's links must die with the ownership. Strictly the query
+     * string: only it is covered by the signature, a `contact` field in
+     * the POST body would be attacker-controlled.
+     */
+    private function assertLinkIssuedToCurrentOwner(Listing $listing): void
+    {
+        abort_unless((int) request()->query('contact') === $listing->contact_id, 403);
     }
 }

@@ -98,12 +98,53 @@ describe('доступ по подписанным ссылкам', function () 
         $this->get($url)->assertForbidden();
     });
 
-    test('ссылки формата, выданного до появления кабинета, продолжают открываться', function () {
+    test('ссылка без привязки к владельцу больше не открывается', function () {
+        // Прежний формат (только id объявления) не позволял проверить,
+        // что объявление всё ещё принадлежит получателю ссылки. TTL — 7
+        // дней, так что переходный период стоит одну неделю.
         $listing = Listing::factory()->create();
 
         $url = URL::temporarySignedRoute('supplier.listings.edit', now()->addDays(7), ['listing' => $listing->id]);
 
-        $this->get($url)->assertOk();
+        $this->get($url)->assertForbidden();
+    });
+
+    test('ссылка прежнего владельца после передачи объявления не работает', function () {
+        $listing = Listing::factory()->create();
+        $editUrl = portalLinks()->editUrl($listing);
+        $updateUrl = portalLinks()->updateUrl($listing);
+
+        $published = Listing::factory()->published()->create();
+        $archiveUrl = portalLinks()->archiveUrl($published);
+
+        $listing->update(['contact_id' => Contact::factory()->create()->id]);
+        $published->update(['contact_id' => Contact::factory()->create()->id]);
+
+        $this->get($editUrl)->assertForbidden();
+        $this->post($updateUrl, supplierListingPayload($listing))->assertForbidden();
+        $this->post($archiveUrl)->assertForbidden();
+
+        expect($published->refresh()->status)->toBe(ListingStatus::Published);
+    });
+
+    test('поле contact в теле POST не обходит привязку ссылки к владельцу', function () {
+        // Подпись покрывает только query string: подсунуть id нового
+        // владельца в тело формы по старой ссылке ничего не должно давать.
+        $listing = Listing::factory()->create();
+        $updateUrl = portalLinks()->updateUrl($listing);
+
+        $published = Listing::factory()->published()->create();
+        $archiveUrl = portalLinks()->archiveUrl($published);
+
+        $newOwner = Contact::factory()->create();
+        $listing->update(['contact_id' => $newOwner->id]);
+        $published->update(['contact_id' => $newOwner->id]);
+
+        $this->post($updateUrl, supplierListingPayload($listing) + ['contact' => $newOwner->id])
+            ->assertForbidden();
+        $this->post($archiveUrl, ['contact' => $newOwner->id])->assertForbidden();
+
+        expect($published->refresh()->status)->toBe(ListingStatus::Published);
     });
 });
 

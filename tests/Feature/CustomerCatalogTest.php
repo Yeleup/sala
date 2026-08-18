@@ -372,18 +372,20 @@ describe('«Выбрать» — заявка с веба', function () {
         expect(CustomerRequest::count())->toBe(1);
     });
 
-    test('отсутствие утверждённого шаблона не ломает заявку', function () {
+    test('недоставленное уведомление честно признаётся, заявка не хоронит повтор', function () {
         $customer = Contact::factory()->withClosedSessionWindow()->create();
         $supplier = Contact::factory()->withClosedSessionWindow()->create();
         $listing = Listing::factory()->published()->for($supplier, 'supplier')->create();
 
-        test()->mock(DereuMessenger::class); // ни одного сообщения не уходит
+        test()->mock(DereuMessenger::class); // окно закрыто, шаблона нет — уведомить нечем
 
         $this->post(catalogLinks()->selectUrl($customer, $listing), ['q' => 'кран'])
             ->assertRedirect()
-            ->assertSessionHas('status');
+            ->assertSessionHas('error', fn (string $error): bool => str_contains($error, 'не получилось'))
+            ->assertSessionMissing('status');
 
-        expect(CustomerRequest::count())->toBe(1);
+        // Заявка закрыта как «Без ответа» и не блокирует повторную попытку.
+        expect(CustomerRequest::sole()->status)->toBe(CustomerRequestStatus::Expired);
     });
 
     test('повторный выбор того же объявления не создаёт дубль и не дёргает поставщика', function () {
@@ -391,7 +393,8 @@ describe('«Выбрать» — заявка с веба', function () {
         $supplier = Contact::factory()->withOpenSessionWindow()->create();
         $listing = Listing::factory()->published()->for($supplier, 'supplier')->create();
         CustomerRequest::create([
-            'contact_id' => $customer->id, 'listing_id' => $listing->id, 'query_text' => 'кран',
+            'contact_id' => $customer->id, 'listing_id' => $listing->id,
+            'supplier_contact_id' => $supplier->id, 'query_text' => 'кран',
         ]);
 
         test()->mock(DereuMessenger::class); // ни уведомления, ни подтверждения
@@ -448,12 +451,42 @@ describe('«Выбрать» — заявка с веба', function () {
         expect(CustomerRequest::count())->toBe(1);
     });
 
+    test('зависшая заявка прежнему владельцу не запирает выбор в каталоге', function () {
+        $customer = Contact::factory()->withOpenSessionWindow()->create();
+        $oldSupplier = Contact::factory()->create();
+        $listing = Listing::factory()->published()->for($oldSupplier, 'supplier')->create();
+        CustomerRequest::create([
+            'contact_id' => $customer->id, 'listing_id' => $listing->id,
+            'supplier_contact_id' => $oldSupplier->id, 'query_text' => 'кран',
+        ]);
+        $listing->update(['contact_id' => Contact::factory()->create()->id]);
+
+        // Дедуп такую заявку уже не считает ожидающей — бейдж «ждём
+        // ответа» был бы ложью, выбор должен остаться доступным.
+        $this->get(catalogLinks()->listingUrl($customer, $listing))
+            ->assertOk()
+            ->assertDontSee('ждём ответа поставщика');
+    });
+
+    test('заявка без снимка поставщика (до миграции) не запирает выбор в каталоге', function () {
+        $customer = Contact::factory()->withOpenSessionWindow()->create();
+        $listing = Listing::factory()->published()->create();
+        CustomerRequest::create([
+            'contact_id' => $customer->id, 'listing_id' => $listing->id, 'query_text' => 'кран',
+        ]);
+
+        $this->get(catalogLinks()->listingUrl($customer, $listing))
+            ->assertOk()
+            ->assertDontSee('ждём ответа поставщика');
+    });
+
     test('заявка с карточки страницы показывает бейдж вместо кнопки при повторном открытии', function () {
         $customer = Contact::factory()->withClosedSessionWindow()->create();
         $supplier = Contact::factory()->withOpenSessionWindow()->create();
         $listing = Listing::factory()->published()->for($supplier, 'supplier')->create(['title' => 'Кран с заявкой']);
         CustomerRequest::create([
-            'contact_id' => $customer->id, 'listing_id' => $listing->id, 'query_text' => 'кран',
+            'contact_id' => $customer->id, 'listing_id' => $listing->id,
+            'supplier_contact_id' => $supplier->id, 'query_text' => 'кран',
         ]);
 
         $this->get(catalogLinks()->catalogUrl($customer))
@@ -600,6 +633,7 @@ describe('страница объявления', function () {
         CustomerRequest::factory()->create([
             'contact_id' => $contact->id,
             'listing_id' => $listing->id,
+            'supplier_contact_id' => $listing->contact_id,
             'status' => CustomerRequestStatus::Pending,
         ]);
 

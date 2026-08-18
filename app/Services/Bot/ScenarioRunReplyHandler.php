@@ -5,6 +5,8 @@ namespace App\Services\Bot;
 use App\Enums\BotReplyKey;
 use App\Exceptions\SessionWindowClosed;
 use App\Models\Contact;
+use App\Models\CustomerRequest;
+use App\Models\Listing;
 use App\Models\ScenarioRun;
 use App\Services\DereuMessenger;
 
@@ -64,7 +66,34 @@ class ScenarioRunReplyHandler
             return true;
         }
 
+        if (! $this->subjectStillOwnedBy($run, $contact)) {
+            return true;
+        }
+
         $this->runner->handleReply($run, substr($rest, $separator + 1));
+
+        return true;
+    }
+
+    /**
+     * The run's buttons die with the ownership: a listing handed to
+     * another supplier (the operator reassigned it in the admin) must not
+     * be decided, renewed or archived by the previous owner via buttons
+     * sent while it was still theirs. Mirrors the ownership check of the
+     * legacy NotificationReplyHandler; a stale click is swallowed
+     * silently, the run stays active until its timeout reaps it.
+     */
+    protected function subjectStillOwnedBy(ScenarioRun $run, Contact $contact): bool
+    {
+        $subject = $run->subject;
+
+        if ($subject instanceof CustomerRequest) {
+            return $subject->listing !== null && $subject->listing->contact_id === $contact->id;
+        }
+
+        if ($subject instanceof Listing) {
+            return $subject->contact_id === $contact->id;
+        }
 
         return true;
     }

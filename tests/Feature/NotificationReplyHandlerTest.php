@@ -87,6 +87,23 @@ test('a decision is final: the second click does not change it', function () {
         ->and($request->refresh()->status)->toBe(CustomerRequestStatus::Accepted);
 });
 
+test('клик по заявке, закрытой без ответа, честно говорит «закрыта», а не «вы ответили»', function () {
+    $request = pendingRequest();
+    $request->expire();
+
+    $messenger = fakeReplyMessenger();
+    $messenger->shouldReceive('sendText')->once()->withArgs(
+        fn (Contact $contact, string $text): bool => str_contains($text, 'закрыта без ответа'),
+    );
+
+    app(NotificationReplyHandler::class)->handle(
+        $request->listing->supplier,
+        new InboundMessage(replyId: NotificationReplyHandler::requestAcceptId($request)),
+    );
+
+    expect($request->refresh()->status)->toBe(CustomerRequestStatus::Expired);
+});
+
 test('a foreign contact cannot answer someone else\'s request', function () {
     $request = pendingRequest();
     $stranger = Contact::factory()->withOpenSessionWindow()->create();

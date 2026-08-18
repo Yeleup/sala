@@ -14,7 +14,8 @@ use Throwable;
  * [Согласиться]/[Отказаться] buttons: a free session message while the
  * supplier's 24-hour window is open, the paid new_customer_request
  * template otherwise. A delivery problem never breaks the customer flow —
- * the request stays pending and visible to the operator in the admin.
+ * false tells the placer the supplier was not reached, so the request
+ * must not keep blocking a retry.
  */
 class CustomerRequestNotifier
 {
@@ -24,7 +25,7 @@ class CustomerRequestNotifier
 
     public function __construct(private readonly DereuMessenger $messenger) {}
 
-    public function notifySupplier(CustomerRequest $request): void
+    public function notifySupplier(CustomerRequest $request): bool
     {
         $supplier = $request->listing->supplier;
         $acceptId = NotificationReplyHandler::requestAcceptId($request);
@@ -59,7 +60,7 @@ class CustomerRequestNotifier
                     fallback: $template === null ? null : new TemplateFallback($template, $templateParameters, [$acceptId, $declineId]),
                 );
 
-                return;
+                return true;
             }
 
             if ($template === null) {
@@ -67,7 +68,7 @@ class CustomerRequestNotifier
                     'customer_request_id' => $request->id,
                 ]);
 
-                return;
+                return false;
             }
 
             $this->messenger->sendTemplate(
@@ -76,11 +77,15 @@ class CustomerRequestNotifier
                 $templateParameters,
                 [$acceptId, $declineId],
             );
+
+            return true;
         } catch (Throwable $e) {
             Log::warning('Failed to notify the supplier about a customer request.', [
                 'customer_request_id' => $request->id,
                 'error' => $e->getMessage(),
             ]);
+
+            return false;
         }
     }
 }

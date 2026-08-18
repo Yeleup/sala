@@ -15,8 +15,11 @@ use Filament\Support\Icons\Heroicon;
 use Filament\Tables\Table;
 
 /**
- * Read-only: requests are created by the bot when a customer picks a listing,
- * and their status is changed by the supplier's reply in WhatsApp.
+ * Requests are created by the bot when a customer picks a listing, and
+ * their status is changed by the supplier's reply in WhatsApp. The
+ * operator neither creates nor edits them; the single manual action is
+ * «Закрыть без ответа» — it releases a stuck pending request so the
+ * customer can ask again.
  */
 class CustomerRequestResource extends Resource
 {

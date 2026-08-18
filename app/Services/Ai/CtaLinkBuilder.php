@@ -21,9 +21,16 @@ class CtaLinkBuilder
 {
     private const int LINK_TTL_DAYS = 7;
 
+    /**
+     * Per-listing supplier links carry the owner in the signature: after
+     * the operator hands the listing to another supplier, links issued to
+     * the previous owner stop matching the current owner and die — the
+     * previous owner must not edit or archive a listing that is no longer
+     * theirs.
+     */
     public function editUrl(Listing $listing): string
     {
-        return $this->signed('supplier.listings.edit', ['listing' => $listing->getKey()]);
+        return $this->signed('supplier.listings.edit', ['listing' => $listing->getKey(), 'contact' => $listing->contact_id]);
     }
 
     public function myListingsUrl(Contact $contact): string
@@ -38,12 +45,12 @@ class CtaLinkBuilder
 
     public function updateUrl(Listing $listing): string
     {
-        return $this->signed('supplier.listings.update', ['listing' => $listing->getKey()]);
+        return $this->signed('supplier.listings.update', ['listing' => $listing->getKey(), 'contact' => $listing->contact_id]);
     }
 
     public function archiveUrl(Listing $listing): string
     {
-        return $this->signed('supplier.listings.archive', ['listing' => $listing->getKey()]);
+        return $this->signed('supplier.listings.archive', ['listing' => $listing->getKey(), 'contact' => $listing->contact_id]);
     }
 
     /**

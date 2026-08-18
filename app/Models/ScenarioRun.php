@@ -58,6 +58,20 @@ class ScenarioRun extends Model
     }
 
     /**
+     * Гасит запуск: решение, которого он ждал, принято вне его кнопок
+     * (например, оператор закрыл заявку). Кнопки погашенного запуска
+     * отвечают «вопрос уже закрыт» вместо ложного «вы уже ответили».
+     */
+    public function finish(): void
+    {
+        $this->forceFill([
+            'status' => ScenarioRunStatus::Completed,
+            'current_node_id' => null,
+            'timeout_at' => null,
+        ])->save();
+    }
+
+    /**
      * The immutable graph snapshot this run follows.
      */
     public function scenarioDefinition(): ?ScenarioDefinition

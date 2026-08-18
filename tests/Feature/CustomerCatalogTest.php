@@ -308,6 +308,90 @@ describe('виды объявлений в каталоге', function () {
         $this->get(catalogLinks()->catalogUrl($contact))->assertOk()->assertDontSee('doc.jpg');
         $this->get(catalogLinks()->listingUrl($contact, $driver))->assertOk()->assertDontSee('doc.jpg');
     });
+
+    test('шапка каталога называет вид ветки и даёт выход ко всем видам', function () {
+        // Фильтр вида режет выдачу молча: без подписи шапка обещает «все
+        // объявления», показывая один вид из трёх.
+        $contact = Contact::factory()->create();
+
+        $this->get(catalogLinks()->catalogUrl($contact).'&kind=repair')
+            ->assertOk()
+            ->assertSee('Ремонт спецтехники — все опубликованные объявления этого вида.')
+            ->assertSee('Показать все виды');
+
+        // Без вида каталог и правда общий — прежний текст, выход не нужен.
+        $this->get(catalogLinks()->catalogUrl($contact))
+            ->assertOk()
+            ->assertSee('Спецтехника — все опубликованные объявления.')
+            ->assertDontSee('Показать все виды');
+    });
+
+    test('«Сбросить» очищает фильтры, но не выкидывает из ветки вида', function () {
+        $contact = Contact::factory()->create();
+        Listing::factory()->published()->create(['title' => 'Аренда крана мимо ветки']);
+        Listing::factory()->repair()->published()->create(['title' => 'Ремонт двигателей']);
+
+        $content = $this->get(catalogLinks()->catalogUrl($contact).'&kind=repair&q=вертолёт')
+            ->assertOk()->getContent();
+
+        preg_match('/href="([^"]+)"[^>]*>Сбросить</u', $content, $reset);
+
+        $this->get(html_entity_decode($reset[1]))
+            ->assertOk()
+            ->assertSee('Ремонт двигателей')
+            ->assertDontSee('Аренда крана мимо ветки');
+    });
+
+    test('«Показать все виды» снимает фильтр вида', function () {
+        $contact = Contact::factory()->create();
+        Listing::factory()->published()->create(['title' => 'Аренда крана мимо ветки']);
+        Listing::factory()->repair()->published()->create(['title' => 'Ремонт двигателей']);
+
+        $content = $this->get(catalogLinks()->catalogUrl($contact).'&kind=repair')
+            ->assertOk()->getContent();
+
+        preg_match('/href="([^"]+)"[^>]*>Показать все виды</u', $content, $allKinds);
+
+        $this->get(html_entity_decode($allKinds[1]))
+            ->assertOk()
+            ->assertSee('Аренда крана мимо ветки')
+            ->assertSee('Ремонт двигателей');
+    });
+
+    test('пустая выдача в ветке вида называет вид, а не молчит о нём', function () {
+        $contact = Contact::factory()->create();
+
+        $this->get(catalogLinks()->catalogUrl($contact, 'вертолёт').'&kind=repair')
+            ->assertOk()
+            ->assertSee('Среди объявлений «Ремонт спецтехники» ничего не нашлось. Измените запрос, сбросьте фильтры или посмотрите все виды.');
+    });
+
+    test('фильтр категории не показывается там, где категорий не бывает', function () {
+        // Категорию несёт только аренда: у мастера и водителя видимый
+        // селект обещал бы фильтр, способный дать один лишь ноль.
+        $contact = Contact::factory()->create();
+
+        $this->get(catalogLinks()->catalogUrl($contact).'&kind=repair')
+            ->assertOk()
+            ->assertDontSee('— все категории —');
+
+        $this->get(catalogLinks()->catalogUrl($contact).'&kind=driver')
+            ->assertOk()
+            ->assertDontSee('— все категории —');
+
+        $this->get(catalogLinks()->catalogUrl($contact))
+            ->assertOk()
+            ->assertSee('— все категории —');
+    });
+
+    test('категория из ссылки не режет выдачу вида, у которого категорий не бывает', function () {
+        $contact = Contact::factory()->create();
+        Listing::factory()->repair()->published()->create(['title' => 'Ремонт двигателей']);
+
+        $this->get(catalogLinks()->catalogUrl($contact)."&kind=repair&category_id=".categoryNamed('Автокран')->id)
+            ->assertOk()
+            ->assertSee('Ремонт двигателей');
+    });
 });
 
 describe('«Выбрать» — заявка с веба', function () {

@@ -35,6 +35,16 @@ enum ListingKind: string
     }
 
     /**
+     * Whether listings of this kind carry a category at all — only rental
+     * ones do. The customer catalog hides its category filter in the other
+     * two branches: a control that can only ever return nothing.
+     */
+    public function usesCategory(): bool
+    {
+        return $this === self::Rental;
+    }
+
+    /**
      * The business fields a listing of this kind must carry to go live,
      * mapped to the label the operator sees in the «чего не хватает» hint.
      *

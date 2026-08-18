@@ -1,14 +1,21 @@
 <x-customer.layout title="Каталог объявлений">
     <header class="page-header">
         <h1>Каталог объявлений</h1>
-        <p>Спецтехника — все опубликованные объявления.</p>
+        {{-- The kind filter has no control of its own, so naming it here is the only thing
+             that tells the customer why two thirds of the catalog is missing. --}}
+        @if ($filters['kind'])
+            <p>{{ $filters['kind']->label() }} — все опубликованные объявления этого вида. <a href="{{ $allKindsUrl }}">Показать все виды</a></p>
+        @else
+            <p>Спецтехника — все опубликованные объявления.</p>
+        @endif
     </header>
 
     <form method="GET" action="{{ url()->current() }}" class="card">
         {{-- The personal link's signature covers only the path and expiry, so the form can change every filter freely. --}}
         <input type="hidden" name="expires" value="{{ $expires }}">
         <input type="hidden" name="signature" value="{{ $signature }}">
-        {{-- The kind filter has no visible control (out of scope): the bot's deep link sets it, the form only carries it forward. --}}
+        {{-- The kind has no control of its own: the bot's deep link sets it, the header names it,
+             and the form only carries it forward — «Показать все виды» is the one way out. --}}
         @if ($filters['kind'])
             <input type="hidden" name="kind" value="{{ $filters['kind']->value }}">
         @endif
@@ -19,15 +26,19 @@
         </div>
 
         <div class="filter-row">
-            <div class="field">
-                <label for="category_id">Категория</label>
-                <select id="category_id" name="category_id">
-                    <option value="">— все категории —</option>
-                    @foreach ($categories as $category)
-                        <option value="{{ $category->id }}" @selected($filters['category']?->id === $category->id)>{{ $category->name }}</option>
-                    @endforeach
-                </select>
-            </div>
+            {{-- Only rental listings carry a category: in the other two branches the
+                 select could return nothing but nothing. --}}
+            @if ($filters['kind'] === null || $filters['kind']->usesCategory())
+                <div class="field">
+                    <label for="category_id">Категория</label>
+                    <select id="category_id" name="category_id">
+                        <option value="">— все категории —</option>
+                        @foreach ($categories as $category)
+                            <option value="{{ $category->id }}" @selected($filters['category']?->id === $category->id)>{{ $category->name }}</option>
+                        @endforeach
+                    </select>
+                </div>
+            @endif
 
             <x-location-picker label="Место" :value="$filters['location']?->id"
                                :initial-text="$locationLabel" placeholder="Город, район или село" />
@@ -130,7 +141,12 @@
         </div>
     @empty
         <div class="card empty-state">
-            <p style="margin: 0;">Ничего не нашлось. Измените запрос или сбросьте фильтры.</p>
+            @if ($filters['kind'])
+                <p style="margin: 0;">Среди объявлений «{{ $filters['kind']->label() }}» ничего не нашлось. Измените запрос, сбросьте фильтры или посмотрите все виды.</p>
+                <p style="margin: 0.75rem 0 0;"><a href="{{ $allKindsUrl }}">Показать все виды</a></p>
+            @else
+                <p style="margin: 0;">Ничего не нашлось. Измените запрос или сбросьте фильтры.</p>
+            @endif
         </div>
     @endforelse
 

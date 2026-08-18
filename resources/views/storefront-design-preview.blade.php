@@ -7,6 +7,8 @@
     catalog.blade.php + components/customer/layout.blade.php): состояния
     desktop и mobile, панель фильтров, карточки с «Выбрать» и бейджем
     отправленной заявки, баннеры успеха/дубликата/ошибки, пустая выдача.
+    Отдельные состояния — каталог в ветке вида: подзаголовок называет вид,
+    даёт выход «Показать все виды», фильтра «Категория» в ветке нет.
     Тема — синяя (градиентная шапка, синие кнопки и акценты).
 
     Портал поставщика (resources/views/supplier/* +
@@ -42,6 +44,7 @@
         .page-header { background: linear-gradient(135deg, #1e40af, #3b82f6); border-radius: 1rem; padding: 1.375rem 1.5rem; margin-bottom: 1.25rem; color: #fff; box-shadow: 0 10px 25px -12px rgb(30 64 175 / 0.5); }
         .page-header h1 { font-size: 1.375rem; letter-spacing: -0.01em; overflow-wrap: anywhere; }
         .page-header p { margin: 0; color: #dbeafe; font-size: 0.875rem; overflow-wrap: anywhere; }
+        .page-header a { text-decoration: underline; text-underline-offset: 0.15em; white-space: nowrap; }
         .card { background: #fff; border: 1px solid #e2e8f0; border-radius: 1rem; padding: 1.25rem; margin-bottom: 1rem; box-shadow: 0 1px 2px rgb(15 23 42 / 0.04); --card-pad: 1.25rem; --card-radius: 1rem; }
         .muted { color: #64748b; font-size: 0.875rem; }
         .result-count { margin: 0 0 1rem; padding-left: 0.25rem; }
@@ -61,7 +64,7 @@
         .field input, .field select, .field textarea { width: 100%; border: 1px solid #cbd5e1; border-radius: 0.625rem; padding: 0.625rem 0.75rem; font: inherit; background: #fff; transition: border-color 0.15s ease, box-shadow 0.15s ease; }
         .field input:not([type="checkbox"]):focus, .field select:focus, .field textarea:focus { outline: none; border-color: #2563eb; box-shadow: 0 0 0 3px rgb(37 99 235 / 0.15); }
         .filter-row { display: grid; grid-template-columns: 1fr; gap: 0 1rem; }
-        .viewport-desktop .filter-row { grid-template-columns: 1fr 1fr 1fr; }
+        .viewport-desktop .filter-row { grid-auto-flow: column; grid-auto-columns: 1fr; }
         .listing-card { display: flex; gap: 1rem; transition: border-color 0.15s ease, box-shadow 0.15s ease; }
         .listing-card:hover { border-color: #bfdbfe; box-shadow: 0 6px 16px -6px rgb(37 99 235 / 0.25); }
         .listing-card .thumb { display: block; width: 6rem; height: 6rem; object-fit: cover; border-radius: 0.625rem; border: 1px solid #e2e8f0; flex-shrink: 0; }
@@ -118,6 +121,7 @@
         .gallery-slide .thumb-placeholder.is-portrait { width: 62%; }
         .prewrap { white-space: pre-line; }
         .empty-state { text-align: center; padding: 2rem 1.25rem; color: #475569; }
+        .empty-state a { color: #1d4ed8; text-decoration: underline; text-underline-offset: 0.15em; }
         .pager { display: flex; justify-content: space-between; align-items: center; gap: 0.5rem; margin: 1.5rem 0 0; }
         .pager-link { font-size: 0.875rem; font-weight: 600; text-decoration: none; color: #1d4ed8; background: #dbeafe; padding: 0.5rem 0.875rem; border-radius: 0.625rem; transition: background-color 0.15s ease; }
         .pager-link:hover { background: #bfdbfe; }
@@ -412,6 +416,129 @@
 </div>
 
 <div class="preview-section">
+    <h2>Каталог заказчика в ветке вида — desktop (подзаголовок называет вид и даёт выход «Показать все виды»; фильтра «Категория» нет — у мастеров и водителей категорий не бывает)</h2>
+    <div class="viewport viewport-desktop">
+        <main>
+            <header class="page-header">
+                <h1>Каталог объявлений</h1>
+                <p>Ремонт спецтехники — все опубликованные объявления этого вида. <a href="#">Показать все виды</a></p>
+            </header>
+
+            <div class="card">
+                <div class="field">
+                    <label>Поиск</label>
+                    <input placeholder="Что ищете? Например: кран 25 тонн">
+                </div>
+                <div class="filter-row">
+                    <div class="field">
+                        <label>Место</label>
+                        <div class="location-picker">
+                            <input class="lp-input" placeholder="Город, район или село">
+                        </div>
+                    </div>
+                    <div class="field">
+                        <label>Сортировка</label>
+                        <select><option>Сначала новые</option><option>Сначала старые</option></select>
+                    </div>
+                </div>
+                <div class="actions" style="margin-top: 0.25rem;">
+                    <button class="btn btn-primary">Показать</button>
+                    {{-- «Сбросить» остаётся в ветке: чистит запрос и фильтры, вид не трогает. --}}
+                    <a class="btn btn-secondary" href="#">Сбросить</a>
+                </div>
+            </div>
+
+            <p class="muted result-count">Найдено объявлений: 4</p>
+
+            <div class="card listing-card">
+                <div class="listing-body">
+                    <p class="listing-person">Сервис «Мотор»</p>
+                    <h2 class="listing-title"><a class="title-link" href="#">Ремонт двигателей и гидравлики</a></h2>
+                    <p class="listing-line">Диагностика, ремонт двигателя, гидравлика, электрика.</p>
+                    <p class="listing-line muted">И так, и так</p>
+                    <p class="listing-line muted">г.Шымкент, центр</p>
+                    <p class="listing-line listing-price">Диагностика: 5000 тг</p>
+                    <p class="listing-line muted">Поставщик: Азамат</p>
+                    <div class="actions">
+                        <button class="btn btn-primary">Выбрать</button>
+                        <a class="btn btn-secondary" href="#">Подробнее</a>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card listing-card">
+                <div class="listing-body">
+                    <p class="listing-person">Ербол</p>
+                    <h2 class="listing-title"><a class="title-link" href="#">Выездной ремонт гидравлики</a></h2>
+                    <p class="listing-line">Гидравлика, шланги, РВД, сварочные работы.</p>
+                    <p class="listing-line muted">С выездом</p>
+                    <p class="listing-line muted">Каратауский район, г.Шымкент</p>
+                    <p class="listing-line muted">Поставщик: Ербол</p>
+                    <div class="actions">
+                        <button class="btn btn-primary">Выбрать</button>
+                        <a class="btn btn-secondary" href="#">Подробнее</a>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+</div>
+
+<div class="preview-section">
+    <h2>Каталог заказчика в ветке вида — mobile 375px (подпись вида переносится, выход ссылкой; фильтры в одну колонку без «Категории»)</h2>
+    <div class="viewport viewport-mobile">
+        <main>
+            <header class="page-header">
+                <h1>Каталог объявлений</h1>
+                <p>Водитель / машинист — все опубликованные объявления этого вида. <a href="#">Показать все виды</a></p>
+            </header>
+
+            <div class="card">
+                <div class="field">
+                    <label>Поиск</label>
+                    <input placeholder="Что ищете? Например: кран 25 тонн">
+                </div>
+                <div class="filter-row">
+                    <div class="field">
+                        <label>Место</label>
+                        <div class="location-picker">
+                            <input class="lp-input" value="г.Шымкент" placeholder="Город, район или село">
+                            <button type="button" class="lp-clear">&times;</button>
+                        </div>
+                    </div>
+                    <div class="field">
+                        <label>Сортировка</label>
+                        <select><option>Сначала новые</option><option>Сначала старые</option></select>
+                    </div>
+                </div>
+                <div class="actions" style="margin-top: 0.25rem;">
+                    <button class="btn btn-primary">Показать</button>
+                    <a class="btn btn-secondary" href="#">Сбросить</a>
+                </div>
+            </div>
+
+            <p class="muted result-count">Найдено объявлений: 2</p>
+
+            <div class="card listing-card">
+                <div class="listing-body">
+                    <p class="listing-person">Серик</p>
+                    <h2 class="listing-title"><a class="title-link" href="#">Машинист экскаватора</a></h2>
+                    <p class="listing-line muted">Экскаватор, Самосвал</p>
+                    <p class="listing-line">Стаж 8 лет (со слов исполнителя)</p>
+                    <div class="card-badge">✅ Документ проверен</div>
+                    <p class="listing-line muted">г.Шымкент</p>
+                    <p class="listing-line muted">Поставщик: Серик</p>
+                    <div class="actions">
+                        <button class="btn btn-primary">Выбрать</button>
+                        <a class="btn btn-secondary" href="#">Подробнее</a>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+</div>
+
+<div class="preview-section">
     <h2>Баннеры состояний «Выбрать» (дубликат заявки и ушедшее из публикации объявление)</h2>
     <div class="viewport viewport-desktop">
         <main>
@@ -422,12 +549,18 @@
 </div>
 
 <div class="preview-section">
-    <h2>Пустая выдача</h2>
+    <h2>Пустая выдача — общий каталог и ветка вида (в ветке названо, среди чего искали, и дан выход)</h2>
     <div class="viewport viewport-desktop">
         <main>
             <p class="muted result-count">Найдено объявлений: 0</p>
             <div class="card empty-state">
                 <p style="margin: 0;">Ничего не нашлось. Измените запрос или сбросьте фильтры.</p>
+            </div>
+
+            <p class="muted result-count">Найдено объявлений: 0</p>
+            <div class="card empty-state">
+                <p style="margin: 0;">Среди объявлений «Ремонт спецтехники» ничего не нашлось. Измените запрос, сбросьте фильтры или посмотрите все виды.</p>
+                <p style="margin: 0.75rem 0 0;"><a href="#">Показать все виды</a></p>
             </div>
         </main>
     </div>

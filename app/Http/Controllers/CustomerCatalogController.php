@@ -65,7 +65,8 @@ class CustomerCatalogController extends Controller
             'listings' => $listings,
             'categories' => Category::query()->orderBy('name')->get(),
             'locationLabel' => $filters['location']?->label(),
-            'resetUrl' => $this->links->catalogUrl($contact),
+            'resetUrl' => $this->catalogUrlInKind($contact, $filters['kind']),
+            'allKindsUrl' => $this->links->catalogUrl($contact),
             'signature' => (string) $request->query('signature'),
             'expires' => (string) $request->query('expires'),
             'selectUrls' => collect($listings->items())->mapWithKeys(
@@ -173,6 +174,7 @@ class CustomerCatalogController extends Controller
     {
         $q = trim((string) $request->query('q', ''));
         $sort = (string) $request->query('sort', '');
+        $kind = ListingKind::tryFrom((string) $request->query('kind'));
 
         if (! in_array($sort, [self::SORT_RELEVANCE, self::SORT_NEWEST, self::SORT_OLDEST], true)
             || ($sort === self::SORT_RELEVANCE && $q === '')) {
@@ -183,8 +185,14 @@ class CustomerCatalogController extends Controller
             'q' => $q,
             // A plain filter carried by the bot's deep links, not an
             // authorization: garbage degrades to the unfiltered catalog.
-            'kind' => ListingKind::tryFrom((string) $request->query('kind')),
-            'category' => Category::find((int) $request->query('category_id')),
+            'kind' => $kind,
+            // A repair master and a driver carry no category at all, and
+            // the catalog shows them no category control: a value left in
+            // the link would empty their выдача through a filter the
+            // customer can neither see nor clear.
+            'category' => $kind === null || $kind->usesCategory()
+                ? Category::find((int) $request->query('category_id'))
+                : null,
             'location' => Location::find((int) $request->query('location_id')),
             'sort' => $sort,
         ];
@@ -230,6 +238,22 @@ class CustomerCatalogController extends Controller
         }
 
         return $query->paginate(self::PER_PAGE)->withQueryString();
+    }
+
+    /**
+     * The catalog stripped of the search and every filter but the kind:
+     * «Сбросить» must not throw the customer out of the branch they
+     * arrived in — the выдача would change to a different one with
+     * nothing on screen explaining why. Built here instead of through
+     * catalogUrl, which drops the rental kind on purpose: the header
+     * names whatever kind the page filters by, so the reset owes the
+     * customer that same kind back.
+     */
+    protected function catalogUrlInKind(Contact $contact, ?ListingKind $kind): string
+    {
+        $url = $this->links->catalogUrl($contact);
+
+        return $kind === null ? $url : $url.'&kind='.$kind->value;
     }
 
     /**

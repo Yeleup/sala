@@ -237,8 +237,8 @@ describe('виды объявлений в каталоге', function () {
             ->assertSee('Серик Машинист')
             ->assertSee('Экскаватор, Самосвал')
             ->assertDontSee('Аренда крана для фильтра вида')
-            // Скрытое поле формы фильтров несёт вид дальше при «Показать».
-            ->assertSee('name="kind" value="driver"', false);
+            // Селект «Вид» несёт выбор дальше при «Показать».
+            ->assertSee('<option value="driver" selected>Водитель / машинист</option>', false);
 
         // Мусорный вид — молча без фильтра, как остальные параметры ссылки.
         $this->get(catalogLinks()->catalogUrl($contact).'&kind=nonsense')
@@ -310,6 +310,31 @@ describe('виды объявлений в каталоге', function () {
         $this->get(catalogLinks()->listingUrl($contact, $driver))->assertOk()->assertDontSee('doc.jpg');
     });
 
+    test('панель фильтров даёт выбор вида и показывает текущую ветку выбранной', function () {
+        // Раньше вид приходил только ссылкой из бота: уйти из ветки было
+        // некуда, а вернуться в неё — тем более. Теперь вид такой же
+        // видимый фильтр, как категория, место и сортировка.
+        $contact = Contact::factory()->create();
+
+        $this->get(catalogLinks()->catalogUrl($contact).'&kind=repair')
+            ->assertOk()
+            ->assertSee('<option value="">— все виды —</option>', false)
+            ->assertSee('<option value="repair" selected>Ремонт спецтехники</option>', false)
+            ->assertSee('Аренда спецтехники')
+            ->assertSee('Водитель / машинист');
+
+        // Общий каталог несёт тот же выбор с неотмеченными видами: из него
+        // заказчик уходит в любую ветку, не возвращаясь в WhatsApp за ссылкой.
+        $this->get(catalogLinks()->catalogUrl($contact))
+            ->assertOk()
+            ->assertSee('<option value="">— все виды —</option>', false)
+            ->assertSee('Аренда спецтехники')
+            ->assertSee('Водитель / машинист')
+            ->assertDontSee('selected>Аренда спецтехники', false)
+            ->assertDontSee('selected>Ремонт спецтехники', false)
+            ->assertDontSee('selected>Водитель / машинист', false);
+    });
+
     test('каталог по ссылке из ветки аренды показывает только аренду', function () {
         $contact = Contact::factory()->create();
         Listing::factory()->published()->create(['title' => 'Аренда крана из ветки']);
@@ -322,24 +347,22 @@ describe('виды объявлений в каталоге', function () {
             ->assertDontSee('Ремонт двигателей');
     });
 
-    test('шапка каталога называет вид ветки и даёт выход ко всем видам', function () {
+    test('шапка каталога называет вид ветки', function () {
         // Фильтр вида режет выдачу молча: без подписи шапка обещает «все
         // объявления», показывая один вид из трёх.
         $contact = Contact::factory()->create();
 
         $this->get(catalogLinks()->catalogUrl($contact).'&kind=repair')
             ->assertOk()
-            ->assertSee('Ремонт спецтехники — все опубликованные объявления этого вида.')
-            ->assertSee('Показать все виды');
+            ->assertSee('Ремонт спецтехники — все опубликованные объявления этого вида.');
 
-        // Без вида каталог и правда общий — прежний текст, выход не нужен.
+        // Без вида каталог и правда общий — прежний текст.
         $this->get(catalogLinks()->catalogUrl($contact))
             ->assertOk()
-            ->assertSee('Спецтехника — все опубликованные объявления.')
-            ->assertDontSee('Показать все виды');
+            ->assertSee('Спецтехника — все опубликованные объявления.');
     });
 
-    test('«Сбросить» очищает фильтры, но не выкидывает из ветки вида', function () {
+    test('«Сбросить» очищает фильтры вместе с видом', function () {
         $contact = Contact::factory()->create();
         Listing::factory()->published()->create(['title' => 'Аренда крана мимо ветки']);
         Listing::factory()->repair()->published()->create(['title' => 'Ремонт двигателей']);
@@ -349,24 +372,24 @@ describe('виды объявлений в каталоге', function () {
 
         preg_match('/href="([^"]+)"[^>]*>Сбросить</u', $content, $reset);
 
+        // Вид — такой же видимый фильтр панели, как остальные: «Сбросить»
+        // чистит и его, а вернуться в ветку можно тем же селектом.
         $this->get(html_entity_decode($reset[1]))
             ->assertOk()
             ->assertSee('Ремонт двигателей')
-            ->assertDontSee('Аренда крана мимо ветки');
+            ->assertSee('Аренда крана мимо ветки')
+            ->assertSee('<option value="">— все виды —</option>', false);
     });
 
-    test('«Показать все виды» снимает фильтр вида', function () {
+    test('выбор «— все виды —» открывает каталог по всем видам', function () {
         $contact = Contact::factory()->create();
         Listing::factory()->published()->create(['title' => 'Аренда крана мимо ветки']);
         Listing::factory()->repair()->published()->create(['title' => 'Ремонт двигателей']);
 
-        $content = $this->get(catalogLinks()->catalogUrl($contact).'&kind=repair')
-            ->assertOk()->getContent();
-
-        preg_match('/href="([^"]+)"[^>]*>Показать все виды</u', $content, $allKinds);
-
-        $this->get(html_entity_decode($allKinds[1]))
+        // Пустое значение — ровно то, что отправит форма при «Показать».
+        $this->get(catalogLinks()->catalogUrl($contact).'&kind=')
             ->assertOk()
+            ->assertSee('Спецтехника — все опубликованные объявления.')
             ->assertSee('Аренда крана мимо ветки')
             ->assertSee('Ремонт двигателей');
     });
@@ -376,7 +399,7 @@ describe('виды объявлений в каталоге', function () {
 
         $this->get(catalogLinks()->catalogUrl($contact, 'вертолёт').'&kind=repair')
             ->assertOk()
-            ->assertSee('Среди объявлений «Ремонт спецтехники» ничего не нашлось. Измените запрос, сбросьте фильтры или посмотрите все виды.');
+            ->assertSee('Среди объявлений «Ремонт спецтехники» ничего не нашлось. Измените запрос, выберите другой вид или сбросьте фильтры.');
     });
 
     test('фильтр категории не показывается там, где категорий не бывает', function () {

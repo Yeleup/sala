@@ -15,7 +15,6 @@
         .page-header { background: linear-gradient(135deg, #1e40af, #3b82f6); border-radius: 1rem; padding: 1.375rem 1.5rem; margin-bottom: 1.25rem; color: #fff; box-shadow: 0 10px 25px -12px rgb(30 64 175 / 0.5); }
         .page-header h1 { font-size: 1.375rem; letter-spacing: -0.01em; overflow-wrap: anywhere; }
         .page-header p { margin: 0; color: #dbeafe; font-size: 0.875rem; overflow-wrap: anywhere; }
-        .page-header a { text-decoration: underline; text-underline-offset: 0.15em; white-space: nowrap; }
         /* Отступ и радиус вынесены в переменные: галерея объявления выходит в край карточки и обязана их знать. */
         .card { background: #fff; border: 1px solid #e2e8f0; border-radius: 1rem; padding: 1.25rem; margin-bottom: 1rem; box-shadow: 0 1px 2px rgb(15 23 42 / 0.04); --card-pad: 1.25rem; --card-radius: 1rem; }
         .muted { color: #64748b; font-size: 0.875rem; }
@@ -108,7 +107,6 @@
         }
         .prewrap { white-space: pre-line; }
         .empty-state { text-align: center; padding: 2rem 1.25rem; color: #475569; }
-        .empty-state a { color: #1d4ed8; text-decoration: underline; text-underline-offset: 0.15em; }
         .pager { display: flex; justify-content: space-between; align-items: center; gap: 0.5rem; margin: 1.5rem 0 0; }
         .pager-link { font-size: 0.875rem; font-weight: 600; text-decoration: none; color: #1d4ed8; background: #dbeafe; padding: 0.5rem 0.875rem; border-radius: 0.625rem; transition: background-color 0.15s ease; }
         .pager-link:hover { background: #bfdbfe; }

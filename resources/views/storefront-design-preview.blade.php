@@ -7,9 +7,10 @@
     catalog.blade.php + components/customer/layout.blade.php): состояния
     desktop и mobile, панель фильтров, карточки с «Выбрать» и бейджем
     отправленной заявки, баннеры успеха/дубликата/ошибки, пустая выдача.
-    Отдельные состояния — каталог в ветке вида: подзаголовок называет вид и
-    даёт выход «Показать все виды»; фильтр «Категория» остаётся только в
-    ветке аренды, у мастеров и водителей категорий не бывает.
+    Отдельные состояния — каталог в ветке вида: подзаголовок называет вид,
+    а сменить его можно селектом «Вид» первым в панели фильтров; фильтр
+    «Категория» остаётся только в ветке аренды, у мастеров и водителей
+    категорий не бывает.
     Тема — синяя (градиентная шапка, синие кнопки и акценты).
 
     Портал поставщика (resources/views/supplier/* +
@@ -45,7 +46,6 @@
         .page-header { background: linear-gradient(135deg, #1e40af, #3b82f6); border-radius: 1rem; padding: 1.375rem 1.5rem; margin-bottom: 1.25rem; color: #fff; box-shadow: 0 10px 25px -12px rgb(30 64 175 / 0.5); }
         .page-header h1 { font-size: 1.375rem; letter-spacing: -0.01em; overflow-wrap: anywhere; }
         .page-header p { margin: 0; color: #dbeafe; font-size: 0.875rem; overflow-wrap: anywhere; }
-        .page-header a { text-decoration: underline; text-underline-offset: 0.15em; white-space: nowrap; }
         .card { background: #fff; border: 1px solid #e2e8f0; border-radius: 1rem; padding: 1.25rem; margin-bottom: 1rem; box-shadow: 0 1px 2px rgb(15 23 42 / 0.04); --card-pad: 1.25rem; --card-radius: 1rem; }
         .muted { color: #64748b; font-size: 0.875rem; }
         .result-count { margin: 0 0 1rem; padding-left: 0.25rem; }
@@ -122,7 +122,6 @@
         .gallery-slide .thumb-placeholder.is-portrait { width: 62%; }
         .prewrap { white-space: pre-line; }
         .empty-state { text-align: center; padding: 2rem 1.25rem; color: #475569; }
-        .empty-state a { color: #1d4ed8; text-decoration: underline; text-underline-offset: 0.15em; }
         .pager { display: flex; justify-content: space-between; align-items: center; gap: 0.5rem; margin: 1.5rem 0 0; }
         .pager-link { font-size: 0.875rem; font-weight: 600; text-decoration: none; color: #1d4ed8; background: #dbeafe; padding: 0.5rem 0.875rem; border-radius: 0.625rem; transition: background-color 0.15s ease; }
         .pager-link:hover { background: #bfdbfe; }
@@ -204,6 +203,10 @@
                     <input value="кран 25 тонн" placeholder="Что ищете? Например: кран 25 тонн">
                 </div>
                 <div class="filter-row">
+                    <div class="field">
+                        <label>Вид</label>
+                        <select><option selected>— все виды —</option><option>Аренда спецтехники</option><option>Ремонт спецтехники</option><option>Водитель / машинист</option></select>
+                    </div>
                     <div class="field">
                         <label>Категория</label>
                         <select><option>— все категории —</option><option selected>Автокран</option><option>Экскаватор</option></select>
@@ -328,6 +331,10 @@
                 </div>
                 <div class="filter-row">
                     <div class="field">
+                        <label>Вид</label>
+                        <select><option selected>— все виды —</option><option>Аренда спецтехники</option><option>Ремонт спецтехники</option><option>Водитель / машинист</option></select>
+                    </div>
+                    <div class="field">
                         <label>Категория</label>
                         <select><option>— все категории —</option></select>
                     </div>
@@ -417,12 +424,12 @@
 </div>
 
 <div class="preview-section">
-    <h2>Каталог заказчика в ветке вида — desktop (подзаголовок называет вид и даёт выход «Показать все виды»; фильтра «Категория» нет — у мастеров и водителей категорий не бывает)</h2>
+    <h2>Каталог заказчика в ветке вида — desktop (подзаголовок называет вид, селект «Вид» уводит в любую другую ветку; фильтра «Категория» нет — у мастеров и водителей категорий не бывает)</h2>
     <div class="viewport viewport-desktop">
         <main>
             <header class="page-header">
                 <h1>Каталог объявлений</h1>
-                <p>Ремонт спецтехники — все опубликованные объявления этого вида. <a href="#">Показать все виды</a></p>
+                <p>Ремонт спецтехники — все опубликованные объявления этого вида.</p>
             </header>
 
             <div class="card">
@@ -431,6 +438,10 @@
                     <input placeholder="Что ищете? Например: кран 25 тонн">
                 </div>
                 <div class="filter-row">
+                    <div class="field">
+                        <label>Вид</label>
+                        <select><option>— все виды —</option><option>Аренда спецтехники</option><option selected>Ремонт спецтехники</option><option>Водитель / машинист</option></select>
+                    </div>
                     <div class="field">
                         <label>Место</label>
                         <div class="location-picker">
@@ -444,7 +455,6 @@
                 </div>
                 <div class="actions" style="margin-top: 0.25rem;">
                     <button class="btn btn-primary">Показать</button>
-                    {{-- «Сбросить» остаётся в ветке: чистит запрос и фильтры, вид не трогает. --}}
                     <a class="btn btn-secondary" href="#">Сбросить</a>
                 </div>
             </div>
@@ -491,7 +501,7 @@
         <main>
             <header class="page-header">
                 <h1>Каталог объявлений</h1>
-                <p>Аренда спецтехники — все опубликованные объявления этого вида. <a href="#">Показать все виды</a></p>
+                <p>Аренда спецтехники — все опубликованные объявления этого вида.</p>
             </header>
 
             <div class="card">
@@ -500,6 +510,10 @@
                     <input value="кран 25 тонн" placeholder="Что ищете? Например: кран 25 тонн">
                 </div>
                 <div class="filter-row">
+                    <div class="field">
+                        <label>Вид</label>
+                        <select><option>— все виды —</option><option selected>Аренда спецтехники</option><option>Ремонт спецтехники</option><option>Водитель / машинист</option></select>
+                    </div>
                     <div class="field">
                         <label>Категория</label>
                         <select><option>— все категории —</option><option selected>Автокран</option><option>Экскаватор</option></select>
@@ -533,7 +547,7 @@
         <main>
             <header class="page-header">
                 <h1>Каталог объявлений</h1>
-                <p>Водитель / машинист — все опубликованные объявления этого вида. <a href="#">Показать все виды</a></p>
+                <p>Водитель / машинист — все опубликованные объявления этого вида.</p>
             </header>
 
             <div class="card">
@@ -542,6 +556,10 @@
                     <input placeholder="Что ищете? Например: кран 25 тонн">
                 </div>
                 <div class="filter-row">
+                    <div class="field">
+                        <label>Вид</label>
+                        <select><option>— все виды —</option><option>Аренда спецтехники</option><option>Ремонт спецтехники</option><option selected>Водитель / машинист</option></select>
+                    </div>
                     <div class="field">
                         <label>Место</label>
                         <div class="location-picker">
@@ -592,7 +610,7 @@
 </div>
 
 <div class="preview-section">
-    <h2>Пустая выдача — общий каталог и ветка вида (в ветке названо, среди чего искали, и дан выход)</h2>
+    <h2>Пустая выдача — общий каталог и ветка вида (в ветке названо, среди чего искали)</h2>
     <div class="viewport viewport-desktop">
         <main>
             <p class="muted result-count">Найдено объявлений: 0</p>
@@ -602,8 +620,7 @@
 
             <p class="muted result-count">Найдено объявлений: 0</p>
             <div class="card empty-state">
-                <p style="margin: 0;">Среди объявлений «Ремонт спецтехники» ничего не нашлось. Измените запрос, сбросьте фильтры или посмотрите все виды.</p>
-                <p style="margin: 0.75rem 0 0;"><a href="#">Показать все виды</a></p>
+                <p style="margin: 0;">Среди объявлений «Ремонт спецтехники» ничего не нашлось. Измените запрос, выберите другой вид или сбросьте фильтры.</p>
             </div>
         </main>
     </div>

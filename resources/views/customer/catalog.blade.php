@@ -1,10 +1,10 @@
 <x-customer.layout title="Каталог объявлений">
     <header class="page-header">
         <h1>Каталог объявлений</h1>
-        {{-- The kind filter has no control of its own, so naming it here is the only thing
-             that tells the customer why two thirds of the catalog is missing. --}}
+        {{-- Names the branch before the customer reaches the filter panel; the «Вид»
+             select below is what changes it. --}}
         @if ($filters['kind'])
-            <p>{{ $filters['kind']->label() }} — все опубликованные объявления этого вида. <a href="{{ $allKindsUrl }}">Показать все виды</a></p>
+            <p>{{ $filters['kind']->label() }} — все опубликованные объявления этого вида.</p>
         @else
             <p>Спецтехника — все опубликованные объявления.</p>
         @endif
@@ -14,18 +14,23 @@
         {{-- The personal link's signature covers only the path and expiry, so the form can change every filter freely. --}}
         <input type="hidden" name="expires" value="{{ $expires }}">
         <input type="hidden" name="signature" value="{{ $signature }}">
-        {{-- The kind has no control of its own: the bot's deep link sets it, the header names it,
-             and the form only carries it forward — «Показать все виды» is the one way out. --}}
-        @if ($filters['kind'])
-            <input type="hidden" name="kind" value="{{ $filters['kind']->value }}">
-        @endif
-
         <div class="field">
             <label for="q">Поиск</label>
             <input id="q" name="q" value="{{ $filters['q'] }}" placeholder="Что ищете? Например: кран 25 тонн">
         </div>
 
         <div class="filter-row">
+            {{-- First in the row: the kind decides whether «Категория» is there at all. --}}
+            <div class="field">
+                <label for="kind">Вид</label>
+                <select id="kind" name="kind">
+                    <option value="">— все виды —</option>
+                    @foreach ($kinds as $kind)
+                        <option value="{{ $kind->value }}" @selected($filters['kind'] === $kind)>{{ $kind->label() }}</option>
+                    @endforeach
+                </select>
+            </div>
+
             {{-- Only rental listings carry a category: in the other two branches the
                  select could return nothing but nothing. --}}
             @if ($filters['kind'] === null || $filters['kind']->usesCategory())
@@ -142,8 +147,7 @@
     @empty
         <div class="card empty-state">
             @if ($filters['kind'])
-                <p style="margin: 0;">Среди объявлений «{{ $filters['kind']->label() }}» ничего не нашлось. Измените запрос, сбросьте фильтры или посмотрите все виды.</p>
-                <p style="margin: 0.75rem 0 0;"><a href="{{ $allKindsUrl }}">Показать все виды</a></p>
+                <p style="margin: 0;">Среди объявлений «{{ $filters['kind']->label() }}» ничего не нашлось. Измените запрос, выберите другой вид или сбросьте фильтры.</p>
             @else
                 <p style="margin: 0;">Ничего не нашлось. Измените запрос или сбросьте фильтры.</p>
             @endif

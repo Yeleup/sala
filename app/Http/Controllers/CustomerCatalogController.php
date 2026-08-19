@@ -64,12 +64,9 @@ class CustomerCatalogController extends Controller
             'filters' => $filters,
             'listings' => $listings,
             'categories' => Category::query()->orderBy('name')->get(),
+            'kinds' => ListingKind::cases(),
             'locationLabel' => $filters['location']?->label(),
-            // «Сбросить» clears the search and every filter but the kind: the
-            // header names the branch, so dropping it would swap the results
-            // for a different set with nothing on screen explaining why.
-            'resetUrl' => $this->links->catalogUrl($contact, kind: $filters['kind']),
-            'allKindsUrl' => $this->links->catalogUrl($contact),
+            'resetUrl' => $this->links->catalogUrl($contact),
             'signature' => (string) $request->query('signature'),
             'expires' => (string) $request->query('expires'),
             'selectUrls' => collect($listings->items())->mapWithKeys(

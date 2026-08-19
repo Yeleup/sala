@@ -3,6 +3,7 @@
 namespace App\Filament\Resources\Listings;
 
 use App\Enums\ListingStatus;
+use App\Enums\ModerationNoticeOutcome;
 use App\Filament\Clusters\Marketplace\MarketplaceCluster;
 use App\Filament\Resources\Listings\Pages\CreateListing;
 use App\Filament\Resources\Listings\Pages\EditListing;
@@ -15,6 +16,7 @@ use App\Services\ListingModerationNotifier;
 use BackedEnum;
 use Filament\Actions\Action;
 use Filament\Forms\Components\Textarea;
+use Filament\Forms\Components\Toggle;
 use Filament\Notifications\Notification;
 use Filament\Resources\Resource;
 use Filament\Schemas\Schema;
@@ -76,6 +78,13 @@ class ListingResource extends Resource
         return ListingsTable::configure($table);
     }
 
+    /**
+     * The verdict itself is one click; who pays for telling the supplier
+     * about it is the only question the modal asks — and only when the
+     * answer costs money. Into an open 24-hour window the notification is
+     * free, so it goes out without asking. Outside the window it is a paid
+     * template, and the operator decides: approve silently or notify.
+     */
     public static function approveAction(): Action
     {
         return Action::make('approve')
@@ -85,20 +94,61 @@ class ListingResource extends Resource
             ->visible(fn (Listing $record): bool => $record->status === ListingStatus::PendingModeration)
             ->requiresConfirmation()
             ->modalHeading('Опубликовать объявление?')
-            ->modalDescription('Объявление попадёт в поиск на '.Listing::LIFETIME_DAYS.' дней.')
-            ->action(function (Listing $record): void {
+            ->modalDescription(fn (Listing $record): string => self::approvalNotes($record))
+            ->schema(fn (Listing $record): array => self::paidNoticeIsOperatorsChoice($record) ? [
+                Toggle::make('notify_supplier')
+                    ->label('Уведомить поставщика платным шаблоном')
+                    ->helperText('Шаблонное сообщение WhatsApp — платное. Без него объявление публикуется тихо.')
+                    ->default(false),
+            ] : [])
+            ->action(function (Listing $record, array $data): void {
                 $record->approve(self::currentOperator());
 
-                $notified = app(ListingModerationNotifier::class)->notifyApproved($record);
+                // No toggle in the modal means the operator was never asked:
+                // either the window is open (the send is free anyway) or
+                // there is no approved template — let the notifier try and
+                // report honestly why nothing reached the supplier.
+                $outcome = app(ListingModerationNotifier::class)->notifyApproved(
+                    $record,
+                    paidTemplateAllowed: (bool) ($data['notify_supplier'] ?? true),
+                );
 
                 Notification::make()
                     ->title('Объявление опубликовано')
-                    ->body($notified
-                        ? 'Поставщику отправлено уведомление в WhatsApp.'
-                        : 'Уведомить поставщика в WhatsApp не удалось — статус он увидит в веб-кабинете.')
+                    ->body(match ($outcome) {
+                        ModerationNoticeOutcome::Delivered => 'Поставщику отправлено уведомление в WhatsApp.',
+                        ModerationNoticeOutcome::Skipped => 'Уведомление поставщику не отправлялось — статус он увидит в веб-кабинете.',
+                        ModerationNoticeOutcome::Failed => 'Уведомить поставщика в WhatsApp не удалось — статус он увидит в веб-кабинете.',
+                    })
                     ->success()
                     ->send();
             });
+    }
+
+    /**
+     * The paid notification is offered only when it is both the only way
+     * to reach the supplier (his window is closed) and actually sendable
+     * (the verdict template is approved by Meta).
+     */
+    private static function paidNoticeIsOperatorsChoice(Listing $record): bool
+    {
+        return ! ($record->supplier?->hasOpenSessionWindow() ?? false)
+            && app(ListingModerationNotifier::class)->canSendApprovalTemplate();
+    }
+
+    private static function approvalNotes(Listing $record): string
+    {
+        $notes = ['Объявление попадёт в поиск на '.Listing::LIFETIME_DAYS.' дней.'];
+
+        if ($record->supplier?->hasOpenSessionWindow()) {
+            $notes[] = 'Поставщик недавно писал — уведомление уйдёт ему бесплатным сообщением.';
+        } elseif (self::paidNoticeIsOperatorsChoice($record)) {
+            $notes[] = '24-часовое окно переписки с поставщиком закрыто: бесплатное сообщение ему не доставить.';
+        } else {
+            $notes[] = 'Окно переписки с поставщиком закрыто, а утверждённого шаблона «Объявление опубликовано» нет — уведомить его не получится, статус он увидит в веб-кабинете.';
+        }
+
+        return implode(' ', $notes);
     }
 
     public static function rejectAction(): Action
@@ -118,11 +168,11 @@ class ListingResource extends Resource
             ->action(function (Listing $record, array $data): void {
                 $record->reject($data['rejection_reason'], self::currentOperator());
 
-                $notified = app(ListingModerationNotifier::class)->notifyRejected($record);
+                $outcome = app(ListingModerationNotifier::class)->notifyRejected($record);
 
                 Notification::make()
                     ->title('Объявление отклонено')
-                    ->body($notified
+                    ->body($outcome === ModerationNoticeOutcome::Delivered
                         ? 'Поставщику отправлено уведомление в WhatsApp.'
                         : 'Уведомить поставщика в WhatsApp не удалось — причину он увидит в веб-кабинете.')
                     ->success()

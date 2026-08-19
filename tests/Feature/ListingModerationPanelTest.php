@@ -337,9 +337,69 @@ describe('уведомление поставщика о вердикте мод
         );
 
         Livewire::test(ListListings::class)
-            ->callAction(TestAction::make('approve')->table($listing));
+            ->callAction(TestAction::make('approve')->table($listing), ['notify_supplier' => true])
+            ->assertNotified(Notification::make()
+                ->title('Объявление опубликовано')
+                ->body('Поставщику отправлено уведомление в WhatsApp.')
+                ->success());
 
         expect($listing->refresh()->status)->toBe(ListingStatus::Published);
+    });
+
+    test('вне окна платный шаблон по умолчанию не уходит — объявление одобряется тихо', function () {
+        $listing = pendingModerationListing('withClosedSessionWindow');
+        WhatsappTemplate::factory()->approved()->create([
+            'name' => WhatsappTemplateLibrary::LISTING_APPROVED,
+            'language' => 'ru',
+        ]);
+
+        $messenger = fakeModerationMessenger();
+        $messenger->shouldNotReceive('sendTemplate');
+        $messenger->shouldNotReceive('sendCtaUrl');
+
+        Livewire::test(ListListings::class)
+            ->callAction(TestAction::make('approve')->table($listing))
+            ->assertNotified(Notification::make()
+                ->title('Объявление опубликовано')
+                ->body('Уведомление поставщику не отправлялось — статус он увидит в веб-кабинете.')
+                ->success());
+
+        expect($listing->refresh()->status)->toBe(ListingStatus::Published);
+    });
+
+    test('вне окна оператор видит выбор: одобрить тихо или уведомить платным шаблоном', function () {
+        $listing = pendingModerationListing('withClosedSessionWindow');
+        WhatsappTemplate::factory()->approved()->create([
+            'name' => WhatsappTemplateLibrary::LISTING_APPROVED,
+            'language' => 'ru',
+        ]);
+
+        Livewire::test(ListListings::class)
+            ->mountAction(TestAction::make('approve')->table($listing))
+            ->assertMountedActionModalSee('Уведомить поставщика платным шаблоном')
+            ->assertMountedActionModalSee('окно переписки с поставщиком закрыто');
+    });
+
+    test('в открытое окно выбора нет — уведомление бесплатное и уходит само', function () {
+        $listing = pendingModerationListing('withOpenSessionWindow');
+        WhatsappTemplate::factory()->approved()->create([
+            'name' => WhatsappTemplateLibrary::LISTING_APPROVED,
+            'language' => 'ru',
+        ]);
+
+        Livewire::test(ListListings::class)
+            ->mountAction(TestAction::make('approve')->table($listing))
+            ->assertMountedActionModalDontSee('Уведомить поставщика платным шаблоном')
+            ->assertMountedActionModalSee('бесплатным сообщением');
+    });
+
+    test('вне окна без утверждённого шаблона выбора тоже нет — уведомить нечем', function () {
+        $listing = pendingModerationListing('withClosedSessionWindow');
+
+        Livewire::test(ListListings::class)
+            ->mountAction(TestAction::make('approve')->table($listing))
+            ->assertMountedActionModalDontSee('Уведомить поставщика платным шаблоном')
+            ->assertMountedActionModalSee('уведомить его не получится');
     });
 
     test('вне окна отклонение уходит шаблоном listing_rejected', function () {

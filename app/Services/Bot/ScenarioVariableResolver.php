@@ -6,12 +6,14 @@ use App\Enums\ScenarioVariable;
 use App\Models\Contact;
 use App\Models\CustomerRequest;
 use App\Models\Listing;
+use App\Models\ListingRenewalBatch;
 use App\Models\ScenarioRun;
 use Illuminate\Support\Str;
 
 /**
- * Resolves scenario variables from a run's subject (the request or the
- * listing) and its contact at send time.
+ * Resolves scenario variables from a run's subject (the request, the
+ * listing or the batch of expiring listings) and its contact at send
+ * time.
  *
  * Two placeholder styles exist: template bodies use Meta's indexed {{n}}
  * mapped by the message block's ordered "variables" list, while session
@@ -41,6 +43,11 @@ class ScenarioVariableResolver
             ScenarioVariable::ListingDescription => $listing?->description ?: 'без описания',
             ScenarioVariable::ListingLocation => ($listing?->locationLine() ?: null) ?? 'место не указано',
             ScenarioVariable::ListingPrice => $listing?->price ?: 'цена не указана',
+            // «12 ваших объявлений»: родительный падеж — его требует
+            // формулировка «У {{1}} скоро закончится срок показа».
+            ScenarioVariable::ExpiringListings => $subject instanceof ListingRenewalBatch
+                ? ListingRenewalBatch::countPhrase($subject->listings()->count())
+                : 'ваших объявлений',
             ScenarioVariable::RequestQuery => ($subject instanceof CustomerRequest ? $subject->query_text : null) ?: 'без уточнений',
             ScenarioVariable::RequestCustomer => $subject instanceof CustomerRequest ? $this->customerLine($subject->customer) : null,
             // The profile name is often absent (Dereu drops it from the

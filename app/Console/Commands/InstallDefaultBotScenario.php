@@ -14,8 +14,9 @@ use Illuminate\Console\Command;
  * Installs and publishes the reference MVP scenarios
  * (docs/modules/user-flows.md): the main dialog (the supplier branch
  * through the AI collector, customer search, «Мои объявления» CTA) and
- * the two flow scenarios — the customer request notification and the
- * 30-day renewal poll. Refuses to overwrite an already published
+ * the three flow scenarios — the customer request notification and the
+ * 30-day renewal poll in its per-listing and per-supplier shapes.
+ * Refuses to overwrite an already published
  * scenario without --force so a customized graph is not lost; each
  * scenario is judged separately.
  */
@@ -80,6 +81,7 @@ class InstallDefaultBotScenario extends Command
             ['trigger' => BotScenarioTrigger::InboundMessage, 'name' => 'Основной сценарий', 'definition' => $this->mainDialogDefinition()],
             ['trigger' => BotScenarioTrigger::NewCustomerRequest, 'name' => 'Новая заявка', 'definition' => $this->customerRequestDefinition()],
             ['trigger' => BotScenarioTrigger::ListingExpiring, 'name' => 'Продление объявления', 'definition' => $this->listingRenewalDefinition()],
+            ['trigger' => BotScenarioTrigger::ListingsExpiringBatch, 'name' => 'Продление нескольких объявлений', 'definition' => $this->listingsRenewalBatchDefinition()],
         ];
     }
 
@@ -261,7 +263,7 @@ class InstallDefaultBotScenario extends Command
                 ['id' => 'archived_text', 'type' => 'text', 'x' => 820, 'y' => 400,
                     'text' => 'Перенесли объявление в архив — оно больше не показывается в поиске.'],
                 ['id' => 'already_archived', 'type' => 'text', 'x' => 820, 'y' => 240,
-                    'text' => 'Это объявление уже в архиве. Чтобы разместить его снова, создайте новое объявление.'],
+                    'text' => 'Это объявление уже в архиве. Вернуть его в поиск можно в кабинете — кнопка «Вернуть в поиск» в «Моих объявлениях».'],
                 ['id' => 'end', 'type' => 'end', 'x' => 1100, 'y' => 240],
             ],
             'edges' => [
@@ -275,6 +277,61 @@ class InstallDefaultBotScenario extends Command
                 ['from' => 'renewed_text', 'output' => 'continue', 'to' => 'end'],
                 ['from' => 'archived_text', 'output' => 'continue', 'to' => 'end'],
                 ['from' => 'already_archived', 'output' => 'continue', 'to' => 'end'],
+            ],
+        ];
+    }
+
+    /**
+     * Продление пачкой: у поставщика за сутки истекает сразу несколько
+     * публикаций, и вместо платного шаблона на каждую уходит один вопрос
+     * обо всех. [Все актуальны] и [Все в архив] решают за всю пачку;
+     * [Разобрать по одному] уводит в кабинет, где видно каждое
+     * объявление по отдельности — нажатие кнопки открывает 24-часовое
+     * окно, поэтому CTA-ссылка уходит бесплатным сообщением. Таймаута
+     * нет: молчание и так уводит публикации в архив по истечении срока, а
+     * поздний ответ идёт по выходу «Все объявления уже в архиве».
+     *
+     * @return array{nodes: list<array<string, mixed>>, edges: list<array<string, mixed>>}
+     */
+    protected function listingsRenewalBatchDefinition(): array
+    {
+        return [
+            'nodes' => [
+                ['id' => 'start', 'type' => 'start', 'x' => 40, 'y' => 300],
+                ['id' => 'poll', 'type' => 'message', 'x' => 260, 'y' => 300,
+                    'channel' => 'adaptive',
+                    'template_name' => WhatsappTemplateLibrary::LISTINGS_RENEWAL_BATCH,
+                    'variables' => ['listings.expiring'],
+                    'options' => [
+                        ['id' => 'all_yes', 'title' => 'Все актуальны'],
+                        ['id' => 'one_by_one', 'title' => 'Разобрать по одному'],
+                        ['id' => 'all_no', 'title' => 'Все в архив'],
+                    ]],
+                ['id' => 'do_renew_all', 'type' => 'action', 'action' => 'renew_batch_listings', 'x' => 560, 'y' => 80],
+                ['id' => 'do_archive_all', 'type' => 'action', 'action' => 'archive_batch_listings', 'x' => 560, 'y' => 520],
+                ['id' => 'renewed_text', 'type' => 'text', 'x' => 860, 'y' => 80,
+                    'text' => 'Продлили: эти объявления будут показываться ещё 30 дней.'],
+                ['id' => 'archived_text', 'type' => 'text', 'x' => 860, 'y' => 520,
+                    'text' => 'Перенесли эти объявления в архив — они больше не показываются в поиске.'],
+                ['id' => 'already_archived', 'type' => 'text', 'x' => 860, 'y' => 300,
+                    'text' => 'По этим объявлениям вопрос уже закрыт — актуальные статусы и сроки показа видны в кабинете.'],
+                ['id' => 'cabinet', 'type' => 'my_listings', 'x' => 560, 'y' => 680,
+                    'text' => 'Хорошо. Откройте кабинет — там видно, у каких объявлений заканчивается срок, и можно продлить нужные.'],
+                ['id' => 'end', 'type' => 'end', 'x' => 1160, 'y' => 300],
+            ],
+            'edges' => [
+                ['from' => 'start', 'output' => 'continue', 'to' => 'poll'],
+                ['from' => 'poll', 'output' => 'option:all_yes', 'to' => 'do_renew_all'],
+                ['from' => 'poll', 'output' => 'option:all_no', 'to' => 'do_archive_all'],
+                ['from' => 'poll', 'output' => 'option:one_by_one', 'to' => 'cabinet'],
+                ['from' => 'do_renew_all', 'output' => 'continue', 'to' => 'renewed_text'],
+                ['from' => 'do_renew_all', 'output' => 'skipped', 'to' => 'already_archived'],
+                ['from' => 'do_archive_all', 'output' => 'continue', 'to' => 'archived_text'],
+                ['from' => 'do_archive_all', 'output' => 'skipped', 'to' => 'already_archived'],
+                ['from' => 'renewed_text', 'output' => 'continue', 'to' => 'end'],
+                ['from' => 'archived_text', 'output' => 'continue', 'to' => 'end'],
+                ['from' => 'already_archived', 'output' => 'continue', 'to' => 'end'],
+                ['from' => 'cabinet', 'output' => 'continue', 'to' => 'end'],
             ],
         ];
     }

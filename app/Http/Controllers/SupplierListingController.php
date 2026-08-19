@@ -22,8 +22,9 @@ use Illuminate\View\View;
 /**
  * The supplier web portal reached via signed CTA links from WhatsApp
  * (Module 3): «Мои объявления», editing a draft or a rejected listing
- * with re-submission to moderation, archiving a published one, and
- * changing the supplier's display name.
+ * with re-submission to moderation, archiving a published one, renewing
+ * publications (one by one or all at once), returning an archived
+ * listing to the search, and changing the supplier's display name.
  * See docs/modules/whatsapp-integration.md, «Веб-кабинет поставщика».
  */
 class SupplierListingController extends Controller
@@ -44,6 +45,17 @@ class SupplierListingController extends Controller
             'archiveUrls' => $listings
                 ->where('status', ListingStatus::Published)
                 ->mapWithKeys(fn (Listing $listing): array => [$listing->id => $this->links->archiveUrl($listing)]),
+            'renewUrls' => $listings
+                ->where('status', ListingStatus::Published)
+                ->mapWithKeys(fn (Listing $listing): array => [$listing->id => $this->links->renewUrl($listing)]),
+            'restoreUrls' => $listings
+                ->where('status', ListingStatus::Archived)
+                ->mapWithKeys(fn (Listing $listing): array => [$listing->id => $this->links->restoreUrl($listing)]),
+            // «Продлить все» возвращает публикации к общей дате — иначе
+            // они разъезжаются и опрос актуальности снова дробится.
+            'renewAllUrl' => $listings->contains(fn (Listing $listing): bool => $listing->status === ListingStatus::Published)
+                ? $this->links->renewAllUrl($contact)
+                : null,
         ]);
     }
 
@@ -65,6 +77,8 @@ class SupplierListingController extends Controller
             'indexUrl' => $this->links->myListingsUrl($listing->supplier),
             'updateUrl' => $this->links->updateUrl($listing),
             'archiveUrl' => $listing->status === ListingStatus::Published ? $this->links->archiveUrl($listing) : null,
+            'renewUrl' => $listing->status === ListingStatus::Published ? $this->links->renewUrl($listing) : null,
+            'restoreUrl' => $listing->status === ListingStatus::Archived ? $this->links->restoreUrl($listing) : null,
         ]);
     }
 
@@ -118,6 +132,60 @@ class SupplierListingController extends Controller
         return redirect()
             ->to($this->links->myListingsUrl($listing->supplier))
             ->with('status', 'Объявление снято с публикации.');
+    }
+
+    /**
+     * «Продлить»: публикация живёт ещё 30 дней с этой минуты. Отметка
+     * отправленного опроса сбрасывается — следующий цикл спросит заново.
+     */
+    public function renew(Listing $listing): RedirectResponse
+    {
+        $this->assertLinkIssuedToCurrentOwner($listing);
+        abort_unless($listing->status === ListingStatus::Published, 403);
+
+        $listing->renew();
+
+        return redirect()
+            ->to($this->links->myListingsUrl($listing->supplier))
+            ->with('status', sprintf('Продлили: объявление будет показываться ещё %d дней.', Listing::LIFETIME_DAYS));
+    }
+
+    /**
+     * «Продлить все»: разом по всем публикациям поставщика. Именно она
+     * сводит сроки к одной дате, а значит — и опрос актуальности к
+     * одному сообщению вместо нескольких.
+     */
+    public function renewAll(Contact $contact): RedirectResponse
+    {
+        $listings = $contact->listings()->where('status', ListingStatus::Published)->get();
+
+        $listings->each(fn (Listing $listing) => $listing->renew());
+
+        return redirect()
+            ->to($this->links->myListingsUrl($contact))
+            ->with('status', $listings->isEmpty()
+                ? 'Продлевать нечего — опубликованных объявлений нет.'
+                : sprintf('Продлили все объявления — они будут показываться ещё %d дней.', Listing::LIFETIME_DAYS));
+    }
+
+    /**
+     * «Вернуть в поиск»: объявление уже проходило модерацию и в архиве
+     * не менялось, поэтому возвращается прямо в поиск — в том же виде,
+     * в каком уже было там до архива.
+     */
+    public function restore(Listing $listing): RedirectResponse
+    {
+        $this->assertLinkIssuedToCurrentOwner($listing);
+        abort_unless($listing->status === ListingStatus::Archived, 403);
+
+        $listing->restoreFromArchive();
+
+        return redirect()
+            ->to($this->links->myListingsUrl($listing->supplier))
+            ->with('status', sprintf(
+                'Вернули объявление в поиск — оно будет показываться %d дней.',
+                Listing::LIFETIME_DAYS,
+            ));
     }
 
     /**

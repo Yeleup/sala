@@ -15,6 +15,9 @@ enum ScenarioVariable: string
     case ListingDescription = 'listing.description';
     case ListingLocation = 'listing.location';
     case ListingPrice = 'listing.price';
+
+    /** «12 ваших объявлений» — размер пачки истекающих публикаций. */
+    case ExpiringListings = 'listings.expiring';
     case RequestQuery = 'request.query';
     case RequestCustomer = 'request.customer';
     case ContactName = 'contact.name';
@@ -28,6 +31,7 @@ enum ScenarioVariable: string
             self::ListingDescription,
             self::ListingLocation,
             self::ListingPrice => in_array($trigger, [BotScenarioTrigger::NewCustomerRequest, BotScenarioTrigger::ListingExpiring], true),
+            self::ExpiringListings => $trigger === BotScenarioTrigger::ListingsExpiringBatch,
             self::RequestQuery,
             self::RequestCustomer => $trigger === BotScenarioTrigger::NewCustomerRequest,
             self::ContactName,
@@ -43,6 +47,7 @@ enum ScenarioVariable: string
             self::ListingDescription => 'Объявление: описание',
             self::ListingLocation => 'Объявление: локация',
             self::ListingPrice => 'Объявление: цена/тариф',
+            self::ExpiringListings => 'Объявления: сколько истекает',
             self::RequestQuery => 'Заявка: текст запроса',
             self::RequestCustomer => 'Заявка: заказчик (имя, телефон)',
             self::ContactName => 'Получатель: имя',

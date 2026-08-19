@@ -13,7 +13,7 @@
         @elseif ($listing->status === \App\Enums\ListingStatus::Published && $listing->expires_at)
             <p>Опубликовано до {{ $listing->expires_at->format('d.m.Y') }}.</p>
         @elseif ($listing->status === \App\Enums\ListingStatus::Archived)
-            <p>Объявление в архиве и не участвует в поиске. Чтобы разместить его снова, создайте новое объявление в WhatsApp.</p>
+            <p>Объявление в архиве и не участвует в поиске. Кнопка ниже вернёт его в поиск на 30 дней.</p>
         @endif
     </header>
 
@@ -422,11 +422,29 @@
                 @endif
             </dl>
 
-            @if ($archiveUrl)
-                <form method="POST" action="{{ $archiveUrl }}" class="actions">
-                    @csrf
-                    <button type="submit" class="btn btn-danger">Снять с публикации</button>
-                </form>
+            @if ($renewUrl || $restoreUrl || $archiveUrl)
+            <div class="actions">
+                @if ($renewUrl)
+                    <form method="POST" action="{{ $renewUrl }}">
+                        @csrf
+                        <button type="submit" class="btn btn-secondary">Продлить на 30 дней</button>
+                    </form>
+                @endif
+
+                @if ($restoreUrl)
+                    <form method="POST" action="{{ $restoreUrl }}">
+                        @csrf
+                        <button type="submit" class="btn btn-primary">Вернуть в поиск</button>
+                    </form>
+                @endif
+
+                @if ($archiveUrl)
+                    <form method="POST" action="{{ $archiveUrl }}">
+                        @csrf
+                        <button type="submit" class="btn btn-danger">Снять с публикации</button>
+                    </form>
+                @endif
+            </div>
             @endif
         @endif
 

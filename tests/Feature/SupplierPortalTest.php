@@ -737,3 +737,108 @@ describe('архивирование', function () {
         expect($listing->refresh())->status->toBe(ListingStatus::Draft);
     });
 });
+
+describe('продление и возврат из архива', function () {
+    test('«Продлить» отодвигает срок показа ещё на 30 дней и сбрасывает отметку опроса', function () {
+        $listing = Listing::factory()->published()->create([
+            'expires_at' => now()->addHours(6),
+            'renewal_requested_at' => now(),
+        ]);
+
+        $this->post(portalLinks()->renewUrl($listing))
+            ->assertRedirect()
+            ->assertSessionHas('status', fn (string $status): bool => str_contains($status, 'Продлили'));
+
+        $listing->refresh();
+
+        expect($listing->status)->toBe(ListingStatus::Published)
+            ->and($listing->expires_at->isAfter(now()->addDays(29)))->toBeTrue()
+            ->and($listing->renewal_requested_at)->toBeNull();
+    });
+
+    test('«Продлить все» сводит сроки публикаций к одной дате', function () {
+        $contact = Contact::factory()->create();
+        $soon = Listing::factory()->published()->for($contact, 'supplier')->create(['expires_at' => now()->addHours(6)]);
+        $later = Listing::factory()->published()->for($contact, 'supplier')->create(['expires_at' => now()->addDays(11)]);
+        $archived = Listing::factory()->archived()->for($contact, 'supplier')->create();
+
+        $this->post(portalLinks()->renewAllUrl($contact))->assertRedirect();
+
+        expect($soon->refresh()->expires_at->diffInMinutes($later->refresh()->expires_at))->toBeLessThan(1)
+            ->and($soon->expires_at->isAfter(now()->addDays(29)))->toBeTrue()
+            // Продление — про публикации: архив им не трогается.
+            ->and($archived->refresh()->status)->toBe(ListingStatus::Archived);
+    });
+
+    test('«Вернуть в поиск» возвращает архивное объявление в публикацию на 30 дней', function () {
+        $listing = Listing::factory()->publishable()->archived()->create();
+
+        $this->post(portalLinks()->restoreUrl($listing))
+            ->assertRedirect()
+            ->assertSessionHas('status', fn (string $status): bool => str_contains($status, 'Вернули'));
+
+        $listing->refresh();
+
+        expect($listing->status)->toBe(ListingStatus::Published)
+            ->and($listing->expires_at->isAfter(now()->addDays(29)))->toBeTrue()
+            ->and($listing->renewal_requested_at)->toBeNull();
+    });
+
+    test('возврат работает и у объявления с незаполненными полями — оно уже было в поиске таким', function () {
+        $listing = Listing::factory()->archived()->create(['title' => null, 'price' => null]);
+
+        $this->post(portalLinks()->restoreUrl($listing))->assertRedirect();
+
+        expect($listing->refresh()->status)->toBe(ListingStatus::Published);
+    });
+
+    test('продлить можно только опубликованное, вернуть — только архивное', function () {
+        $published = Listing::factory()->publishable()->published()->create();
+        $archived = Listing::factory()->publishable()->archived()->create();
+
+        $this->post(portalLinks()->restoreUrl($published))->assertForbidden();
+        $this->post(portalLinks()->renewUrl($archived))->assertForbidden();
+
+        expect($published->refresh()->status)->toBe(ListingStatus::Published)
+            ->and($archived->refresh()->status)->toBe(ListingStatus::Archived);
+    });
+
+    test('ссылки продления и возврата требуют подписи и живут вместе с владельцем', function () {
+        $published = Listing::factory()->published()->create();
+        $archived = Listing::factory()->publishable()->archived()->create();
+        $renewUrl = portalLinks()->renewUrl($published);
+        $restoreUrl = portalLinks()->restoreUrl($archived);
+
+        $this->post("/supplier/listings/{$published->id}/renew")->assertForbidden();
+        $this->post("/supplier/listings/{$archived->id}/restore")->assertForbidden();
+
+        $published->update(['contact_id' => Contact::factory()->create()->id]);
+        $archived->update(['contact_id' => Contact::factory()->create()->id]);
+
+        $this->post($renewUrl)->assertForbidden();
+        $this->post($restoreUrl)->assertForbidden();
+
+        expect($archived->refresh()->status)->toBe(ListingStatus::Archived);
+    });
+
+    test('кабинет показывает кнопки по статусу объявления', function () {
+        $contact = Contact::factory()->create();
+        Listing::factory()->published()->for($contact, 'supplier')->create();
+        Listing::factory()->publishable()->archived()->for($contact, 'supplier')->create();
+
+        $this->get(portalLinks()->myListingsUrl($contact))
+            ->assertOk()
+            ->assertSee('Продлить все на 30 дней')
+            ->assertSee('Продлить на 30 дней')
+            ->assertSee('Вернуть в поиск');
+    });
+
+    test('без опубликованных объявлений «Продлить все» не показывается', function () {
+        $contact = Contact::factory()->create();
+        Listing::factory()->archived()->for($contact, 'supplier')->create();
+
+        $this->get(portalLinks()->myListingsUrl($contact))
+            ->assertOk()
+            ->assertDontSee('Продлить все на 30 дней');
+    });
+});

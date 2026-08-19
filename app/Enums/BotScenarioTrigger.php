@@ -14,6 +14,13 @@ enum BotScenarioTrigger: string
     case ListingExpiring = 'listing_expiring';
 
     /**
+     * Сразу несколько объявлений одного поставщика истекают в один
+     * прогон: один вопрос на всю пачку вместо платного шаблона на
+     * каждое объявление.
+     */
+    case ListingsExpiringBatch = 'listings_expiring_batch';
+
+    /**
      * Run-based scenarios execute as isolated ScenarioRuns; the main
      * dialog is driven by BotSession instead.
      */
@@ -28,6 +35,7 @@ enum BotScenarioTrigger: string
             self::InboundMessage => 'Входящее сообщение',
             self::NewCustomerRequest => 'Новая заявка',
             self::ListingExpiring => 'Истекает объявление',
+            self::ListingsExpiringBatch => 'Истекает несколько объявлений',
         };
     }
 }

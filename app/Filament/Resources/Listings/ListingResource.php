@@ -266,7 +266,7 @@ class ListingResource extends Resource
             ->visible(fn (Listing $record): bool => $record->status === ListingStatus::Published)
             ->requiresConfirmation()
             ->modalHeading('Снять объявление с публикации?')
-            ->modalDescription('Объявление уйдёт из поиска заказчиков. Возврат из архива не предусмотрен — поставщику придётся завести новое объявление.')
+            ->modalDescription('Объявление уйдёт из поиска заказчиков. Вернуть его туда поставщик сможет сам — кнопкой «Вернуть в поиск» в веб-кабинете.')
             ->action(function (Listing $record): void {
                 $record->archive();
 

@@ -43,6 +43,12 @@ Route::middleware('signed')->name('supplier.listings.')->group(function (): void
         ->whereNumber('listing')->name('update');
     Route::post('/supplier/listings/{listing}/archive', [SupplierListingController::class, 'archive'])
         ->whereNumber('listing')->name('archive');
+    Route::post('/supplier/listings/{listing}/renew', [SupplierListingController::class, 'renew'])
+        ->whereNumber('listing')->name('renew');
+    Route::post('/supplier/listings/{listing}/restore', [SupplierListingController::class, 'restore'])
+        ->whereNumber('listing')->name('restore');
+    Route::post('/supplier/{contact}/listings/renew-all', [SupplierListingController::class, 'renewAll'])
+        ->whereNumber('contact')->name('renew-all');
 });
 
 /**

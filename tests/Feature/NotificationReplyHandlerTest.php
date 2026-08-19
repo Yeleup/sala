@@ -6,6 +6,7 @@ use App\Exceptions\SessionWindowClosed;
 use App\Models\Contact;
 use App\Models\CustomerRequest;
 use App\Models\Listing;
+use App\Models\ListingRenewalBatch;
 use App\Services\Bot\InboundMessage;
 use App\Services\Bot\NotificationReplyHandler;
 use App\Services\DereuMessenger;
@@ -294,4 +295,155 @@ test('кнопка «Обновить объявления» присылает 
     );
 
     expect($handled)->toBeTrue();
+});
+
+describe('пачечный опрос: один ответ за все объявления', function () {
+    function pollBatch(int $count = 3, string $window = 'withOpenSessionWindow'): ListingRenewalBatch
+    {
+        $supplier = Contact::factory()->{$window}()->create();
+        $listings = Listing::factory()->count($count)->published()->for($supplier, 'supplier')
+            ->create(['expires_at' => now()->addHours(10), 'renewal_requested_at' => now()]);
+
+        $batch = ListingRenewalBatch::query()->create(['contact_id' => $supplier->id]);
+        $batch->listings()->attach($listings->pluck('id')->all());
+
+        return $batch->setRelation('supplier', $supplier);
+    }
+
+    test('«Все актуальны» продлевает все объявления пачки одним нажатием', function () {
+        $batch = pollBatch();
+
+        fakeReplyMessenger()->shouldReceive('sendText')->once()->withArgs(
+            fn (Contact $contact, string $text): bool => str_contains($text, 'Продлили'),
+        );
+
+        $handled = app(NotificationReplyHandler::class)->handle(
+            $batch->supplier,
+            new InboundMessage(replyId: NotificationReplyHandler::batchRenewAllId($batch)),
+        );
+
+        expect($handled)->toBeTrue();
+
+        foreach ($batch->listings()->get() as $listing) {
+            expect($listing->status)->toBe(ListingStatus::Published)
+                ->and($listing->expires_at->isAfter(now()->addDays(29)))->toBeTrue()
+                ->and($listing->renewal_requested_at)->toBeNull();
+        }
+    });
+
+    test('«Все в архив» убирает из поиска всю пачку', function () {
+        $batch = pollBatch();
+
+        fakeReplyMessenger()->shouldReceive('sendText')->once()->withArgs(
+            fn (Contact $contact, string $text): bool => str_contains($text, 'в архив'),
+        );
+
+        app(NotificationReplyHandler::class)->handle(
+            $batch->supplier,
+            new InboundMessage(replyId: NotificationReplyHandler::batchArchiveAllId($batch)),
+        );
+
+        expect($batch->listings()->pluck('status')->unique()->all())->toBe([ListingStatus::Archived]);
+    });
+
+    test('«Разобрать по одному» присылает ссылку на кабинет и ничего не решает за поставщика', function () {
+        $batch = pollBatch();
+
+        fakeReplyMessenger()->shouldReceive('sendCtaUrl')->once()->withArgs(
+            fn (Contact $contact, string $text, string $button, string $url): bool => $contact->is($batch->supplier)
+                && str_contains($text, 'кабинет')
+                && str_contains($url, "/supplier/{$batch->contact_id}/listings"),
+        );
+
+        app(NotificationReplyHandler::class)->handle(
+            $batch->supplier,
+            new InboundMessage(replyId: NotificationReplyHandler::batchPickId($batch)),
+        );
+
+        expect($batch->listings()->pluck('status')->unique()->all())->toBe([ListingStatus::Published]);
+    });
+
+    test('решение применяется только к тем объявлениям пачки, что ещё опубликованы', function () {
+        $batch = pollBatch();
+        $archived = $batch->listings()->first();
+        $archived->archive();
+
+        fakeReplyMessenger()->shouldReceive('sendText')->once();
+
+        app(NotificationReplyHandler::class)->handle(
+            $batch->supplier,
+            new InboundMessage(replyId: NotificationReplyHandler::batchRenewAllId($batch)),
+        );
+
+        expect($archived->refresh()->status)->toBe(ListingStatus::Archived)
+            ->and($batch->listings()->where('status', ListingStatus::Published)->count())->toBe(2);
+    });
+
+    test('запоздалый ответ по целиком заархивированной пачке никого не воскрешает', function () {
+        $batch = pollBatch();
+        $batch->listings()->get()->each(fn (Listing $listing) => $listing->archive());
+
+        fakeReplyMessenger()->shouldReceive('sendText')->once()->withArgs(
+            fn (Contact $contact, string $text): bool => str_contains($text, 'вопрос уже закрыт'),
+        );
+
+        app(NotificationReplyHandler::class)->handle(
+            $batch->supplier,
+            new InboundMessage(replyId: NotificationReplyHandler::batchRenewAllId($batch)),
+        );
+
+        expect($batch->listings()->pluck('status')->unique()->all())->toBe([ListingStatus::Archived]);
+    });
+
+    test('прежний владелец не решает за объявление, переданное другому поставщику', function () {
+        $batch = pollBatch();
+        $handedOver = $batch->listings()->first();
+        $handedOver->update(['contact_id' => Contact::factory()->create()->id]);
+
+        fakeReplyMessenger()->shouldReceive('sendText')->once();
+
+        app(NotificationReplyHandler::class)->handle(
+            $batch->supplier,
+            new InboundMessage(replyId: NotificationReplyHandler::batchArchiveAllId($batch)),
+        );
+
+        expect($handedOver->refresh()->status)->toBe(ListingStatus::Published)
+            ->and($batch->listings()->where('status', ListingStatus::Archived)->count())->toBe(2);
+    });
+
+    test('возвращённое из архива объявление кнопке прежнего опроса больше не подчиняется', function () {
+        $batch = pollBatch();
+        $listings = $batch->listings()->get();
+        // Срок вышел без ответа — автоархив; поставщик передумал и вернул
+        // объявление в поиск сам, кнопки старого опроса при этом остались.
+        $listings->each(fn (Listing $listing) => $listing->archive());
+        $restored = $listings->first();
+        $restored->restoreFromArchive();
+
+        fakeReplyMessenger()->shouldReceive('sendText')->once()->withArgs(
+            fn (Contact $contact, string $text): bool => str_contains($text, 'вопрос уже закрыт'),
+        );
+
+        app(NotificationReplyHandler::class)->handle(
+            $batch->supplier,
+            new InboundMessage(replyId: NotificationReplyHandler::batchArchiveAllId($batch)),
+        );
+
+        expect($restored->refresh()->status)->toBe(ListingStatus::Published);
+    });
+
+    test('чужой контакт не может ответить за пачку', function () {
+        $batch = pollBatch();
+        $stranger = Contact::factory()->withOpenSessionWindow()->create();
+
+        fakeReplyMessenger()->shouldNotReceive('sendText');
+
+        $handled = app(NotificationReplyHandler::class)->handle(
+            $stranger,
+            new InboundMessage(replyId: NotificationReplyHandler::batchArchiveAllId($batch)),
+        );
+
+        expect($handled)->toBeTrue()
+            ->and($batch->listings()->pluck('status')->unique()->all())->toBe([ListingStatus::Published]);
+    });
 });

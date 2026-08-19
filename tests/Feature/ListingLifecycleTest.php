@@ -205,6 +205,39 @@ test('renewing prolongs a published listing for another 30 days', function () {
         ->toBe(now()->addDays(30)->toDateTimeString());
 });
 
+test('an archived listing returns to the search for another 30 days', function () {
+    $this->freezeTime();
+    $listing = Listing::factory()->publishable()->archived()->create([
+        'expires_at' => now()->subDay(),
+        'renewal_requested_at' => now()->subDays(2),
+    ]);
+
+    $listing->restoreFromArchive();
+
+    $listing->refresh();
+
+    expect($listing->status)->toBe(ListingStatus::Published)
+        ->and($listing->expires_at->toDateTimeString())->toBe(now()->addDays(30)->toDateTimeString())
+        // Отметка прежнего опроса не должна пережить возврат — иначе
+        // следующий цикл промолчит и объявление снова тихо истечёт.
+        ->and($listing->renewal_requested_at)->toBeNull();
+});
+
+test('a listing that is not archived cannot be restored', function (string $state) {
+    Listing::factory()->publishable()->{$state}()->create()->restoreFromArchive();
+})->with(['published', 'pendingModeration', 'rejected'])->throws(LogicException::class);
+
+// Опубликовать неполное объявление может сам оператор (approve() полноту
+// не требует), поэтому возврат такого объявления — не «публикация мусора»,
+// а откат к тому, что уже было в поиске.
+test('an archived listing returns even without a publication field', function () {
+    $listing = Listing::factory()->archived()->create(['title' => null, 'price' => null]);
+
+    $listing->restoreFromArchive();
+
+    expect($listing->refresh()->status)->toBe(ListingStatus::Published);
+});
+
 test('only published and unexpired listings are searchable', function () {
     $published = Listing::factory()->published()->create();
     Listing::factory()->expired()->create();

@@ -53,6 +53,22 @@ class CtaLinkBuilder
         return $this->signed('supplier.listings.archive', ['listing' => $listing->getKey(), 'contact' => $listing->contact_id]);
     }
 
+    public function renewUrl(Listing $listing): string
+    {
+        return $this->signed('supplier.listings.renew', ['listing' => $listing->getKey(), 'contact' => $listing->contact_id]);
+    }
+
+    public function restoreUrl(Listing $listing): string
+    {
+        return $this->signed('supplier.listings.restore', ['listing' => $listing->getKey(), 'contact' => $listing->contact_id]);
+    }
+
+    /** Продлевает разом все публикации поставщика — возвращает их к общей дате. */
+    public function renewAllUrl(Contact $contact): string
+    {
+        return $this->signed('supplier.listings.renew-all', ['contact' => $contact->getKey()]);
+    }
+
     /**
      * The customer catalog with the chat search prefilled. The prefill
      * params ride outside the signature on purpose: the catalog route

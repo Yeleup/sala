@@ -8,6 +8,7 @@ use App\Exceptions\SessionWindowClosed;
 use App\Models\Contact;
 use App\Models\CustomerRequest;
 use App\Models\Listing;
+use App\Models\ListingRenewalBatch;
 use App\Services\Ai\CtaLinkBuilder;
 use App\Services\DereuMessenger;
 use Illuminate\Support\Facades\Log;
@@ -29,6 +30,12 @@ class NotificationReplyHandler
     private const string RENEWAL_YES_PREFIX = 'renewal_yes:';
 
     private const string RENEWAL_NO_PREFIX = 'renewal_no:';
+
+    private const string BATCH_RENEW_ALL_PREFIX = 'renewal_all_yes:';
+
+    private const string BATCH_ARCHIVE_ALL_PREFIX = 'renewal_all_no:';
+
+    private const string BATCH_PICK_PREFIX = 'renewal_pick:';
 
     private const string LISTING_OPEN_PREFIX = 'listing_open:';
 
@@ -60,6 +67,21 @@ class NotificationReplyHandler
         return self::RENEWAL_NO_PREFIX.$listing->id;
     }
 
+    public static function batchRenewAllId(ListingRenewalBatch $batch): string
+    {
+        return self::BATCH_RENEW_ALL_PREFIX.$batch->id;
+    }
+
+    public static function batchArchiveAllId(ListingRenewalBatch $batch): string
+    {
+        return self::BATCH_ARCHIVE_ALL_PREFIX.$batch->id;
+    }
+
+    public static function batchPickId(ListingRenewalBatch $batch): string
+    {
+        return self::BATCH_PICK_PREFIX.$batch->id;
+    }
+
     public static function listingOpenId(Listing $listing): string
     {
         return self::LISTING_OPEN_PREFIX.$listing->id;
@@ -87,6 +109,18 @@ class NotificationReplyHandler
 
         if (str_starts_with($replyId, self::RENEWAL_NO_PREFIX)) {
             return $this->handleRenewalReply($contact, $replyId, stillRelevant: false);
+        }
+
+        if (str_starts_with($replyId, self::BATCH_RENEW_ALL_PREFIX)) {
+            return $this->handleBatchRenewalReply($contact, $replyId, stillRelevant: true);
+        }
+
+        if (str_starts_with($replyId, self::BATCH_ARCHIVE_ALL_PREFIX)) {
+            return $this->handleBatchRenewalReply($contact, $replyId, stillRelevant: false);
+        }
+
+        if (str_starts_with($replyId, self::BATCH_PICK_PREFIX)) {
+            return $this->handleBatchPickReply($contact, $replyId);
         }
 
         if (str_starts_with($replyId, self::LISTING_OPEN_PREFIX)) {
@@ -144,8 +178,9 @@ class NotificationReplyHandler
 
     /**
      * The [Да, актуально]/[Нет, в архив] answer to the 30-day renewal
-     * poll. A late answer after the auto-archive cannot revive the
-     * listing — returns from the archive are not part of the MVP.
+     * poll. A late answer after the auto-archive does not revive the
+     * listing on its own — the return to the search is a deliberate act
+     * in the cabinet, not a side effect of a stale button.
      */
     protected function handleRenewalReply(Contact $contact, string $replyId, bool $stillRelevant): bool
     {
@@ -158,7 +193,7 @@ class NotificationReplyHandler
         if ($listing->status !== ListingStatus::Published) {
             $this->messenger->sendText(
                 $contact,
-                'Это объявление уже в архиве. Чтобы разместить его снова, создайте новое объявление.',
+                'Это объявление уже в архиве. Вернуть его в поиск можно в кабинете — кнопка «Вернуть в поиск» в «Моих объявлениях».',
             );
 
             return true;
@@ -177,6 +212,69 @@ class NotificationReplyHandler
 
         $listing->archive();
         $this->messenger->sendText($contact, 'Перенесли объявление в архив — оно больше не показывается в поиске.');
+
+        return true;
+    }
+
+    /**
+     * The [Все актуальны]/[Все в архив] answer to the batch poll: one
+     * decision for every listing the supplier was asked about and that is
+     * still waiting for this answer (see ListingRenewalBatch::pendingListings).
+     * A batch that waits for nothing anymore gets a truthful reply rather
+     * than a second decision.
+     */
+    protected function handleBatchRenewalReply(Contact $contact, string $replyId, bool $stillRelevant): bool
+    {
+        $batch = ListingRenewalBatch::query()->find((int) Str::of($replyId)->afterLast(':')->value());
+
+        if ($batch === null || $batch->contact_id !== $contact->id) {
+            return true;
+        }
+
+        if (! $batch->hasPendingListings()) {
+            $this->messenger->sendText(
+                $contact,
+                'По этим объявлениям вопрос уже закрыт — актуальные статусы и сроки показа видны в кабинете.',
+            );
+
+            return true;
+        }
+
+        if ($stillRelevant) {
+            $batch->renewAll();
+            $this->messenger->sendText($contact, sprintf(
+                'Продлили: эти объявления будут показываться ещё %d дней.',
+                Listing::LIFETIME_DAYS,
+            ));
+
+            return true;
+        }
+
+        $batch->archiveAll();
+        $this->messenger->sendText($contact, 'Перенесли эти объявления в архив — они больше не показываются в поиске.');
+
+        return true;
+    }
+
+    /**
+     * [Разобрать по одному]: the tap reopened the 24-hour window, so the
+     * personal cabinet link goes out as a free session message — there
+     * the supplier renews or archives each listing separately.
+     */
+    protected function handleBatchPickReply(Contact $contact, string $replyId): bool
+    {
+        $batch = ListingRenewalBatch::query()->find((int) Str::of($replyId)->afterLast(':')->value());
+
+        if ($batch === null || $batch->contact_id !== $contact->id) {
+            return true;
+        }
+
+        $this->messenger->sendCtaUrl(
+            $contact,
+            'Хорошо. Откройте кабинет — там видно, у каких объявлений заканчивается срок, и можно продлить нужные.',
+            'Открыть кабинет',
+            $this->links->myListingsUrl($contact),
+        );
 
         return true;
     }

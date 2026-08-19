@@ -167,7 +167,7 @@ test('новые тексты узлов главного диалога и за
 test('the installer publishes the flow scenarios next to the main dialog', function () {
     $this->artisan('bot:install-default-scenario')->assertSuccessful();
 
-    expect(BotScenario::query()->count())->toBe(3);
+    expect(BotScenario::query()->count())->toBe(4);
 
     $request = BotScenario::publishedForTrigger(BotScenarioTrigger::NewCustomerRequest);
     $requestNodes = collect($request->published_definition['nodes']);
@@ -193,6 +193,21 @@ test('the installer publishes the flow scenarios next to the main dialog', funct
         ->and($renewalNodes->where('type', 'condition'))->toBeEmpty()
         ->and($renewalDefinition->target('do_renew', ScenarioDefinition::OUTPUT_SKIPPED))->toBe('already_archived')
         ->and($renewalDefinition->target('do_archive', ScenarioDefinition::OUTPUT_SKIPPED))->toBe('already_archived');
+
+    $batch = BotScenario::publishedForTrigger(BotScenarioTrigger::ListingsExpiringBatch);
+    $batchNodes = collect($batch->published_definition['nodes']);
+    $batchDefinition = new ScenarioDefinition($batch->published_definition);
+
+    expect($batchNodes->firstWhere('id', 'poll')['template_name'])->toBe('listings_renewal_batch')
+        ->and($batchNodes->firstWhere('id', 'poll')['variables'])->toBe(['listings.expiring'])
+        ->and($batchNodes->firstWhere('id', 'do_renew_all')['action'])->toBe('renew_batch_listings')
+        ->and($batchNodes->firstWhere('id', 'do_archive_all')['action'])->toBe('archive_batch_listings')
+        // «Разобрать по одному» уводит в кабинет: нажатие открыло окно,
+        // так что CTA-ссылка уходит бесплатным сообщением.
+        ->and($batchDefinition->target('poll', ScenarioDefinition::optionOutput('one_by_one')))->toBe('cabinet')
+        ->and($batchNodes->firstWhere('id', 'cabinet')['type'])->toBe('my_listings')
+        ->and($batchDefinition->target('do_renew_all', ScenarioDefinition::OUTPUT_SKIPPED))->toBe('already_archived')
+        ->and($batchDefinition->target('do_archive_all', ScenarioDefinition::OUTPUT_SKIPPED))->toBe('already_archived');
 });
 
 test('the installer refuses to overwrite a published scenario without --force', function () {

@@ -24,6 +24,22 @@
         </form>
     </article>
 
+    {{-- Продление разом сводит сроки показа к одной дате: тогда и опрос актуальности приходит одним сообщением. --}}
+    @if ($renewAllUrl)
+        <article class="card">
+            <div class="meta">
+                <strong>Срок показа</strong>
+            </div>
+            <p class="muted" style="margin: 0.25rem 0 0;">Каждое объявление показывается в поиске 30 дней. Продлите все разом — сроки сойдутся к одной дате, и напоминание придёт одним сообщением.</p>
+            <div class="actions">
+                <form method="POST" action="{{ $renewAllUrl }}">
+                    @csrf
+                    <button type="submit" class="btn btn-primary">Продлить все на 30 дней</button>
+                </form>
+            </div>
+        </article>
+    @endif
+
     @forelse ($listings as $listing)
         <article class="card">
             @php($fallbackTitle = $listing->kind === \App\Enums\ListingKind::Rental
@@ -64,6 +80,20 @@
                     <a class="btn btn-primary" href="{{ $editUrls[$listing->id] }}">
                         {{ $listing->status === \App\Enums\ListingStatus::Rejected ? 'Исправить и отправить снова' : 'Редактировать' }}
                     </a>
+                @endif
+
+                @if ($renewUrls->has($listing->id))
+                    <form method="POST" action="{{ $renewUrls[$listing->id] }}">
+                        @csrf
+                        <button type="submit" class="btn btn-secondary">Продлить на 30 дней</button>
+                    </form>
+                @endif
+
+                @if ($restoreUrls->has($listing->id))
+                    <form method="POST" action="{{ $restoreUrls[$listing->id] }}">
+                        @csrf
+                        <button type="submit" class="btn btn-primary">Вернуть в поиск</button>
+                    </form>
                 @endif
 
                 @if ($archiveUrls->has($listing->id))

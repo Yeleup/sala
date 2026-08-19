@@ -5,6 +5,7 @@ namespace App\Filament\Resources\ScenarioRuns\Tables;
 use App\Enums\ScenarioRunStatus;
 use App\Models\CustomerRequest;
 use App\Models\Listing;
+use App\Models\ListingRenewalBatch;
 use App\Models\ScenarioRun;
 use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Filters\SelectFilter;
@@ -31,6 +32,7 @@ class ScenarioRunsTable
                     ->formatStateUsing(fn (?string $state, ScenarioRun $record): string => match ($state) {
                         CustomerRequest::class => 'Заявка №'.$record->subject_id,
                         Listing::class => 'Объявление №'.$record->subject_id,
+                        ListingRenewalBatch::class => 'Пачка объявлений №'.$record->subject_id,
                         default => '—',
                     })
                     ->placeholder('—'),

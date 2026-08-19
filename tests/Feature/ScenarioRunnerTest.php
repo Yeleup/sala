@@ -11,6 +11,7 @@ use App\Models\BotScenario;
 use App\Models\Contact;
 use App\Models\CustomerRequest;
 use App\Models\Listing;
+use App\Models\ListingRenewalBatch;
 use App\Models\ScenarioRun;
 use App\Models\User;
 use App\Models\WhatsappTemplate;
@@ -23,6 +24,7 @@ use App\Services\TemplateFallback;
 use App\Services\WhatsappTemplateLibrary;
 use Filament\Actions\Testing\TestAction;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Collection;
 use Livewire\Livewire;
 use Mockery\MockInterface;
 
@@ -722,5 +724,124 @@ describe('таймаут ожидания ответа', function () {
         $this->artisan('bot:process-run-timeouts')->assertSuccessful();
 
         expect($run->refresh()->status)->toBe(ScenarioRunStatus::Completed);
+    });
+});
+
+describe('сценарий «Продление нескольких объявлений»', function () {
+    /**
+     * @return array{0: ScenarioRun, 1: Collection<int, Listing>, 2: Contact, 3: MockInterface}
+     */
+    function launchedBatchRun(int $count = 3): array
+    {
+        installFlowScenarios();
+        $supplier = Contact::factory()->withOpenSessionWindow()->create();
+        $listings = Listing::factory()->count($count)->published()->for($supplier, 'supplier')
+            ->create(['expires_at' => now()->addHours(12)]);
+
+        $messenger = runnerMessenger();
+        $messenger->shouldReceive('sendButtons')->once();
+
+        test()->artisan('listings:run-renewal-cycle')->assertSuccessful();
+
+        return [ScenarioRun::sole(), $listings, $supplier, $messenger];
+    }
+
+    test('цикл спрашивает про всю пачку одним запуском, предмет запуска — пачка', function () {
+        installFlowScenarios();
+        $supplier = Contact::factory()->withOpenSessionWindow()->create();
+        $listings = Listing::factory()->count(3)->published()->for($supplier, 'supplier')
+            ->create(['expires_at' => now()->addHours(12)]);
+
+        $messenger = runnerMessenger();
+        $messenger->shouldReceive('sendButtons')->once()->withArgs(
+            fn (Contact $contact, string $text, array $buttons): bool => $contact->is($supplier)
+                && str_contains($text, '3 ваших объявлений')
+                && collect($buttons)->pluck('title')->all() === ['Все актуальны', 'Разобрать по одному', 'Все в архив'],
+        );
+
+        $this->artisan('listings:run-renewal-cycle')->assertSuccessful();
+
+        $run = ScenarioRun::sole();
+
+        expect($run->subject)->toBeInstanceOf(ListingRenewalBatch::class)
+            ->and($run->subject->listings()->count())->toBe(3)
+            ->and($listings->every(fn (Listing $listing): bool => $listing->refresh()->renewal_requested_at !== null))->toBeTrue();
+    });
+
+    test('«Все актуальны» продлевает всю пачку одним нажатием', function () {
+        [$run, $listings, $supplier, $messenger] = launchedBatchRun();
+
+        $messenger->shouldReceive('sendText')->once()->withArgs(
+            fn (Contact $contact, string $text): bool => str_contains($text, 'Продлили'),
+        );
+
+        app(ScenarioRunReplyHandler::class)->handle(
+            $supplier,
+            new InboundMessage(replyId: "flow:{$run->token}:all_yes"),
+        );
+
+        foreach ($listings as $listing) {
+            expect($listing->refresh()->status)->toBe(ListingStatus::Published)
+                ->and($listing->expires_at->isAfter(now()->addDays(29)))->toBeTrue();
+        }
+
+        expect($run->refresh()->status)->toBe(ScenarioRunStatus::Completed);
+    });
+
+    test('«Все в архив» убирает из поиска всю пачку', function () {
+        [$run, $listings, $supplier, $messenger] = launchedBatchRun();
+
+        $messenger->shouldReceive('sendText')->once()->withArgs(
+            fn (Contact $contact, string $text): bool => str_contains($text, 'в архив'),
+        );
+
+        app(ScenarioRunReplyHandler::class)->handle(
+            $supplier,
+            new InboundMessage(replyId: "flow:{$run->token}:all_no"),
+        );
+
+        foreach ($listings as $listing) {
+            expect($listing->refresh()->status)->toBe(ListingStatus::Archived);
+        }
+    });
+
+    test('«Разобрать по одному» уводит в кабинет, ничего не решая за поставщика', function () {
+        [$run, $listings, $supplier, $messenger] = launchedBatchRun();
+
+        $messenger->shouldReceive('sendCtaUrl')->once()->withArgs(
+            fn (Contact $contact, string $text, string $button, string $url): bool => $contact->is($supplier)
+                && str_contains($text, 'кабинет')
+                && str_contains($url, "/supplier/{$supplier->id}/listings"),
+        );
+
+        app(ScenarioRunReplyHandler::class)->handle(
+            $supplier,
+            new InboundMessage(replyId: "flow:{$run->token}:one_by_one"),
+        );
+
+        foreach ($listings as $listing) {
+            expect($listing->refresh()->status)->toBe(ListingStatus::Published);
+        }
+
+        expect($run->refresh()->status)->toBe(ScenarioRunStatus::Completed);
+    });
+
+    test('запоздалый ответ по целиком заархивированной пачке идёт по выходу «Не выполнено»', function () {
+        [$run, $listings, $supplier, $messenger] = launchedBatchRun();
+
+        $listings->each(fn (Listing $listing) => $listing->archive());
+
+        $messenger->shouldReceive('sendText')->once()->withArgs(
+            fn (Contact $contact, string $text): bool => str_contains($text, 'вопрос уже закрыт'),
+        );
+
+        app(ScenarioRunReplyHandler::class)->handle(
+            $supplier,
+            new InboundMessage(replyId: "flow:{$run->token}:all_yes"),
+        );
+
+        foreach ($listings as $listing) {
+            expect($listing->refresh()->status)->toBe(ListingStatus::Archived);
+        }
     });
 });

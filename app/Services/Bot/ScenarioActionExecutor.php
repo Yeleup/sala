@@ -8,6 +8,7 @@ use App\Enums\ScenarioActionOutcome;
 use App\Exceptions\SessionWindowClosed;
 use App\Models\CustomerRequest;
 use App\Models\Listing;
+use App\Models\ListingRenewalBatch;
 use App\Models\ScenarioRun;
 use App\Services\Ai\CtaLinkBuilder;
 use App\Services\DereuMessenger;
@@ -50,6 +51,14 @@ class ScenarioActionExecutor
                 ScenarioAction::ExpireRequest => $this->attempt($subject instanceof CustomerRequest, fn () => $subject->expire()),
                 ScenarioAction::RenewListing => $this->attempt($subject instanceof Listing, fn () => $subject->renew()),
                 ScenarioAction::ArchiveListing => $this->attempt($subject instanceof Listing, fn () => $subject->archive()),
+                ScenarioAction::RenewBatchListings => $this->attempt(
+                    $subject instanceof ListingRenewalBatch && $subject->hasPendingListings(),
+                    fn () => $subject->renewAll(),
+                ),
+                ScenarioAction::ArchiveBatchListings => $this->attempt(
+                    $subject instanceof ListingRenewalBatch && $subject->hasPendingListings(),
+                    fn () => $subject->archiveAll(),
+                ),
                 ScenarioAction::SendCabinetCta => $this->attempt(true, fn () => $this->sendCabinetCta($run, $node)),
                 ScenarioAction::NotifyCustomer => $this->attempt(true, fn () => $subject instanceof CustomerRequest ? $this->notifyCustomer($subject) : null),
             };

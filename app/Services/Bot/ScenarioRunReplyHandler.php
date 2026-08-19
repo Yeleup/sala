@@ -7,6 +7,7 @@ use App\Exceptions\SessionWindowClosed;
 use App\Models\Contact;
 use App\Models\CustomerRequest;
 use App\Models\Listing;
+use App\Models\ListingRenewalBatch;
 use App\Models\ScenarioRun;
 use App\Services\DereuMessenger;
 
@@ -92,6 +93,12 @@ class ScenarioRunReplyHandler
         }
 
         if ($subject instanceof Listing) {
+            return $subject->contact_id === $contact->id;
+        }
+
+        // Пачка адресована поставщику целиком; отдельные объявления,
+        // сменившие владельца, отсеивает сама пачка (pendingListings).
+        if ($subject instanceof ListingRenewalBatch) {
             return $subject->contact_id === $contact->id;
         }
 

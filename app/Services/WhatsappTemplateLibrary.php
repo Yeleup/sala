@@ -22,6 +22,13 @@ class WhatsappTemplateLibrary
     /** The 30-day relevance poll sent a day before a listing expires. */
     public const string LISTING_RENEWAL = 'listing_renewal';
 
+    /**
+     * The same poll for a supplier whose publications expire together:
+     * one question about the whole set instead of a paid template per
+     * listing.
+     */
+    public const string LISTINGS_RENEWAL_BATCH = 'listings_renewal_batch';
+
     /** Notifies a supplier about a new customer request outside the 24-hour window. */
     public const string NEW_CUSTOMER_REQUEST = 'new_customer_request';
 
@@ -48,6 +55,16 @@ class WhatsappTemplateLibrary
                 'body' => 'Ваше объявление «{{1}}» скоро перестанет показываться в поиске. Оно ещё актуально?',
                 'quick_replies' => ['Да, актуально', 'Нет, в архив'],
                 'examples' => ['Автокран 25 т'],
+            ],
+            [
+                'name' => self::LISTINGS_RENEWAL_BATCH,
+                'language' => 'ru',
+                'category' => WhatsappTemplateCategory::Utility,
+                'title' => '30-дневный опрос актуальности — сразу по нескольким объявлениям',
+                'purpose' => 'Уходит поставщику, у которого за сутки истекает сразу несколько публикаций: один вопрос на всю пачку вместо платного шаблона на каждое объявление.',
+                'body' => 'У {{1}} скоро закончится срок показа в поиске. Они ещё актуальны?',
+                'quick_replies' => ['Все актуальны', 'Разобрать по одному', 'Все в архив'],
+                'examples' => ['12 ваших объявлений'],
             ],
             [
                 'name' => self::NEW_CUSTOMER_REQUEST,

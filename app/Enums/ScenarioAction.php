@@ -21,6 +21,14 @@ enum ScenarioAction: string
     case RenewListing = 'renew_listing';
     case ArchiveListing = 'archive_listing';
 
+    /**
+     * «Все актуальны» / «Все в архив» пачечного опроса: решение
+     * применяется ко всем объявлениям, о которых спрашивали, — тем, что
+     * ещё опубликованы на момент ответа.
+     */
+    case RenewBatchListings = 'renew_batch_listings';
+    case ArchiveBatchListings = 'archive_batch_listings';
+
     /** Sends the personal signed CTA link into the supplier web portal. */
     case SendCabinetCta = 'send_cabinet_cta';
 
@@ -36,6 +44,8 @@ enum ScenarioAction: string
             self::NotifyCustomer => $trigger === BotScenarioTrigger::NewCustomerRequest,
             self::RenewListing,
             self::ArchiveListing => $trigger === BotScenarioTrigger::ListingExpiring,
+            self::RenewBatchListings,
+            self::ArchiveBatchListings => $trigger === BotScenarioTrigger::ListingsExpiringBatch,
             self::SendCabinetCta => $trigger->isRunBased(),
         };
     }
@@ -48,6 +58,8 @@ enum ScenarioAction: string
             self::ExpireRequest => 'Закрыть заявку без ответа',
             self::RenewListing => 'Продлить объявление на 30 дней',
             self::ArchiveListing => 'Архивировать объявление',
+            self::RenewBatchListings => 'Продлить все объявления пачки на 30 дней',
+            self::ArchiveBatchListings => 'Архивировать все объявления пачки',
             self::SendCabinetCta => 'Отправить CTA-ссылку на кабинет',
             self::NotifyCustomer => 'Уведомить заказчика об исходе',
         };
@@ -66,7 +78,9 @@ enum ScenarioAction: string
             self::DeclineRequest,
             self::ExpireRequest,
             self::RenewListing,
-            self::ArchiveListing => true,
+            self::ArchiveListing,
+            self::RenewBatchListings,
+            self::ArchiveBatchListings => true,
             self::SendCabinetCta,
             self::NotifyCustomer => false,
         };
@@ -81,6 +95,8 @@ enum ScenarioAction: string
             self::ExpireRequest => 'Заявка уже решена',
             self::RenewListing,
             self::ArchiveListing => 'Объявление уже в архиве',
+            self::RenewBatchListings,
+            self::ArchiveBatchListings => 'Вопрос по пачке уже закрыт',
             self::SendCabinetCta,
             self::NotifyCustomer => null,
         };

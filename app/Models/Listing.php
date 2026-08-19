@@ -358,6 +358,30 @@ class Listing extends Model
     }
 
     /**
+     * Возврат из архива в поиск: поставщик снял объявление с публикации
+     * или дал сроку истечь, а потом передумал. Объявление уже проходило
+     * модерацию, а править архивное поставщик не может — содержимое то
+     * же самое, поэтому возврат ведёт прямо в поиск на новые 30 дней,
+     * без второго круга модерации.
+     *
+     * Полнота полей здесь не проверяется — по той же причине, что и в
+     * renew(): объявление возвращается ровно в том виде, в каком уже
+     * было в поиске, и одобрить его в этом виде мог сам оператор
+     * (approve() полноту не требует, в отличие от publish()). Проверка
+     * запирала бы поставщика в тупике: архивное объявление он не правит.
+     */
+    public function restoreFromArchive(): void
+    {
+        $this->assertStatusIn([ListingStatus::Archived], 'restore from the archive');
+
+        $this->update([
+            'status' => ListingStatus::Published,
+            'expires_at' => now()->addDays(self::LIFETIME_DAYS),
+            'renewal_requested_at' => null,
+        ]);
+    }
+
+    /**
      * The supplier confirmed the listing is still relevant: prolong it
      * without leaving the published status. The renewal poll flag resets
      * so the next 30-day cycle asks again.

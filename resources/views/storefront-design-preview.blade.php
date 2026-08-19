@@ -15,9 +15,12 @@
 
     Портал поставщика (resources/views/supplier/* +
     components/supplier/layout.blade.php) использует тот же язык дизайна:
-    «Мои объявления» с карточкой имени и статусами, редактирование
+    «Мои объявления» с карточкой имени, сроком показа («Продлить все»),
+    статусами и действиями по статусу (продление публикации, возврат
+    архивного объявления в поиск, снятие с публикации), редактирование
     отклонённого объявления (причина, форма, фото), просмотр
-    опубликованного (шапка со статусом, данные списком, снятие с публикации).
+    опубликованного (шапка со статусом, данные списком, продление и
+    снятие с публикации).
     Форма редактирования ветвится по виду объявления: у мастера — имя,
     услуги и место ремонта, у водителя — техника чекбоксами, удостоверение,
     стаж, готовность выезжать и замена фото документа (поля цены нет).
@@ -842,6 +845,16 @@
 
             <article class="card">
                 <div class="meta">
+                    <strong>Срок показа</strong>
+                </div>
+                <p class="muted" style="margin: 0.25rem 0 0;">Каждое объявление показывается в поиске 30 дней. Продлите все разом — сроки сойдутся к одной дате, и напоминание придёт одним сообщением.</p>
+                <div class="actions">
+                    <button class="btn btn-primary">Продлить все на 30 дней</button>
+                </div>
+            </article>
+
+            <article class="card">
+                <div class="meta">
                     <strong>Аренда автокрана 25 т</strong>
                     <span class="badge badge-green">Опубликовано</span>
                 </div>
@@ -850,6 +863,7 @@
                 <p class="muted" style="margin: 0.5rem 0 0;">г.Шымкент, центр · 20000 тг/ч</p>
                 <p class="muted" style="margin: 0.5rem 0 0;">Опубликовано до 21.08.2026</p>
                 <div class="actions">
+                    <button class="btn btn-secondary">Продлить на 30 дней</button>
                     <button class="btn btn-danger">Снять с публикации</button>
                 </div>
             </article>
@@ -897,7 +911,22 @@
                 <p class="muted" style="margin: 0.5rem 0 0;">г.Шымкент · 5000 тг</p>
                 <p class="muted" style="margin: 0.5rem 0 0;">Опубликовано до 21.08.2026</p>
                 <div class="actions">
+                    <button class="btn btn-secondary">Продлить на 30 дней</button>
                     <button class="btn btn-danger">Снять с публикации</button>
+                </div>
+            </article>
+
+            {{-- Архив: возврат в поиск без повторной модерации — объявление её уже проходило --}}
+            <article class="card">
+                <div class="meta">
+                    <strong>Самосвал 20 т</strong>
+                    <span class="badge badge-gray">В архиве</span>
+                </div>
+                <p class="muted" style="margin: 0.25rem 0 0;">Самосвал Howo</p>
+                <p style="margin: 0.5rem 0 0;">Самосвал 20 тонн, доставка сыпучих материалов.</p>
+                <p class="muted" style="margin: 0.5rem 0 0;">г.Шымкент · 18000 тг/ч</p>
+                <div class="actions">
+                    <button class="btn btn-primary">Вернуть в поиск</button>
                 </div>
             </article>
 
@@ -1038,6 +1067,7 @@
                 </dl>
 
                 <div class="actions">
+                    <button class="btn btn-secondary">Продлить на 30 дней</button>
                     <button class="btn btn-danger">Снять с публикации</button>
                 </div>
 

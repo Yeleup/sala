@@ -136,6 +136,7 @@ class SupplierListingCollector
     public function start(BotSession $session, array $node): AiOutcome
     {
         $kind = ListingKind::fromNode($node['kind'] ?? null);
+        $known = $this->knownName($session, $kind);
 
         $session->state = [
             'kind' => $kind->value,
@@ -146,7 +147,7 @@ class SupplierListingCollector
             'provider_failures' => 0,
             'service_questions' => 0,
             'transcript' => [],
-            'fields' => [],
+            'fields' => $known === null ? [] : ['person_name' => $known],
             'draft_id' => null,
             'picked_location_id' => null,
             'picked_location_wording' => null,
@@ -309,6 +310,20 @@ class SupplierListingCollector
             $fields[$field] = $fields[$field] ?? $value;
         }
 
+        // The supplier introduces themselves once, not once per listing.
+        $this->rememberName($session, $fields['person_name'] ?? null);
+
+        // The name already known goes underneath the extraction, exactly
+        // like a button answer: a name said in words still wins, because
+        // the supplier may be introducing themselves differently here.
+        if (blank($fields['person_name'] ?? null)) {
+            $known = $this->knownName($session, $this->kind($state));
+
+            if ($known !== null) {
+                $fields['person_name'] = $known;
+            }
+        }
+
         $state['fields'] = $fields;
 
         return $this->advance($session, $state);
@@ -352,6 +367,15 @@ class SupplierListingCollector
             return AiOutcome::InProgress;
         }
 
+        // The supplier's own name outranks the rest of the questionnaire:
+        // while it is unknown the collector asks for nothing else. It is
+        // what the listing is signed with and what every later message
+        // addresses them by, so a dialog abandoned halfway still leaves
+        // someone to write to. The steps that yield to it — the place list,
+        // the button fields — cost no clarification attempt, so waiting a
+        // turn costs them nothing either.
+        $asksName = in_array('person_name', $missing, true);
+
         // Several dictionary places match the named location: picking from
         // the list is not a clarification attempt.
         $candidates = array_map(intval(...), (array) ($state['fields']['location_candidates'] ?? []));
@@ -381,7 +405,7 @@ class SupplierListingCollector
             // The list goes out a bounded number of times: a supplier who
             // keeps not picking falls through to the ordinary missing-field
             // path, which spends attempts and ends at the web form.
-            if ($state['location_lists'] < self::MAX_LOCATION_LISTS) {
+            if (! $asksName && $state['location_lists'] < self::MAX_LOCATION_LISTS) {
                 $state['location_lists']++;
                 $state['phase'] = 'locating';
                 $this->persist($session, $state);
@@ -395,7 +419,7 @@ class SupplierListingCollector
         // not with a text question: the press costs no clarification attempt
         // and cannot misspell. Bounded per field — past the limit the field
         // walks the ordinary clarification path below.
-        foreach ($kind->buttonFields() as $field => $prompt) {
+        foreach ($asksName ? [] : $kind->buttonFields() as $field => $prompt) {
             if (! in_array($field, $missing, true)) {
                 continue;
             }
@@ -1310,6 +1334,39 @@ class SupplierListingCollector
     }
 
     /**
+     * The supplier's own name as the system already knows it: set by them
+     * in the web cabinet, by the operator, or remembered from an earlier
+     * questionnaire. Only a deliberately set name counts — the WhatsApp
+     * profile name is a handle the contact picked for themselves and may
+     * be an emoji or a slogan, which is not what a performer's card should
+     * be signed with. Rental listings carry no such field at all.
+     */
+    private function knownName(BotSession $session, ListingKind $kind): ?string
+    {
+        if (! in_array('person_name', $kind->collectorRequiredFields(), true)) {
+            return null;
+        }
+
+        return blank($session->contact->display_name) ? null : $session->contact->display_name;
+    }
+
+    /**
+     * Remember the name the supplier gave the questionnaire as the
+     * contact's own: their next listing then costs no clarification asking
+     * again, and the bot can address them by it outside this block. A name
+     * set by hand — in the cabinet or by the operator — is never
+     * overwritten, and neither is a name already remembered this way.
+     */
+    private function rememberName(BotSession $session, mixed $name): void
+    {
+        if (! is_string($name) || trim($name) === '' || filled($session->contact->display_name)) {
+            return;
+        }
+
+        $session->contact->update(['display_name' => Str::limit(trim($name), 255, '')]);
+    }
+
+    /**
      * @param  array<string, mixed>  $fields
      * @return list<string>
      */
@@ -1532,6 +1589,14 @@ class SupplierListingCollector
                     'Не нашли «%s» в справочнике мест. Напишите город, район или село точнее.',
                     $fields['location'],
                 );
+        }
+
+        // While the name is missing it IS the question. The model's own,
+        // aimed at another gap of the questionnaire, would push the
+        // introduction to the end of it — or past the clarification limit,
+        // into the web form, leaving a listing nobody is named on.
+        if (in_array('person_name', $missing, true) && ($fields['clarifying_field'] ?? null) !== 'person_name') {
+            return $kind->fallbackQuestions()['person_name'];
         }
 
         // The model's question is trusted only when its declared target

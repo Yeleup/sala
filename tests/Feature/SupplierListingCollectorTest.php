@@ -287,6 +287,119 @@ test('вопрос модели про уже заполненное поле з
         ->and($session->fresh()->state['attempts'])->toBe(1)
         ->and($session->fresh()->state['last_question'])->toBe('Как вас зовут?');
 });
+test('имя, заданное поставщиком в кабинете, подставляется в анкету без вопроса', function () {
+    // Отображаемое имя контакта — то же самое имя: спрашивать его заново
+    // значит тратить попытку уточнения на уже известное.
+    ListingExtractionAgent::fake([driverExtraction(['person_name' => null])]);
+    $session = collectorSession(['kind' => 'driver']);
+    $session->contact->update(['display_name' => 'Асхат']);
+
+    // Сводка, а не вопрос: имя анкете уже известно.
+    fakeCollectorMessenger()->shouldReceive('sendButtons')->once();
+
+    $outcome = app(SupplierListingCollector::class)->resume($session, driverAiNode(),
+        new InboundMessage(text: 'экскаватор, права тракториста, стаж 8 лет, Шымкент, не выезжаю'));
+
+    expect($outcome)->toBe(AiOutcome::InProgress)
+        ->and($session->fresh()->state)->toMatchArray(['phase' => 'confirming', 'attempts' => 0])
+        ->and(Listing::sole()->person_name)->toBe('Асхат');
+});
+
+test('имя, названное в переписке, важнее заданного в кабинете и его не переписывает', function () {
+    ListingExtractionAgent::fake([driverExtraction()]);
+    $session = collectorSession(['kind' => 'driver']);
+    $session->contact->update(['display_name' => 'Асхат']);
+
+    fakeCollectorMessenger()->shouldReceive('sendButtons')->once();
+
+    app(SupplierListingCollector::class)->resume($session, driverAiNode(),
+        new InboundMessage(text: 'меня зовут Ерлан, экскаватор, стаж 8 лет, Шымкент, не выезжаю'));
+
+    expect(Listing::sole()->person_name)->toBe('Ерлан')
+        ->and($session->contact->fresh()->display_name)->toBe('Асхат');
+});
+
+test('имя, названное боту, запоминается на контакте без имени', function () {
+    // Имя спрашивается один раз за поставщика: названное в анкете
+    // становится именем контакта, и следующая анкета его уже не спросит.
+    ListingExtractionAgent::fake([driverExtraction()]);
+    $session = collectorSession(['kind' => 'driver']);
+    $session->contact->update(['display_name' => null]);
+
+    fakeCollectorMessenger()->shouldReceive('sendButtons')->once();
+
+    app(SupplierListingCollector::class)->resume($session, driverAiNode(),
+        new InboundMessage(text: 'Ерлан, экскаватор, стаж 8 лет, Шымкент, не выезжаю'));
+
+    expect($session->contact->fresh()->display_name)->toBe('Ерлан');
+});
+
+test('название сервиса мастера тоже становится именем контакта', function () {
+    ListingExtractionAgent::fake([repairExtraction(['person_name' => 'Сервис «Мотор»'])]);
+    $session = collectorSession(['kind' => 'repair']);
+    $session->contact->update(['display_name' => null]);
+
+    fakeCollectorMessenger()->shouldReceive('sendButtons')->once();
+
+    app(SupplierListingCollector::class)->resume($session, repairAiNode(),
+        new InboundMessage(text: 'Сервис «Мотор», гидравлика, выезжаем, Алматы'));
+
+    expect($session->contact->fresh()->display_name)->toBe('Сервис «Мотор»');
+});
+
+test('имя профиля WhatsApp в анкету не подставляется', function () {
+    // Имя профиля — то, как контакт подписался в WhatsApp: там бывает и
+    // эмодзи, и слоган. В карточку исполнителя такое имя не ставится и
+    // заданным именем контакта не становится — бот спрашивает.
+    ListingExtractionAgent::fake([driverExtraction(['person_name' => null])]);
+    $session = collectorSession(['kind' => 'driver']);
+    $session->contact->update(['profile_name' => 'Ерке 🌸', 'display_name' => null]);
+
+    fakeCollectorMessenger()->shouldReceive('sendButtons')->once()
+        ->withArgs(fn (Contact $to, string $text) => $text === 'Как вас зовут?');
+
+    app(SupplierListingCollector::class)->resume($session, driverAiNode(),
+        new InboundMessage(text: 'экскаватор, права тракториста, стаж 8 лет, Шымкент, не выезжаю'));
+
+    expect($session->contact->fresh()->display_name)->toBeNull()
+        ->and(Listing::count())->toBe(0);
+});
+
+test('имя спрашивается раньше кнопочных полей анкеты', function () {
+    // Кнопочное поле дешевле текстового вопроса, но имя всё равно первое:
+    // им подписано объявление, и диалог, брошенный на полпути, всё-таки
+    // оставляет, к кому обращаться.
+    ListingExtractionAgent::fake([driverExtraction(['person_name' => null, 'licence_type' => null])]);
+    $session = collectorSession(['kind' => 'driver']);
+
+    fakeCollectorMessenger()->shouldReceive('sendButtons')->once()
+        ->withArgs(fn (Contact $to, string $text, array $buttons) => $text === 'Как вас зовут?'
+            && $buttons === [['id' => SupplierListingCollector::BUTTON_MENU, 'title' => SupplierListingCollector::BUTTON_MENU_TITLE]]);
+
+    app(SupplierListingCollector::class)->resume($session, driverAiNode(),
+        new InboundMessage(text: 'экскаватор, стаж 8 лет, Шымкент, не выезжаю'));
+
+    expect($session->fresh()->state)->toMatchArray(['attempts' => 1, 'button_prompts' => []]);
+});
+
+test('имя спрашивается раньше списка одноимённых мест', function () {
+    locationNamed('Абайский район', locationNamed('область Абай'));
+    locationNamed('Абайский район', locationNamed('г.Шымкент'));
+
+    ListingExtractionAgent::fake([driverExtraction(['person_name' => null, 'location' => 'Абайский район'])]);
+    fakeLocationChoice();
+    $session = collectorSession(['kind' => 'driver']);
+
+    $messenger = fakeCollectorMessenger();
+    $messenger->shouldReceive('sendList')->never();
+    $messenger->shouldReceive('sendButtons')->once()
+        ->withArgs(fn (Contact $to, string $text) => $text === 'Как вас зовут?');
+
+    app(SupplierListingCollector::class)->resume($session, driverAiNode(),
+        new InboundMessage(text: 'экскаватор, стаж 8 лет, Абайский район, не выезжаю'));
+
+    expect($session->fresh()->state)->toMatchArray(['phase' => 'collecting', 'attempts' => 1, 'location_lists' => 0]);
+});
 
 test('вопрос модели без объявленного целевого поля не используется', function () {
     ListingExtractionAgent::fake([

@@ -366,7 +366,7 @@ test('the edit button sends the signed web link and finishes the collection', fu
     $session = collectorSession(['phase' => 'confirming', 'draft_id' => $draft->id]);
 
     fakeCollectorMessenger()->shouldReceive('sendCtaUrl')->once()
-        ->withArgs(fn (Contact $to, string $text, string $button, string $url) => $text === 'Дальше удобнее в форме — она по кнопке ниже, всё собранное уже там. Диалог в чате на этом закончим, черновик сохранён.'
+        ->withArgs(fn (Contact $to, string $text, string $button, string $url) => $text === 'Чтобы изменить объявление, нажмите на кнопку ниже. Диалог в чате на этом закончим, черновик сохранён.'
             && mb_strlen($button) <= 20
             && str_contains($url, "/supplier/listings/{$draft->id}/edit")
             && str_contains($url, 'signature='));

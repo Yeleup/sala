@@ -1,5 +1,6 @@
 <?php
 
+use App\Enums\WhatsappTemplateCategory;
 use App\Enums\WhatsappTemplateStatus;
 use App\Filament\Resources\WhatsappTemplates\Pages\CreateWhatsappTemplate;
 use App\Filament\Resources\WhatsappTemplates\Pages\ListWhatsappTemplates;
@@ -157,4 +158,31 @@ test('deleting a template calls Dereu and removes the row', function () {
         ->assertNotified('Шаблон удалён');
 
     expect(WhatsappTemplate::count())->toBe(0);
+});
+
+test('синхронизация со сменой категории поднимает предупреждение', function () {
+    WhatsappTemplate::factory()->approved()->create([
+        'name' => 'listing_renewal',
+        'language' => 'ru',
+        'category' => WhatsappTemplateCategory::Utility,
+    ]);
+
+    Http::fake([
+        'api.dereu.test/api/v1/platform/companies/org_test/templates/sync' => Http::response(['synced' => 1]),
+        'api.dereu.test/api/v1/platform/companies/org_test/templates' => Http::response(['data' => [[
+            'id' => 5,
+            'name' => 'listing_renewal',
+            'language' => 'ru',
+            'category' => 'marketing',
+            'status' => 'approved',
+            'components' => [['type' => 'BODY', 'text' => 'Объявление скоро истечёт.']],
+        ]]]),
+    ]);
+
+    Livewire::test(ListWhatsappTemplates::class)
+        ->callAction('sync')
+        ->assertNotified('Meta изменила шаблоны');
+
+    expect(WhatsappTemplate::query()->where('name', 'listing_renewal')->sole()->category)
+        ->toBe(WhatsappTemplateCategory::Marketing);
 });

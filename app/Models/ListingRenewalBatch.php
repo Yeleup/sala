@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use App\Enums\ListingStatus;
+use App\Support\RussianPlural;
 use Database\Factories\ListingRenewalBatchFactory;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Collection;
@@ -92,15 +93,44 @@ class ListingRenewalBatch extends Model
     }
 
     /**
-     * «12 ваших объявлений» — the poll's only template parameter. The
-     * genitive is what the wording «У {{1}} скоро закончится срок показа»
-     * needs, and it stays grammatical for any count: two forms are enough
-     * («21 вашего объявления», «22 ваших объявлений»).
+     * The listing the poll names — «Ваше объявление «Автокран 25 т» и ещё
+     * …». Meta reads a message that names a concrete object as an update
+     * about an ongoing transaction (Utility); a message that only counts
+     * things reads as a bulk notice (Marketing), which is four times the
+     * price. So the batch question names one listing, exactly like the
+     * per-listing question does.
+     *
+     * The most urgent one that has a name: a nameless listing is skipped
+     * over rather than named «без названия». The order must be
+     * deterministic — the session text inside the 24-hour window and the
+     * template parameters outside it have to produce the same name — and
+     * a bare `id` would be ambiguous across the pivot join.
      */
-    public static function countPhrase(int $count): string
+    public function namedListing(): ?Listing
     {
-        $singular = $count % 10 === 1 && $count % 100 !== 11;
+        $listings = $this->listings()
+            ->with('category')
+            ->orderBy('listings.expires_at')
+            ->orderBy('listings.id')
+            ->get();
 
-        return $count.($singular ? ' вашего объявления' : ' ваших объявлений');
+        return $listings->first(fn (Listing $listing): bool => filled($listing->displayName()))
+            ?? $listings->first();
+    }
+
+    /**
+     * «и ещё 11 объявлений» — how many the poll does not name. A batch is
+     * only ever built from more than one listing and its set is frozen at
+     * send time, so the remainder is at least one; the single one reads
+     * as a word, because «и ещё 1 объявление» stumbles where «и ещё одно
+     * объявление» does not.
+     */
+    public static function restPhrase(int $rest): string
+    {
+        if ($rest === 1) {
+            return 'одно объявление';
+        }
+
+        return $rest.' '.RussianPlural::choose($rest, 'объявление', 'объявления', 'объявлений');
     }
 }

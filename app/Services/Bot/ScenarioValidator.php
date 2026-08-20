@@ -8,6 +8,7 @@ use App\Enums\ScenarioAction;
 use App\Enums\ScenarioCondition;
 use App\Enums\ScenarioMessageChannel;
 use App\Enums\ScenarioVariable;
+use App\Enums\WhatsappTemplateCategory;
 use App\Models\WhatsappTemplate;
 use Illuminate\Support\Collection;
 
@@ -271,6 +272,13 @@ class ScenarioValidator
 
         if (! $template->isApproved()) {
             $warnings[] = "Шаблон «{$templateName}» блока {$label} ещё не утверждён Meta — до утверждения отправка возможна только в открытое 24-часовое окно.";
+        }
+
+        // Meta переклассифицирует шаблоны сама, и утилитарный, ставший
+        // маркетинговым, стоит примерно вчетверо дороже. Публикация —
+        // второе место после синхронизации, где это можно заметить.
+        if ($template->category === WhatsappTemplateCategory::Marketing) {
+            $warnings[] = "Шаблон «{$templateName}» блока {$label} тарифицируется как маркетинговый — такое сообщение примерно вчетверо дороже утилитарного.";
         }
 
         $placeholders = $this->templatePlaceholderCount($template);

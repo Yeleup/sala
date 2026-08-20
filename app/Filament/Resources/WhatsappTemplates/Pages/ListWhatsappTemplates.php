@@ -26,7 +26,7 @@ class ListWhatsappTemplates extends ListRecords
                 ->icon(Heroicon::OutlinedArrowPath)
                 ->action(function (): void {
                     try {
-                        $count = app(WhatsappTemplateRegistry::class)->sync();
+                        $report = app(WhatsappTemplateRegistry::class)->sync();
                     } catch (Throwable $e) {
                         Notification::make()
                             ->title('Синхронизация не удалась')
@@ -38,9 +38,21 @@ class ListWhatsappTemplates extends ListRecords
                     }
 
                     Notification::make()
-                        ->title("Шаблоны синхронизированы: {$count}")
+                        ->title("Шаблоны синхронизированы: {$report['total']}")
                         ->success()
                         ->send();
+
+                    // Вердикт Meta приходит только этим путём, и он молча
+                    // переписывает категорию: переклассификация в маркетинг
+                    // умножает цену отправок примерно вчетверо.
+                    if ($report['changes'] !== []) {
+                        Notification::make()
+                            ->title('Meta изменила шаблоны')
+                            ->body(implode("\n", $report['changes']))
+                            ->warning()
+                            ->persistent()
+                            ->send();
+                    }
                 }),
             CreateAction::make()->label('Новый шаблон'),
         ];

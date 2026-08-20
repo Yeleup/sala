@@ -46,6 +46,21 @@ function expiringListingsOf(Contact $supplier, int $count): Collection
         ->create(['expires_at' => now()->addHours(12)]);
 }
 
+/**
+ * Явные названия: ListingFactory оставляет title пустым, и displayName()
+ * скатывается к случайному имени категории — на таком не проверить, какое
+ * объявление назвала пачка.
+ *
+ * @param  Collection<int, Listing>  $listings
+ * @return Collection<int, Listing>
+ */
+function titled(Collection $listings): Collection
+{
+    return $listings->values()->each(
+        fn (Listing $listing, int $index) => $listing->update(['title' => 'Объявление '.($index + 1)]),
+    );
+}
+
 describe('ежедневный опрос актуальности', function () {
     test('за сутки до истечения поставщику уходят кнопки, опрос помечается отправленным', function () {
         $listing = expiringListing();
@@ -137,12 +152,15 @@ describe('ежедневный опрос актуальности', function ()
 describe('опрос пачкой: одно сообщение на поставщика', function () {
     test('несколько истекающих объявлений спрашиваются одним сообщением с тремя кнопками', function () {
         $supplier = Contact::factory()->withOpenSessionWindow()->create();
-        $listings = expiringListingsOf($supplier, 3);
+        $listings = titled(expiringListingsOf($supplier, 3));
 
         $messenger = fakeCycleMessenger();
+        // Пачка называет объявление, а не только считает их: сообщение о
+        // конкретном объекте Meta относит к utility, голую цифру — к
+        // маркетингу, вчетверо дороже.
         $messenger->shouldReceive('sendButtons')->once()->withArgs(function (Contact $contact, string $text, array $buttons) use ($supplier): bool {
             return $contact->is($supplier)
-                && str_contains($text, '3 ваших объявлений')
+                && str_contains($text, 'Ваше объявление «Объявление 1» и ещё 2 объявления скоро перестанут показываться в поиске')
                 && str_contains($text, 'Они ещё актуальны?')
                 && collect($buttons)->pluck('title')->all() === ['Все актуальны', 'Разобрать по одному', 'Все в архив'];
         });
@@ -158,16 +176,16 @@ describe('опрос пачкой: одно сообщение на постав
 
     test('вне окна пачка уходит одним платным шаблоном, а не одним на объявление', function () {
         $supplier = Contact::factory()->withClosedSessionWindow()->create();
-        expiringListingsOf($supplier, 12);
+        titled(expiringListingsOf($supplier, 12));
         $template = WhatsappTemplate::factory()->approved()->create([
-            'name' => WhatsappTemplateLibrary::LISTINGS_RENEWAL_BATCH,
+            'name' => WhatsappTemplateLibrary::SEVERAL_LISTINGS_RENEWAL,
             'language' => 'ru',
         ]);
 
         $messenger = fakeCycleMessenger();
         $messenger->shouldReceive('sendTemplate')->once()->withArgs(
             fn (Contact $contact, WhatsappTemplate $sent, array $params, array $payloads): bool => $sent->is($template)
-                && $params === ['12 ваших объявлений']
+                && $params === ['Объявление 1', '11 объявлений']
                 && count($payloads) === 3,
         );
 
@@ -238,9 +256,72 @@ describe('опрос пачкой: одно сообщение на постав
             ->and($batches->map(fn (ListingRenewalBatch $batch): int => $batch->listings->count())->sort()->values()->all())->toBe([2, 3]);
     });
 
-    test('склонение в вопросе не ломается на числах, оканчивающихся на единицу', function () {
-        expect(ListingRenewalBatch::countPhrase(21))->toBe('21 вашего объявления')
-            ->and(ListingRenewalBatch::countPhrase(11))->toBe('11 ваших объявлений')
-            ->and(ListingRenewalBatch::countPhrase(2))->toBe('2 ваших объявлений');
+    test('пачка называет объявление с названием, а не первое попавшееся', function () {
+        $supplier = Contact::factory()->withOpenSessionWindow()->create();
+        $listings = expiringListingsOf($supplier, 3);
+        // У первого по порядку нет ни названия, ни категории — назвать
+        // его значило бы отправить в Meta «без названия».
+        $listings->first()->update(['title' => null, 'category_id' => null]);
+        $listings->get(1)->update(['title' => 'Экскаватор Hitachi']);
+        $listings->last()->update(['title' => 'Самосвал 20 т']);
+
+        fakeCycleMessenger()->shouldReceive('sendButtons')->once()->withArgs(
+            fn (Contact $contact, string $text): bool => str_contains($text, '«Экскаватор Hitachi»')
+                && ! str_contains($text, 'без названия'),
+        );
+
+        $this->artisan('listings:run-renewal-cycle')->assertSuccessful();
+    });
+
+    test('внутри окна и вне его поставщик читает дословно одну фразу', function () {
+        // Тело шаблона — единственный источник формулировки, а сессионный
+        // текст написан руками: разъехавшись, они дадут двум поставщикам
+        // разные сообщения об одном и том же.
+        $inside = Contact::factory()->withOpenSessionWindow()->create();
+        $outside = Contact::factory()->withClosedSessionWindow()->create();
+        titled(expiringListingsOf($inside, 3));
+        titled(expiringListingsOf($outside, 3));
+
+        WhatsappTemplate::factory()->approved()->create([
+            'name' => WhatsappTemplateLibrary::SEVERAL_LISTINGS_RENEWAL,
+            'language' => 'ru',
+        ]);
+
+        $session = null;
+        $parameters = [];
+
+        $messenger = fakeCycleMessenger();
+        $messenger->shouldReceive('sendButtons')->once()->withArgs(function (Contact $contact, string $text) use (&$session): bool {
+            $session = $text;
+
+            return true;
+        });
+        $messenger->shouldReceive('sendTemplate')->once()->withArgs(function (Contact $contact, WhatsappTemplate $template, array $params) use (&$parameters): bool {
+            $parameters = $params;
+
+            return true;
+        });
+
+        $this->artisan('listings:run-renewal-cycle')->assertSuccessful();
+
+        $body = app(WhatsappTemplateLibrary::class)->all()
+            ->firstWhere('name', WhatsappTemplateLibrary::SEVERAL_LISTINGS_RENEWAL)['body'];
+
+        $rendered = str_replace(['{{1}}', '{{2}}'], $parameters, $body);
+
+        expect($session)->toBe($rendered);
+    });
+
+    test('склонение остатка выдерживает и подростковые числа, и единицы', function () {
+        expect(ListingRenewalBatch::restPhrase(1))->toBe('одно объявление')
+            ->and(ListingRenewalBatch::restPhrase(2))->toBe('2 объявления')
+            ->and(ListingRenewalBatch::restPhrase(4))->toBe('4 объявления')
+            ->and(ListingRenewalBatch::restPhrase(5))->toBe('5 объявлений')
+            ->and(ListingRenewalBatch::restPhrase(11))->toBe('11 объявлений')
+            ->and(ListingRenewalBatch::restPhrase(12))->toBe('12 объявлений')
+            ->and(ListingRenewalBatch::restPhrase(14))->toBe('14 объявлений')
+            ->and(ListingRenewalBatch::restPhrase(21))->toBe('21 объявление')
+            ->and(ListingRenewalBatch::restPhrase(22))->toBe('22 объявления')
+            ->and(ListingRenewalBatch::restPhrase(111))->toBe('111 объявлений');
     });
 });

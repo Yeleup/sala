@@ -198,8 +198,8 @@ test('the installer publishes the flow scenarios next to the main dialog', funct
     $batchNodes = collect($batch->published_definition['nodes']);
     $batchDefinition = new ScenarioDefinition($batch->published_definition);
 
-    expect($batchNodes->firstWhere('id', 'poll')['template_name'])->toBe('listings_renewal_batch')
-        ->and($batchNodes->firstWhere('id', 'poll')['variables'])->toBe(['listings.expiring'])
+    expect($batchNodes->firstWhere('id', 'poll')['template_name'])->toBe('several_listings_renewal')
+        ->and($batchNodes->firstWhere('id', 'poll')['variables'])->toBe(['listings.expiring_first', 'listings.expiring_rest'])
         ->and($batchNodes->firstWhere('id', 'do_renew_all')['action'])->toBe('renew_batch_listings')
         ->and($batchNodes->firstWhere('id', 'do_archive_all')['action'])->toBe('archive_batch_listings')
         // «Разобрать по одному» уводит в кабинет: нажатие открыло окно,
@@ -234,4 +234,33 @@ test('an unpublished draft is replaced without --force', function () {
     $this->artisan('bot:install-default-scenario')->assertSuccessful();
 
     expect(BotScenario::main()->isPublished())->toBeTrue();
+});
+
+test('--only ограничивает и выбор сценария, и радиус --force', function () {
+    $this->artisan('bot:install-default-scenario')->assertSuccessful();
+
+    $main = BotScenario::main();
+    $main->update(['draft_definition' => [
+        'nodes' => [['id' => 'start', 'type' => 'start', 'x' => 0, 'y' => 0]],
+        'edges' => [],
+    ]]);
+    $main->publishDraft();
+    $customVersion = $main->refresh()->published_version;
+
+    // Без --only пришлось бы звать --force глобально, и он снёс бы
+    // главный диалог, который оператор почти наверняка правил под себя.
+    $this->artisan('bot:install-default-scenario', [
+        '--force' => true,
+        '--only' => BotScenarioTrigger::ListingsExpiringBatch->value,
+    ])->assertSuccessful();
+
+    expect(BotScenario::main()->published_version)->toBe($customVersion)
+        ->and(collect(BotScenario::main()->published_definition['nodes']))->toHaveCount(1)
+        ->and(BotScenario::publishedForTrigger(BotScenarioTrigger::ListingsExpiringBatch)->published_version)->toBe(2);
+});
+
+test('неизвестный триггер в --only останавливает установку', function () {
+    $this->artisan('bot:install-default-scenario', ['--only' => 'listing_burned'])->assertFailed();
+
+    expect(BotScenario::query()->count())->toBe(0);
 });

@@ -100,7 +100,8 @@ class ListingRenewalNotifier
     public function sendBatchPoll(ListingRenewalBatch $batch): bool
     {
         $supplier = $batch->supplier;
-        $count = ListingRenewalBatch::countPhrase($batch->listings()->count());
+        $named = $batch->namedListing()?->displayName() ?: 'без названия';
+        $rest = ListingRenewalBatch::restPhrase($batch->listings()->count() - 1);
         $buttons = [
             ['id' => NotificationReplyHandler::batchRenewAllId($batch), 'title' => self::BATCH_ALL_YES_TITLE],
             ['id' => NotificationReplyHandler::batchPickId($batch), 'title' => self::BATCH_PICK_TITLE],
@@ -110,7 +111,7 @@ class ListingRenewalNotifier
         try {
             $template = WhatsappTemplate::query()
                 ->approved()
-                ->where('name', WhatsappTemplateLibrary::LISTINGS_RENEWAL_BATCH)
+                ->where('name', WhatsappTemplateLibrary::SEVERAL_LISTINGS_RENEWAL)
                 ->first();
 
             if ($supplier->hasOpenSessionWindow()) {
@@ -119,25 +120,25 @@ class ListingRenewalNotifier
                 // template with the same button payloads.
                 $this->messenger->sendButtons(
                     $supplier,
-                    sprintf('У %s скоро закончится срок показа в поиске. Они ещё актуальны?', $count),
+                    sprintf('Ваше объявление «%s» и ещё %s скоро перестанут показываться в поиске. Они ещё актуальны?', $named, $rest),
                     $buttons,
                     fallback: $template === null
                         ? null
-                        : new TemplateFallback($template, [$count], array_column($buttons, 'id')),
+                        : new TemplateFallback($template, [$named, $rest], array_column($buttons, 'id')),
                 );
 
                 return true;
             }
 
             if ($template === null) {
-                Log::warning('No approved listings_renewal_batch template — the batch renewal poll is postponed.', [
+                Log::warning('No approved several_listings_renewal template — the batch renewal poll is postponed.', [
                     'listing_renewal_batch_id' => $batch->id,
                 ]);
 
                 return false;
             }
 
-            $this->messenger->sendTemplate($supplier, $template, [$count], array_column($buttons, 'id'));
+            $this->messenger->sendTemplate($supplier, $template, [$named, $rest], array_column($buttons, 'id'));
 
             return true;
         } catch (Throwable $e) {

@@ -4,6 +4,7 @@ use App\Enums\ScenarioVariable;
 use App\Models\Contact;
 use App\Models\CustomerRequest;
 use App\Models\Listing;
+use App\Models\ListingRenewalBatch;
 use App\Models\ScenarioRun;
 use App\Services\Bot\ScenarioVariableResolver;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -107,4 +108,52 @@ test('без названия переменная «Объявление: на�
         ->create();
 
     expect(app(ScenarioVariableResolver::class)->resolve($run, ScenarioVariable::ListingTitle))->toBe('Автокран');
+});
+
+describe('переменные пачки истекающих объявлений', function () {
+    function batchRun(array $titles): ScenarioRun
+    {
+        $supplier = Contact::factory()->create();
+        $batch = ListingRenewalBatch::query()->create(['contact_id' => $supplier->id]);
+
+        foreach ($titles as $title) {
+            $batch->listings()->attach(
+                Listing::factory()->published()->for($supplier, 'supplier')
+                    ->create(['title' => $title, 'category_id' => null, 'expires_at' => now()->addHours(10)])->id,
+            );
+        }
+
+        return ScenarioRun::factory()->for($supplier, 'contact')->for($batch, 'subject')->create();
+    }
+
+    test('пачка называет объявление и говорит, сколько ещё', function () {
+        $run = batchRun(['Автокран 25 т', 'Экскаватор Hitachi', 'Самосвал 20 т']);
+        $resolver = app(ScenarioVariableResolver::class);
+
+        expect($resolver->resolve($run, ScenarioVariable::ExpiringListingsFirst))->toBe('Автокран 25 т')
+            ->and($resolver->resolve($run, ScenarioVariable::ExpiringListingsRest))->toBe('2 объявления');
+    });
+
+    test('безымянное объявление пропускается, а не подставляется как «без названия»', function () {
+        $run = batchRun([null, 'Экскаватор Hitachi']);
+
+        expect(app(ScenarioVariableResolver::class)->resolve($run, ScenarioVariable::ExpiringListingsFirst))
+            ->toBe('Экскаватор Hitachi');
+    });
+
+    test('остаток в одно объявление читается словом, а не цифрой', function () {
+        $run = batchRun(['Автокран 25 т', 'Экскаватор Hitachi']);
+
+        expect(app(ScenarioVariableResolver::class)->resolve($run, ScenarioVariable::ExpiringListingsRest))
+            ->toBe('одно объявление');
+    });
+
+    test('снятый ключ «listings.expiring» отдаёт прочерк, а не роняет отправку', function () {
+        // Опубликованные до переезда версии сценария закреплены за старым
+        // ключом: Meta отвергает шаблон с пустым параметром, поэтому дыра
+        // обязана заполняться, а не оставаться пустой.
+        $run = batchRun(['Автокран 25 т', 'Экскаватор Hitachi']);
+
+        expect(app(ScenarioVariableResolver::class)->values($run, ['listings.expiring']))->toBe(['—']);
+    });
 });

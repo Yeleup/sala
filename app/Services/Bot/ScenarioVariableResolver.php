@@ -43,11 +43,15 @@ class ScenarioVariableResolver
             ScenarioVariable::ListingDescription => $listing?->description ?: 'без описания',
             ScenarioVariable::ListingLocation => ($listing?->locationLine() ?: null) ?? 'место не указано',
             ScenarioVariable::ListingPrice => $listing?->price ?: 'цена не указана',
-            // «12 ваших объявлений»: родительный падеж — его требует
-            // формулировка «У {{1}} скоро закончится срок показа».
-            ScenarioVariable::ExpiringListings => $subject instanceof ListingRenewalBatch
-                ? ListingRenewalBatch::countPhrase($subject->listings()->count())
-                : 'ваших объявлений',
+            // Пачка называет одно объявление и говорит, сколько ещё:
+            // сообщение с конкретным объектом Meta относит к utility, а
+            // одну лишь цифру — к маркетингу, вчетверо дороже.
+            ScenarioVariable::ExpiringListingsFirst => ($subject instanceof ListingRenewalBatch
+                ? $subject->namedListing()?->displayName()
+                : null) ?: 'без названия',
+            ScenarioVariable::ExpiringListingsRest => $subject instanceof ListingRenewalBatch
+                ? ListingRenewalBatch::restPhrase($subject->listings()->count() - 1)
+                : 'несколько объявлений',
             ScenarioVariable::RequestQuery => ($subject instanceof CustomerRequest ? $subject->query_text : null) ?: 'без уточнений',
             ScenarioVariable::RequestCustomer => $subject instanceof CustomerRequest ? $this->customerLine($subject->customer) : null,
             // The profile name is often absent (Dereu drops it from the

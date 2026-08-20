@@ -1,5 +1,6 @@
 <?php
 
+use App\Enums\WhatsappTemplateCategory;
 use App\Enums\WhatsappTemplateStatus;
 use App\Models\WhatsappTemplate;
 use App\Services\WhatsappTemplateLibrary;
@@ -83,4 +84,25 @@ test('adding a library template registers it through Dereu with buttons and exam
 test('adding an unknown library template throws', function () {
     expect(fn () => app(WhatsappTemplateLibrary::class)->add('nonexistent'))
         ->toThrow(InvalidArgumentException::class);
+});
+
+test('пачечный опрос называет объявление, а не только считает', function () {
+    $entry = app(WhatsappTemplateLibrary::class)->all()
+        ->firstWhere('name', WhatsappTemplateLibrary::SEVERAL_LISTINGS_RENEWAL);
+
+    // Meta переклассифицировала прежнюю формулировку («У 12 ваших
+    // объявлений…») в маркетинг: сообщение без конкретного объекта
+    // читается как рассылка и стоит примерно вчетверо дороже.
+    expect($entry)->not->toBeNull()
+        ->and($entry['category'])->toBe(WhatsappTemplateCategory::Utility)
+        ->and($entry['body'])->toBe('Ваше объявление «{{1}}» и ещё {{2}} скоро перестанут показываться в поиске. Они ещё актуальны?')
+        ->and($entry['examples'])->toBe(['Автокран 25 т', '11 объявлений'])
+        ->and($entry['quick_replies'])->toBe(['Все актуальны', 'Разобрать по одному', 'Все в архив']);
+});
+
+test('сожжённое имя listings_renewal_batch из библиотеки убрано', function () {
+    // Текст поданного шаблона Meta править не даёт: старое имя больше не
+    // предлагается оператору, чтобы он не завёл маркетинговый шаблон снова.
+    expect(app(WhatsappTemplateLibrary::class)->all()->pluck('name'))
+        ->not->toContain('listings_renewal_batch');
 });

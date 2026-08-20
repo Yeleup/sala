@@ -121,3 +121,19 @@ test('a duplicate delivery of the same event id is not processed twice', functio
     expect(DereuWebhookEvent::count())->toBe(1);
     Queue::assertPushed(ApplyDereuTemplateStatus::class, 1);
 });
+
+test('верхний регистр статуса в вебхуке всё равно утверждает шаблон', function () {
+    // Иначе tryFrom вернул бы null, весь блок стал бы no-op, и шаблон
+    // навсегда завис бы в «На модерации Meta» без единой строки в логе.
+    $template = WhatsappTemplate::factory()->create([
+        'name' => 'listing_renewal',
+        'language' => 'ru',
+        'status' => WhatsappTemplateStatus::Pending,
+    ]);
+
+    postSignedTemplateStatus(templateStatusPayload([
+        'payload' => ['name' => 'listing_renewal', 'language' => 'ru', 'status' => 'APPROVED', 'reason' => null],
+    ]))->assertSuccessful();
+
+    expect($template->refresh()->status)->toBe(WhatsappTemplateStatus::Approved);
+});

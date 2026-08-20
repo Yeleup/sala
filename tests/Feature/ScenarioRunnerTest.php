@@ -753,9 +753,11 @@ describe('сценарий «Продление нескольких объяв�
             ->create(['expires_at' => now()->addHours(12)]);
 
         $messenger = runnerMessenger();
+        $listings->each(fn (Listing $listing, int $index) => $listing->update(['title' => 'Объявление '.($index + 1)]));
+
         $messenger->shouldReceive('sendButtons')->once()->withArgs(
             fn (Contact $contact, string $text, array $buttons): bool => $contact->is($supplier)
-                && str_contains($text, '3 ваших объявлений')
+                && str_contains($text, 'Ваше объявление «Объявление 1» и ещё 2 объявления')
                 && collect($buttons)->pluck('title')->all() === ['Все актуальны', 'Разобрать по одному', 'Все в архив'],
         );
 
@@ -766,6 +768,28 @@ describe('сценарий «Продление нескольких объяв�
         expect($run->subject)->toBeInstanceOf(ListingRenewalBatch::class)
             ->and($run->subject->listings()->count())->toBe(3)
             ->and($listings->every(fn (Listing $listing): bool => $listing->refresh()->renewal_requested_at !== null))->toBeTrue();
+    });
+
+    test('вне окна пачка уходит одним шаблоном с двумя параметрами', function () {
+        installFlowScenarios();
+        $supplier = Contact::factory()->withClosedSessionWindow()->create();
+        $listings = Listing::factory()->count(4)->published()->for($supplier, 'supplier')
+            ->create(['expires_at' => now()->addHours(12)]);
+        $listings->each(fn (Listing $listing, int $index) => $listing->update(['title' => 'Объявление '.($index + 1)]));
+
+        $template = WhatsappTemplate::query()
+            ->where('name', WhatsappTemplateLibrary::SEVERAL_LISTINGS_RENEWAL)
+            ->sole();
+        $template->update(['status' => WhatsappTemplateStatus::Approved]);
+
+        $messenger = runnerMessenger();
+        $messenger->shouldReceive('sendTemplate')->once()->withArgs(
+            fn (Contact $contact, WhatsappTemplate $sent, array $params, array $payloads): bool => $sent->is($template)
+                && $params === ['Объявление 1', '3 объявления']
+                && count($payloads) === 3,
+        );
+
+        $this->artisan('listings:run-renewal-cycle')->assertSuccessful();
     });
 
     test('«Все актуальны» продлевает всю пачку одним нажатием', function () {

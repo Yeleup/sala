@@ -102,10 +102,11 @@ test('sync mirrors the remote list: upserts, extracts the body and removes stale
         ]]),
     ]);
 
-    $count = app(WhatsappTemplateRegistry::class)->sync();
+    $report = app(WhatsappTemplateRegistry::class)->sync();
 
-    expect($count)->toBe(2)
-        ->and(WhatsappTemplate::query()->where('name', 'gone_template')->exists())->toBeFalse();
+    expect($report['total'])->toBe(2)
+        ->and(WhatsappTemplate::query()->where('name', 'gone_template')->exists())->toBeFalse()
+        ->and($report['changes'])->toContain('«gone_template»: удалён в Meta — убран из реестра');
 
     $renewal = WhatsappTemplate::query()->where('name', 'listing_renewal')->sole();
     expect($renewal)
@@ -140,4 +141,101 @@ test('a template never synced from Dereu is deleted only locally', function () {
 
     Http::assertNothingSent();
     expect(WhatsappTemplate::count())->toBe(0);
+});
+
+/**
+ * @param  list<array<string, mixed>>  $data
+ */
+function fakeRemoteTemplates(array $data): void
+{
+    Http::fake([
+        'api.dereu.test/api/v1/platform/companies/org_test/templates/sync' => Http::response(['synced' => count($data)]),
+        'api.dereu.test/api/v1/platform/companies/org_test/templates' => Http::response(['data' => $data]),
+    ]);
+}
+
+test('синхронизация докладывает о переклассификации Meta, а не переписывает её молча', function () {
+    WhatsappTemplate::factory()->approved()->create([
+        'name' => 'several_listings_renewal',
+        'language' => 'ru',
+        'category' => WhatsappTemplateCategory::Utility,
+    ]);
+
+    fakeRemoteTemplates([[
+        'id' => 7,
+        'name' => 'several_listings_renewal',
+        'language' => 'ru',
+        'category' => 'marketing',
+        'status' => 'pending',
+        'components' => [['type' => 'BODY', 'text' => 'Текст.']],
+    ]]);
+
+    $report = app(WhatsappTemplateRegistry::class)->sync();
+
+    // Категория — ключ тарификации: маркетинг примерно вчетверо дороже
+    // утилитарного, и узнать об этом оператор может только отсюда.
+    expect($report['changes'])->toContain('«several_listings_renewal»: категория Утилитарный → Маркетинг')
+        ->and($report['changes'])->toContain('«several_listings_renewal»: статус Утверждён → На модерации Meta');
+});
+
+test('синхронизация без изменений ни о чём не сообщает', function () {
+    WhatsappTemplate::factory()->approved()->create([
+        'name' => 'listing_renewal',
+        'language' => 'ru',
+        'category' => WhatsappTemplateCategory::Utility,
+    ]);
+
+    fakeRemoteTemplates([[
+        'id' => 7,
+        'name' => 'listing_renewal',
+        'language' => 'ru',
+        'category' => 'utility',
+        'status' => 'approved',
+        'components' => [['type' => 'BODY', 'text' => 'Текст.']],
+    ]]);
+
+    expect(app(WhatsappTemplateRegistry::class)->sync()['changes'])->toBe([]);
+});
+
+test('верхний регистр от Meta разбирается, а не глушит отправки', function () {
+    // Graph API отдаёт APPROVED/MARKETING; прочитанный как pending живой
+    // шаблон выпал бы из approved() и остановил бы все уведомления.
+    fakeRemoteTemplates([[
+        'id' => 7,
+        'name' => 'listing_renewal',
+        'language' => 'ru',
+        'category' => 'MARKETING',
+        'status' => 'APPROVED',
+        'components' => [['type' => 'BODY', 'text' => 'Текст.']],
+    ]]);
+
+    app(WhatsappTemplateRegistry::class)->sync();
+
+    expect(WhatsappTemplate::query()->where('name', 'listing_renewal')->sole())
+        ->status->toBe(WhatsappTemplateStatus::Approved)
+        ->category->toBe(WhatsappTemplateCategory::Marketing);
+});
+
+test('нераспознанное значение не понижает уже известный шаблон', function () {
+    WhatsappTemplate::factory()->approved()->create([
+        'name' => 'listing_renewal',
+        'language' => 'ru',
+        'category' => WhatsappTemplateCategory::Marketing,
+    ]);
+
+    fakeRemoteTemplates([[
+        'id' => 7,
+        'name' => 'listing_renewal',
+        'language' => 'ru',
+        'category' => 'promo',
+        'status' => 'paused',
+        'components' => [['type' => 'BODY', 'text' => 'Текст.']],
+    ]]);
+
+    $report = app(WhatsappTemplateRegistry::class)->sync();
+
+    expect(WhatsappTemplate::query()->where('name', 'listing_renewal')->sole())
+        ->status->toBe(WhatsappTemplateStatus::Approved)
+        ->category->toBe(WhatsappTemplateCategory::Marketing)
+        ->and($report['changes'])->toBe([]);
 });

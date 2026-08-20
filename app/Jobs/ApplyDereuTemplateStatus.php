@@ -51,7 +51,17 @@ class ApplyDereuTemplateStatus implements ShouldQueue
 
         $name = (string) ($payload['name'] ?? '');
         $language = (string) ($payload['language'] ?? '');
-        $status = WhatsappTemplateStatus::tryFrom((string) ($payload['status'] ?? ''));
+        // Meta пишет статусы в верхнем регистре; сравнение без учёта
+        // регистра, иначе весь блок молча превращается в no-op и шаблон
+        // навсегда остаётся «На модерации Meta».
+        $status = WhatsappTemplateStatus::tryFrom(strtolower(trim((string) ($payload['status'] ?? ''))));
+
+        if ($status === null) {
+            Log::warning('Unrecognised template status in the Dereu webhook.', [
+                'event_id' => $event->event_id,
+                'status' => $payload['status'] ?? null,
+            ]);
+        }
 
         if ($name !== '' && $language !== '' && $status !== null) {
             WhatsappTemplate::query()

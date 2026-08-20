@@ -20,19 +20,69 @@ use Illuminate\Console\Command;
  * scenario without --force so a customized graph is not lost; each
  * scenario is judged separately.
  */
-#[Signature('bot:install-default-scenario {--force : Перезаписать уже опубликованные сценарии}')]
+#[Signature('bot:install-default-scenario {--force : Перезаписать уже опубликованные сценарии} {--only= : Ограничить одним триггером — чтобы --force не задел остальные}')]
 #[Description('Установить и опубликовать типовые сценарии бота (главный диалог, заявка, продление)')]
 class InstallDefaultBotScenario extends Command
 {
     public function handle(ScenarioValidator $validator): int
     {
+        $scenarios = $this->selectedScenarios();
+
+        if ($scenarios === null) {
+            return self::FAILURE;
+        }
+
         $failures = 0;
 
-        foreach ($this->scenarios() as $spec) {
+        foreach ($scenarios as $spec) {
             $failures += $this->install($validator, $spec['trigger'], $spec['name'], $spec['definition']) ? 0 : 1;
         }
 
         return $failures === 0 ? self::SUCCESS : self::FAILURE;
+    }
+
+    /**
+     * --force перезаписывает опубликованные сценарии, и без ограничения
+     * оно накрывает все сразу — включая главный диалог, который оператор
+     * почти наверняка правил под себя. --only=<триггер> сужает и выбор
+     * сценариев, и радиус --force до одного из них.
+     *
+     * Null — триггер указан неизвестный; сообщение уже выведено.
+     *
+     * @return list<array{trigger: BotScenarioTrigger, name: string, definition: array{nodes: list<array<string, mixed>>, edges: list<array<string, mixed>>}}>|null
+     */
+    protected function selectedScenarios(): ?array
+    {
+        $only = $this->option('only');
+
+        if (blank($only)) {
+            return $this->scenarios();
+        }
+
+        $trigger = BotScenarioTrigger::tryFrom((string) $only);
+
+        if ($trigger === null) {
+            $this->error(sprintf(
+                'Неизвестный триггер «%s». Доступны: %s.',
+                $only,
+                implode(', ', array_column(BotScenarioTrigger::cases(), 'value')),
+            ));
+
+            return null;
+        }
+
+        $selected = array_values(array_filter(
+            $this->scenarios(),
+            fn (array $spec): bool => $spec['trigger'] === $trigger,
+        ));
+
+        if ($selected === []) {
+            $this->error("Для триггера «{$trigger->label()}» типового сценария нет.");
+
+            return null;
+        }
+
+        return $selected;
     }
 
     /**
@@ -300,8 +350,8 @@ class InstallDefaultBotScenario extends Command
                 ['id' => 'start', 'type' => 'start', 'x' => 40, 'y' => 300],
                 ['id' => 'poll', 'type' => 'message', 'x' => 260, 'y' => 300,
                     'channel' => 'adaptive',
-                    'template_name' => WhatsappTemplateLibrary::LISTINGS_RENEWAL_BATCH,
-                    'variables' => ['listings.expiring'],
+                    'template_name' => WhatsappTemplateLibrary::SEVERAL_LISTINGS_RENEWAL,
+                    'variables' => ['listings.expiring_first', 'listings.expiring_rest'],
                     'options' => [
                         ['id' => 'all_yes', 'title' => 'Все актуальны'],
                         ['id' => 'one_by_one', 'title' => 'Разобрать по одному'],

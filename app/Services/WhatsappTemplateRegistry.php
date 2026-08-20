@@ -6,6 +6,7 @@ use App\Enums\WhatsappTemplateCategory;
 use App\Enums\WhatsappTemplateStatus;
 use App\Models\DereuCompany;
 use App\Models\WhatsappTemplate;
+use Illuminate\Support\Facades\Log;
 use RuntimeException;
 
 /**
@@ -71,22 +72,46 @@ class WhatsappTemplateRegistry
     /**
      * Re-pull templates from Meta into Dereu, then mirror the Dereu list
      * locally. Local rows that no longer exist remotely are removed.
-     * Returns the number of templates in the registry after the sync.
+     *
+     * The sync is the only channel through which Meta's own verdict about
+     * a template reaches this system — the template_status_update webhook
+     * carries no category — so it reports what it changed instead of
+     * changing it silently. Meta re-categorises templates on its own, and
+     * utility → marketing multiplies the price of every send through that
+     * template roughly fourfold: the operator has to learn about it from
+     * somewhere.
+     *
+     * @return array{total: int, changes: list<string>}
      */
-    public function sync(): int
+    public function sync(): array
     {
         $externalId = $this->externalId();
 
         $this->client->syncTemplates($externalId);
         $remote = $this->client->listTemplates($externalId);
+        $changes = [];
 
         foreach ($remote as $item) {
-            $status = WhatsappTemplateStatus::tryFrom($item['status']) ?? WhatsappTemplateStatus::Pending;
+            $existing = WhatsappTemplate::query()
+                ->where('name', $item['name'])
+                ->where('language', $item['language'])
+                ->first();
+
+            $status = $this->remoteStatus($item['status'] ?? null, $existing);
+            $category = $this->remoteCategory($item['category'] ?? null, $existing);
+
+            if ($existing !== null && $existing->category !== $category) {
+                $changes[] = sprintf('«%s»: категория %s → %s', $item['name'], $existing->category->getLabel(), $category->getLabel());
+            }
+
+            if ($existing !== null && $existing->status !== $status) {
+                $changes[] = sprintf('«%s»: статус %s → %s', $item['name'], $existing->status->getLabel(), $status->getLabel());
+            }
 
             WhatsappTemplate::query()->updateOrCreate(
                 ['name' => $item['name'], 'language' => $item['language']],
                 [
-                    'category' => WhatsappTemplateCategory::tryFrom($item['category']) ?? WhatsappTemplateCategory::Utility,
+                    'category' => $category,
                     'status' => $status,
                     // The list carries no rejection reason — keep the one the
                     // webhook delivered while the template stays rejected.
@@ -103,9 +128,59 @@ class WhatsappTemplateRegistry
 
         WhatsappTemplate::query()->get()
             ->reject(fn (WhatsappTemplate $template): bool => $remoteKeys->contains($template->name.'|'.$template->language))
-            ->each(fn (WhatsappTemplate $template) => $template->delete());
+            ->each(function (WhatsappTemplate $template) use (&$changes): void {
+                // The same class of invisible change: a flow that suddenly
+                // stops sending is otherwise unexplained.
+                $changes[] = sprintf('«%s»: удалён в Meta — убран из реестра', $template->name);
+                $template->delete();
+            });
 
-        return count($remote);
+        if ($changes !== []) {
+            Log::warning('Синхронизация изменила реестр шаблонов.', ['changes' => $changes]);
+        }
+
+        return ['total' => count($remote), 'changes' => $changes];
+    }
+
+    /**
+     * Meta's own API spells these enums in upper case, and the sync exists
+     * precisely to pull in templates authored straight in Business
+     * Manager — so the match is case-insensitive.
+     *
+     * An unrecognised value must never downgrade a row that is already
+     * known: read as «pending», a live «APPROVED» would quietly drop the
+     * template out of the approved() scope and stop every notification
+     * that goes through it.
+     */
+    protected function remoteStatus(mixed $value, ?WhatsappTemplate $existing): WhatsappTemplateStatus
+    {
+        $status = WhatsappTemplateStatus::tryFrom(strtolower(trim((string) $value)));
+
+        if ($status !== null) {
+            return $status;
+        }
+
+        Log::warning('Unrecognised template status from Dereu.', ['status' => $value]);
+
+        return $existing?->status ?? WhatsappTemplateStatus::Pending;
+    }
+
+    /**
+     * Same rule as remoteStatus(), and the stake is the price: an
+     * unrecognised category read as «utility» would under-report the cost
+     * of a marketing template by about four times.
+     */
+    protected function remoteCategory(mixed $value, ?WhatsappTemplate $existing): WhatsappTemplateCategory
+    {
+        $category = WhatsappTemplateCategory::tryFrom(strtolower(trim((string) $value)));
+
+        if ($category !== null) {
+            return $category;
+        }
+
+        Log::warning('Unrecognised template category from Dereu.', ['category' => $value]);
+
+        return $existing?->category ?? WhatsappTemplateCategory::Utility;
     }
 
     /**

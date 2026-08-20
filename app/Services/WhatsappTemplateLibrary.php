@@ -25,9 +25,12 @@ class WhatsappTemplateLibrary
     /**
      * The same poll for a supplier whose publications expire together:
      * one question about the whole set instead of a paid template per
-     * listing.
+     * listing. It names one of the listings for the same reason the
+     * per-listing poll does — Meta reads a message about a concrete
+     * object as Utility and a bare count as Marketing, four times the
+     * price.
      */
-    public const string LISTINGS_RENEWAL_BATCH = 'listings_renewal_batch';
+    public const string SEVERAL_LISTINGS_RENEWAL = 'several_listings_renewal';
 
     /** Notifies a supplier about a new customer request outside the 24-hour window. */
     public const string NEW_CUSTOMER_REQUEST = 'new_customer_request';
@@ -57,14 +60,14 @@ class WhatsappTemplateLibrary
                 'examples' => ['Автокран 25 т'],
             ],
             [
-                'name' => self::LISTINGS_RENEWAL_BATCH,
+                'name' => self::SEVERAL_LISTINGS_RENEWAL,
                 'language' => 'ru',
                 'category' => WhatsappTemplateCategory::Utility,
                 'title' => '30-дневный опрос актуальности — сразу по нескольким объявлениям',
                 'purpose' => 'Уходит поставщику, у которого за сутки истекает сразу несколько публикаций: один вопрос на всю пачку вместо платного шаблона на каждое объявление.',
-                'body' => 'У {{1}} скоро закончится срок показа в поиске. Они ещё актуальны?',
+                'body' => 'Ваше объявление «{{1}}» и ещё {{2}} скоро перестанут показываться в поиске. Они ещё актуальны?',
                 'quick_replies' => ['Все актуальны', 'Разобрать по одному', 'Все в архив'],
-                'examples' => ['12 ваших объявлений'],
+                'examples' => ['Автокран 25 т', '11 объявлений'],
             ],
             [
                 'name' => self::NEW_CUSTOMER_REQUEST,

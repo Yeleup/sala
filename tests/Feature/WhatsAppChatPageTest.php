@@ -80,6 +80,30 @@ test('тред показывает входящие и исходящие со 
         ->assertSee('Не доставлено: Meta rejected: invalid recipient');
 });
 
+test('причина недоставки показана по-русски, а строка Meta остаётся в подсказке', function () {
+    $contact = Contact::factory()->create();
+
+    ChannelMessage::factory()->for($contact)->outbound()->create([
+        'text' => 'Новая заявка',
+        'status' => ChannelMessageStatus::Failed,
+        'failure_reason' => 'meta error 131026: Message undeliverable — Message Undeliverable.',
+    ]);
+
+    // Причину Meta присылает не всегда: пузырь без неё показывал одну
+    // красную галочку и ничего больше — это читалось как сбой вёрстки.
+    ChannelMessage::factory()->for($contact)->outbound()->create([
+        'text' => 'Молча упавшее',
+        'status' => ChannelMessageStatus::Failed,
+        'failure_reason' => null,
+    ]);
+
+    Livewire::test(WhatsAppChat::class)
+        ->call('selectContact', $contact->id)
+        ->assertSee('Не доставлено: на этом номере нет рабочего WhatsApp — свяжитесь звонком и проверьте номер')
+        ->assertSee('Не доставлено: Meta не назвала причину')
+        ->assertSee('meta error 131026: Message undeliverable');
+});
+
 test('тред показывает кнопки, элементы списка и ссылку исходящих интерактивов', function () {
     $contact = Contact::factory()->create();
 

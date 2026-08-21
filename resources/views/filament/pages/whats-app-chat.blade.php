@@ -207,8 +207,13 @@
                                 <div class="wa-fail">{{ $error }}</div>
                             @endforeach
 
-                            @if ($message->status === \App\Enums\ChannelMessageStatus::Failed && filled($message->failure_reason))
-                                <div class="wa-fail">Не доставлено: {{ $message->failure_reason }}</div>
+                            {{-- Расшифровка кода Meta — исходная строка остаётся
+                                 в подсказке и в журнале дословно. --}}
+                            @if ($message->status === \App\Enums\ChannelMessageStatus::Failed)
+                                <div
+                                    class="wa-fail"
+                                    @if (filled($message->failure_reason)) title="{{ $message->failure_reason }}" @endif
+                                >Не доставлено: {{ \App\Support\MetaDeliveryError::explain($message->failure_reason) }}</div>
                             @endif
 
                             <div class="wa-meta">

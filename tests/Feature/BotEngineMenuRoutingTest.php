@@ -3,6 +3,7 @@
 use App\Enums\AiOutcome;
 use App\Enums\ListingMediaType;
 use App\Enums\RouteConfidence;
+use App\Models\BotReplyText;
 use App\Models\BotScenario;
 use App\Models\BotSession;
 use App\Models\Contact;
@@ -323,6 +324,29 @@ describe('средняя уверенность — одна кнопка-пре
             ->and(Carbon::parse($proposal['expires_at'])->isBefore(now()->addMinutes(31)))->toBeTrue();
     });
 
+    test('процент в операторской редакции текста не роняет отправку', function () {
+        $scenario = navScenario();
+        $contact = Contact::factory()->create();
+        navSessionAt($scenario, $contact, 'menu');
+
+        // sprintf на такой строке упал бы ValueError, и контакт получил бы
+        // тишину вместо предложения: «% т» — не спецификатор формата.
+        BotReplyText::query()->create([
+            'key' => 'nav_route_offer',
+            'text' => 'У нас 100% техники под задачу. Похоже, вам нужно «%s». Перейти?',
+        ]);
+
+        navRouter()->shouldReceive('route')->once()
+            ->andReturn(MenuRoute::toOption(['node_id' => 'menu', 'option_id' => 'supplier'], RouteConfidence::Medium));
+
+        navMessenger()->shouldReceive('sendButtons')->once()
+            ->withArgs(fn (Contact $to, string $text, array $buttons): bool => $text === 'У нас 100% техники под задачу. Похоже, вам нужно «Я поставщик». Перейти?');
+
+        app(BotEngine::class)->handle($contact, new InboundMessage(text: 'сдаю кран'));
+
+        expect(BotSession::sole()->state['nav_proposal']['route'])->toBe('option:supplier');
+    });
+
     test('возврат к анкете: свой текст и кнопка «Продолжить»', function () {
         $scenario = navScenario();
         $contact = Contact::factory()->create();
@@ -455,6 +479,7 @@ describe('подтверждение предложения', function () {
         $contact = Contact::factory()->create();
         $session = navSessionAt($scenario, $contact, 'menu', ['state' => navProposal('option:ghost')]);
 
+        navRouter()->shouldNotReceive('route');
         navAssistant()->shouldNotReceive('start');
 
         $messenger = navMessenger();
@@ -610,6 +635,42 @@ describe('первое сообщение диалога', function () {
         $messenger->shouldReceive('sendButtons')->once();
 
         app(BotEngine::class)->handle($contact, new InboundMessage(text: 'Я поставщик', replyId: 'supplier'));
+
+        expect(BotSession::sole()->current_node_id)->toBe('menu');
+    });
+
+    test('текст, совпавший с вариантом меню, роутер не дёргает', function () {
+        navScenario();
+        $contact = Contact::factory()->create();
+
+        // Граф отвечает сам — платить за модель не за что. Ответом на меню
+        // это сообщение всё равно не станет: меню ушло тем же ходом.
+        navRouter()->shouldNotReceive('route');
+
+        $messenger = navMessenger();
+        $messenger->shouldReceive('sendText')->once()
+            ->withArgs(fn (Contact $to, string $text): bool => $text === 'Привет!');
+        $messenger->shouldReceive('sendButtons')->once();
+
+        app(BotEngine::class)->handle($contact, new InboundMessage(text: ' я поставщик '));
+
+        expect(BotSession::sole()->current_node_id)->toBe('menu');
+    });
+
+    test('подключённый выход «Любая другая фраза» роутер не дёргает и на первом сообщении', function () {
+        $definition = navMenuDefinition();
+        $definition['edges'][] = ['from' => 'menu', 'output' => 'fallback', 'to' => 'fallback_hint'];
+        navScenario($definition);
+        $contact = Contact::factory()->create();
+
+        navRouter()->shouldNotReceive('route');
+
+        $messenger = navMessenger();
+        $messenger->shouldReceive('sendText')->once()
+            ->withArgs(fn (Contact $to, string $text): bool => $text === 'Привет!');
+        $messenger->shouldReceive('sendButtons')->once();
+
+        app(BotEngine::class)->handle($contact, new InboundMessage(text: 'сдаю кран 25 тонн'));
 
         expect(BotSession::sole()->current_node_id)->toBe('menu');
     });

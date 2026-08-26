@@ -389,6 +389,17 @@ class BotEngine
             return;
         }
 
+        // Роутера не спрашивают там, где граф отвечает сам, — те же два
+        // условия, что и на обычном шаге меню: текст совпал с вариантом
+        // (титул или порядковый номер) либо подключён выход «Любая другая
+        // фраза». Оба здесь только про вызов модели: первое сообщение
+        // диалога всё равно не считается ответом на меню, которое ушло
+        // вместе с приветствием одним ходом позже.
+        if ($definition->matchOption($node, $message) !== null
+            || $definition->target($node['id'], ScenarioDefinition::OUTPUT_FALLBACK) !== null) {
+            return;
+        }
+
         $this->routeFreeText($session, $contact, $definition, $node, $message, menuJustSent: true);
     }
 
@@ -478,11 +489,14 @@ class BotEngine
         ]];
         $session->save();
 
+        // str_replace, а не sprintf: текст правит оператор, и одинокий
+        // процент в его редакции («100% техники») уронил бы sprintf с
+        // ValueError — контакт получил бы тишину вместо предложения.
         $this->messenger->sendButtons(
             $contact,
             $option === null
                 ? $this->replyTexts->get(BotReplyKey::NavResumeOffer)
-                : sprintf($this->replyTexts->get(BotReplyKey::NavRouteOffer), $this->optionTitle($definition, $option['option_id'])),
+                : str_replace('%s', $this->optionTitle($definition, $option['option_id']), $this->replyTexts->get(BotReplyKey::NavRouteOffer)),
             [['id' => self::NAV_CONFIRM, 'title' => $title]],
         );
     }

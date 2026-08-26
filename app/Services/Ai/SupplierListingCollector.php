@@ -661,26 +661,28 @@ class SupplierListingCollector
      * Whenever there is any progress to lose (hasProgress() — a broader
      * check than the draft/field content below, since a bare transcript
      * still counts), a snapshot of exactly where the dialog stood goes into
-     * paused_state first: a future resume (task 4) needs it to restore the
-     * step, and exit_confirm is forced false inside it so the very next
-     * answer after a resume is not mistaken for the confirmation branch.
+     * paused_state — captured only once any draft below is actually created
+     * and updated, so paused_state.state.draft_id names the very draft
+     * persist() is about to save into session.state. Snapshotting earlier,
+     * before ensureDraft() runs, would leave draft_id null in the snapshot
+     * even though a draft was created moments later in the very same call —
+     * a future resume would then create a second, duplicate draft instead
+     * of continuing the first. exit_confirm is forced false inside the
+     * snapshot so the very next answer after a resume is not mistaken for
+     * the confirmation branch.
      *
      * @param  array<string, mixed>  $state
      */
     private function exitToMenu(BotSession $session, array $state): AiOutcome
     {
         $attributes = $this->listingAttributes($state);
-
-        if ($this->hasProgress($state)) {
-            $session->paused_state = [
-                'node_id' => $session->current_node_id,
-                'fingerprint' => $session->current_node_fingerprint,
-                'state' => [...$state, 'exit_confirm' => false],
-                'saved_at' => now()->toIso8601String(),
-            ];
-        }
+        $shouldSnapshot = $this->hasProgress($state);
 
         if (! $this->hasContent($state, $attributes)) {
+            if ($shouldSnapshot) {
+                $this->snapshotPausedState($session, $state);
+            }
+
             $this->persist($session, $state);
 
             return AiOutcome::Completed;
@@ -688,10 +690,28 @@ class SupplierListingCollector
 
         $draft = $this->ensureDraft($session, $state);
         $draft->update($attributes);
+
+        if ($shouldSnapshot) {
+            $this->snapshotPausedState($session, $state);
+        }
+
         $this->persist($session, $state);
         $this->messenger->sendText($session->contact, 'Черновик сохранили — он ждёт в кабинете.');
 
         return AiOutcome::Completed;
+    }
+
+    /**
+     * @param  array<string, mixed>  $state
+     */
+    private function snapshotPausedState(BotSession $session, array $state): void
+    {
+        $session->paused_state = [
+            'node_id' => $session->current_node_id,
+            'fingerprint' => $session->current_node_fingerprint,
+            'state' => [...$state, 'exit_confirm' => false],
+            'saved_at' => now()->toIso8601String(),
+        ];
     }
 
     /**

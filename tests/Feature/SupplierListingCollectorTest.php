@@ -1913,10 +1913,14 @@ test('the «В меню» button asks to confirm, then saves the draft and ends 
         ->and(Listing::count())->toBe(1);
     ListingExtractionAgent::assertNeverPrompted();
 
+    // Черновик появился только что, внутри этого же вызова exitToMenu()
+    // (draft_id был null): снапшот обязан назвать именно его, иначе будущий
+    // resume создал бы второй, дублирующий черновик поверх первого.
     $paused = $session->fresh()->paused_state;
     expect($paused['node_id'])->toBe('collect')
         ->and($paused['fingerprint'])->toBe('collect-fingerprint')
         ->and($paused['state']['exit_confirm'])->toBeFalse()
+        ->and($paused['state']['draft_id'])->toBe(Listing::sole()->id)
         ->and(Carbon::parse($paused['saved_at']))->toBeInstanceOf(Carbon::class);
 })->with([
     'сбор данных' => [['phase' => 'collecting', 'fields' => ['description' => 'Трактор в аренду']]],
@@ -2071,7 +2075,10 @@ test('progress made only of an undictated transcript still asks to confirm; the 
         ->and($paused['node_id'])->toBe('collect')
         ->and($paused['fingerprint'])->toBe('collect-fingerprint')
         ->and($paused['state']['exit_confirm'])->toBeFalse()
-        ->and($paused['state']['transcript'])->toBe(['Сдаю трактор в Шымкенте']);
+        ->and($paused['state']['transcript'])->toBe(['Сдаю трактор в Шымкенте'])
+        // Черновик не создавался (нет ни поля, ни строки о нём) — снапшот
+        // честно называет его отсутствие, а не выдумывает id.
+        ->and($paused['state']['draft_id'])->toBeNull();
     ListingExtractionAgent::assertNeverPrompted();
 });
 
@@ -2099,10 +2106,13 @@ test('a worded request for the menu (user_intent «menu») exits the block exact
         ->and($session->fresh()->state['transcript'])
         ->toBe(['Сдаю трактор в Шымкенте, 10000 тг/час']);
 
+    // Этот выход тоже создаёт черновик впервые внутри exitToMenu() — тот же
+    // путь, что и в двухшаговом тесте выше, только через словесный intent.
     $paused = $session->fresh()->paused_state;
     expect($paused['node_id'])->toBe('collect')
         ->and($paused['fingerprint'])->toBe('collect-fingerprint')
-        ->and($paused['state']['exit_confirm'])->toBeFalse();
+        ->and($paused['state']['exit_confirm'])->toBeFalse()
+        ->and($paused['state']['draft_id'])->toBe(Listing::sole()->id);
 });
 
 test('a question about the service does not spend a clarification attempt', function () {

@@ -1975,6 +1975,56 @@ test('«В меню» with nothing collected releases the supplier silently — 
         ->and($session->fresh()->paused_state)->toBeNull();
 });
 
+test('a pre-filled name is not progress: the master who taps «В меню» straight away still leaves silently', function () {
+    // Кейс 322 из аудита: имя мастера бот подставил сам из контакта, и
+    // анкета от этого не стала непустой — иначе поставщик получает вопрос
+    // «Прервать анкету?», мусорный черновик с одним именем и снапшот, к
+    // которому потом предлагается вернуться.
+    ListingExtractionAgent::fake()->preventStrayPrompts();
+    $session = collectorSession(['kind' => 'repair', 'fields' => ['person_name' => 'Ерлан']]);
+    $session->contact->update(['display_name' => 'Ерлан']);
+
+    $messenger = fakeCollectorMessenger();
+    $messenger->shouldReceive('sendText')->never();
+    $messenger->shouldReceive('sendButtons')->never();
+    $messenger->shouldReceive('sendCtaUrl')->never();
+
+    $outcome = app(SupplierListingCollector::class)->resume(
+        $session,
+        repairAiNode(),
+        new InboundMessage(text: 'В меню', replyId: SupplierListingCollector::BUTTON_MENU),
+    );
+
+    expect($outcome)->toBe(AiOutcome::Completed)
+        ->and(Listing::count())->toBe(0)
+        ->and($session->fresh()->paused_state)->toBeNull()
+        ->and($session->fresh()->state['exit_confirm'])->toBeFalse();
+});
+
+test('a name the supplier said themselves is progress, even when it repeats the one already known', function () {
+    // Зеркало предыдущего: то же имя, но оно уже прошло через экстракцию —
+    // в стенограмме есть фраза, и терять её молча нельзя.
+    ListingExtractionAgent::fake()->preventStrayPrompts();
+    $session = collectorSession([
+        'kind' => 'repair',
+        'fields' => ['person_name' => 'Ерлан'],
+        'transcript' => ['Меня зовут Ерлан, чиню экскаваторы'],
+    ]);
+    $session->contact->update(['display_name' => 'Ерлан']);
+
+    fakeCollectorMessenger()->shouldReceive('sendButtons')->once()
+        ->withArgs(fn (Contact $to, string $text, array $buttons) => array_column($buttons, 'title') === ['Да, в меню', 'Продолжить анкету']);
+
+    $outcome = app(SupplierListingCollector::class)->resume(
+        $session,
+        repairAiNode(),
+        new InboundMessage(text: 'В меню', replyId: SupplierListingCollector::BUTTON_MENU),
+    );
+
+    expect($outcome)->toBe(AiOutcome::InProgress)
+        ->and($session->fresh()->state['exit_confirm'])->toBeTrue();
+});
+
 test('«Продолжить анкету» cancels the exit and repeats the interrupted question', function (InboundMessage $stay) {
     ListingExtractionAgent::fake()->preventStrayPrompts();
     $session = collectorSession([

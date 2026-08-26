@@ -207,7 +207,7 @@ class SupplierListingCollector
                 return $this->exitToMenu($session, $state);
             }
 
-            if (! $this->hasProgress($state)) {
+            if (! $this->hasProgress($session, $state)) {
                 return $this->exitToMenu($session, $state);
             }
 
@@ -588,19 +588,28 @@ class SupplierListingCollector
     /**
      * Whether the questionnaire holds anything worth keeping: an existing
      * draft — it may already hold photos or audio even when no field got
-     * extracted — or a field the extraction already filled in. The kind is
-     * excluded: it comes from the scenario node, not from the supplier, and
-     * never counts as collected content on its own. Shared by every
-     * draft-preserving exit (abandon(), exitToMenu()) so they agree on what
-     * «nothing collected» means.
+     * extracted — or a field the extraction already filled in. Two values
+     * are excluded because the supplier did not give them: the kind, which
+     * comes from the scenario node, and a name equal to the one start()
+     * pre-filled from the contact. Shared by every draft-preserving exit
+     * (abandon(), exitToMenu()) so they agree on what «nothing collected»
+     * means.
      *
      * @param  array<string, mixed>  $state
      * @param  array<string, mixed>  $attributes
      */
-    private function hasContent(array $state, array $attributes): bool
+    private function hasContent(BotSession $session, array $state, array $attributes): bool
     {
-        return $state['draft_id'] !== null
-            || collect($attributes)->except('kind')->contains(fn (mixed $value): bool => filled($value));
+        if ($state['draft_id'] !== null) {
+            return true;
+        }
+
+        $known = $this->knownName($session, $this->kind($state));
+
+        return collect($attributes)
+            ->except('kind')
+            ->contains(fn (mixed $value, string $field): bool => filled($value)
+                && ! ($field === 'person_name' && $value === $known));
     }
 
     /**
@@ -613,9 +622,9 @@ class SupplierListingCollector
      *
      * @param  array<string, mixed>  $state
      */
-    private function hasProgress(array $state): bool
+    private function hasProgress(BotSession $session, array $state): bool
     {
-        return $this->hasContent($state, $this->listingAttributes($state)) || $state['transcript'] !== [];
+        return $this->hasContent($session, $state, $this->listingAttributes($state)) || $state['transcript'] !== [];
     }
 
     /**
@@ -630,7 +639,7 @@ class SupplierListingCollector
     {
         $attributes = $this->listingAttributes($state);
 
-        if (! $this->hasContent($state, $attributes)) {
+        if (! $this->hasContent($session, $state, $attributes)) {
             $this->persist($session, $state);
             $this->messenger->sendText($session->contact, 'Хорошо, остановимся.');
 
@@ -676,9 +685,9 @@ class SupplierListingCollector
     private function exitToMenu(BotSession $session, array $state): AiOutcome
     {
         $attributes = $this->listingAttributes($state);
-        $shouldSnapshot = $this->hasProgress($state);
+        $shouldSnapshot = $this->hasProgress($session, $state);
 
-        if (! $this->hasContent($state, $attributes)) {
+        if (! $this->hasContent($session, $state, $attributes)) {
             if ($shouldSnapshot) {
                 $this->snapshotPausedState($session, $state);
             }

@@ -2,6 +2,7 @@
 
 use App\Ai\Agents\ListingExtractionAgent;
 use App\Ai\Agents\LocationChoiceAgent;
+use App\Ai\Agents\MenuRouteAgent;
 use App\Ai\Agents\SearchQueryExtractionAgent;
 use App\Enums\ListingKind;
 use Illuminate\JsonSchema\JsonSchemaTypeFactory;
@@ -27,4 +28,6 @@ test('схема агента уходит в строгом режиме и ц�
     'разбор поискового запроса (ремонт)' => fn (): object => new SearchQueryExtractionAgent(ListingKind::Repair),
     'разбор поискового запроса (водитель)' => fn (): object => new SearchQueryExtractionAgent(ListingKind::Driver),
     'выбор одноимённого места' => fn (): object => new LocationChoiceAgent([7 => 'Абайский район, Карагандинская область', 9 => 'Абайский район, Шымкент']),
+    'маршрутизация текста из меню' => fn (): object => new MenuRouteAgent(['option:supplier' => '«Кто вы?» → «Поставщик»'], 'вернуться к прерванной анкете (Аренда спецтехники)'),
+    'маршрутизация текста из меню (продолжать нечего)' => fn (): object => new MenuRouteAgent(['option:supplier' => '«Кто вы?» → «Поставщик»']),
 ]);

@@ -12,6 +12,7 @@ use App\Services\Bot\InboundMessage;
 use App\Services\Bot\MenuRoute;
 use App\Services\Bot\ScenarioDefinition;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\JsonSchema\JsonSchemaTypeFactory;
 
 uses(RefreshDatabase::class);
 
@@ -47,6 +48,24 @@ function menuRouterDefinition(): array
             ['from' => 'supplier_menu', 'output' => 'option:repair', 'to' => 'collect_repair'],
         ],
     ];
+}
+
+/**
+ * Тот же граф, но между «Сдать в аренду» и анкетой стоит текстовый блок:
+ * конструктор это разрешает, движок проходит его автопродвижением — значит
+ * опция по-прежнему ведёт ровно в узел снапшота.
+ */
+function menuRouterDefinitionThroughText(): array
+{
+    $definition = menuRouterDefinition();
+    $definition['nodes'][] = ['id' => 'intro', 'type' => 'text', 'text' => 'Отлично! Расскажите о технике'];
+    $definition['edges'] = array_map(
+        fn (array $edge): array => $edge['output'] === 'option:rent_out' ? [...$edge, 'to' => 'intro'] : $edge,
+        $definition['edges'],
+    );
+    $definition['edges'][] = ['from' => 'intro', 'output' => 'continue', 'to' => 'collect'];
+
+    return $definition;
 }
 
 /**
@@ -276,6 +295,22 @@ describe('резюме прерванной анкеты', function () {
             ->and($route->confidence)->toBe(RouteConfidence::High);
     });
 
+    test('опция ведёт в узел снапшота через промежуточный блок — это тоже Resume', function () {
+        $session = menuRouterSession(pausedListingSnapshot());
+        MenuRouteAgent::fake([['route' => 'option:rent_out', 'confidence' => 'high']]);
+
+        $route = app(AiMenuRouter::class)->route(
+            $session,
+            new ScenarioDefinition(menuRouterDefinitionThroughText()),
+            menuRouterMenuNode(),
+            new InboundMessage(text: 'хочу дополнить объявление про кран'),
+        );
+
+        expect($route)->toBeInstanceOf(MenuRoute::class)
+            ->and($route->kind)->toBe(MenuRouteKind::Resume)
+            ->and($route->option)->toBeNull();
+    });
+
     test('валидный снапшот не трогает опцию, ведущую не в узел снапшота — остаётся Option', function () {
         $session = menuRouterSession(pausedListingSnapshot());
         MenuRouteAgent::fake([['route' => 'option:customer', 'confidence' => 'high']]);
@@ -290,6 +325,85 @@ describe('резюме прерванной анкеты', function () {
         expect($route)->toBeInstanceOf(MenuRoute::class)
             ->and($route->kind)->toBe(MenuRouteKind::Option)
             ->and($route->option)->toBe(['node_id' => 'menu', 'option_id' => 'customer']);
+    });
+});
+
+describe('что доезжает до модели', function () {
+    test('в промпт уходит текст текущего меню и сообщение человека, а в инструкции — разделы графа', function () {
+        $session = menuRouterSession();
+        MenuRouteAgent::fake([['route' => 'none', 'confidence' => 'high']]);
+
+        app(AiMenuRouter::class)->route(
+            $session,
+            new ScenarioDefinition(menuRouterDefinition()),
+            menuRouterMenuNode(),
+            new InboundMessage(text: 'сдаю кран 25 тонн'),
+        );
+
+        MenuRouteAgent::assertPrompted(fn ($prompt): bool => $prompt->contains('Кто вы?')
+            && $prompt->contains('сдаю кран 25 тонн')
+            // Разделы строятся из живого графа: пустой список означал бы,
+            // что навигатору некуда вести, при полностью зелёном сьюте.
+            && str_contains((string) $prompt->agent->instructions(), '- option:supplier: «Кто вы?» → «Поставщик»')
+            && str_contains((string) $prompt->agent->instructions(), '- option:repair: «Что предлагаете?» → «Ремонт техники»'));
+    });
+
+    test('длинное сообщение доезжает обрезанным', function () {
+        $session = menuRouterSession();
+        MenuRouteAgent::fake([['route' => 'none', 'confidence' => 'high']]);
+        $long = trim(str_repeat('нужен кран ', 100));
+
+        app(AiMenuRouter::class)->route(
+            $session,
+            new ScenarioDefinition(menuRouterDefinition()),
+            menuRouterMenuNode(),
+            new InboundMessage(text: $long),
+        );
+
+        MenuRouteAgent::assertPrompted(fn ($prompt): bool => ! $prompt->contains($long)
+            && $prompt->contains(mb_substr($long, 0, 500)));
+    });
+
+    test('схема ограничивает ответ разделами графа, а resume даёт только при валидном снапшоте', function (?array $pausedState, array $expected) {
+        $session = menuRouterSession($pausedState);
+        MenuRouteAgent::fake([['route' => 'none', 'confidence' => 'high']]);
+
+        app(AiMenuRouter::class)->route(
+            $session,
+            new ScenarioDefinition(menuRouterDefinition()),
+            menuRouterMenuNode(),
+            new InboundMessage(text: 'сдаю кран 25 тонн'),
+        );
+
+        MenuRouteAgent::assertPrompted(
+            fn ($prompt): bool => $prompt->agent->schema(new JsonSchemaTypeFactory)['route']->toArray()['enum'] === $expected,
+        );
+    })->with([
+        'нечего продолжать — resume в enum нет' => [
+            null,
+            ['option:supplier', 'option:customer', 'option:rent_out', 'option:repair', 'service_question', 'none'],
+        ],
+        'валидный снапшот — resume в enum есть' => [
+            pausedListingSnapshot(),
+            ['option:supplier', 'option:customer', 'option:rent_out', 'option:repair', 'resume', 'service_question', 'none'],
+        ],
+    ]);
+
+    test('название прерванной анкеты в инструкциях названо видом объявления', function () {
+        $session = menuRouterSession(pausedListingSnapshot());
+        MenuRouteAgent::fake([['route' => 'none', 'confidence' => 'high']]);
+
+        app(AiMenuRouter::class)->route(
+            $session,
+            new ScenarioDefinition(menuRouterDefinition()),
+            menuRouterMenuNode(),
+            new InboundMessage(text: 'сдаю кран 25 тонн'),
+        );
+
+        MenuRouteAgent::assertPrompted(fn ($prompt): bool => str_contains(
+            (string) $prompt->agent->instructions(),
+            '- resume: вернуться к прерванной анкете (Аренда спецтехники)',
+        ));
     });
 });
 

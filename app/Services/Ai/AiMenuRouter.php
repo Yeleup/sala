@@ -33,6 +33,9 @@ use Throwable;
  */
 class AiMenuRouter implements MenuRouter
 {
+    /** How much of the contact's message the classifier is shown. */
+    private const int MAX_MESSAGE_CHARS = 500;
+
     public function __construct(private readonly AiAudit $audit) {}
 
     /**
@@ -131,15 +134,27 @@ class AiMenuRouter implements MenuRouter
     }
 
     /**
+     * The node's own text is context the operator wrote; the message is
+     * data the contact wrote. They go in as two separate sections, and the
+     * message is fenced so a multi-line text cannot pass itself off as one
+     * more instruction — the agent's own rules say the same in words.
+     *
+     * The message is also cut to a sane length: a menu step can receive a
+     * minutes-long voice transcription, and classifying «which section is
+     * this» needs the beginning of it, not all of it.
+     *
      * @param  array<string, mixed>  $node
      */
     private function prompt(string $text, array $node): string
     {
+        if (mb_strlen($text) > self::MAX_MESSAGE_CHARS) {
+            $text = mb_substr($text, 0, self::MAX_MESSAGE_CHARS).'…';
+        }
+
+        $message = "Сообщение человека:\n---\n{$text}\n---";
         $menuText = trim((string) ($node['text'] ?? ''));
 
-        return $menuText === ''
-            ? "Сообщение человека: {$text}"
-            : "Текст текущего меню: «{$menuText}»\n\nСообщение человека: {$text}";
+        return $menuText === '' ? $message : "Текст текущего меню: «{$menuText}»\n\n{$message}";
     }
 
     /**
@@ -182,13 +197,16 @@ class AiMenuRouter implements MenuRouter
             return null;
         }
 
-        // The chosen option leads straight into the very node the paused
+        // The chosen option leads into the very node the paused
         // questionnaire is waiting at: routing it as an ordinary Option
         // would start a second, duplicate questionnaire next to the one
         // already in progress. Resuming the existing one is what the
         // contact actually wants — code decides this, not the model.
+        // resolveTarget(), not target(): an operator is free to put a text
+        // block between the option and the questionnaire, and the engine
+        // walks straight through it.
         if ($resumeCandidate !== null
-            && $definition->target($owner['node_id'], ScenarioDefinition::optionOutput($owner['option_id'])) === $resumeCandidate['node_id']) {
+            && $definition->resolveTarget($owner['node_id'], ScenarioDefinition::optionOutput($owner['option_id'])) === $resumeCandidate['node_id']) {
             return MenuRoute::toResume($confidence);
         }
 

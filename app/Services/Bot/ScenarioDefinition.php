@@ -36,6 +36,9 @@ use App\Enums\ListingKind;
  */
 class ScenarioDefinition
 {
+    /** Safety cap on blocks walked through while resolving a destination. */
+    private const int MAX_RESOLVE_STEPS = 20;
+
     public const string OUTPUT_CONTINUE = 'continue';
 
     /**
@@ -119,6 +122,42 @@ class ScenarioDefinition
             if (($edge['from'] ?? null) === $nodeId && ($edge['output'] ?? null) === $output) {
                 return $edge['to'] ?? null;
             }
+        }
+
+        return null;
+    }
+
+    /**
+     * The block a contact actually ends up standing on after the given
+     * output is taken: the engine auto-advances through blocks that wait
+     * for nothing (a text block, «Мои объявления»), so a destination can
+     * be several «continue» edges past the edge itself. Null when the
+     * branch plays out without stopping anywhere.
+     *
+     * Pure by design — nothing is sent and no session is touched: the walk
+     * only answers «where does this lead», which the navigator needs to
+     * tell a route into a fresh questionnaire from a route back into the
+     * one already paused at that very block.
+     */
+    public function resolveTarget(string $nodeId, string $output): ?string
+    {
+        $targetId = $this->target($nodeId, $output);
+
+        // Same order of magnitude as the engine's own step cap, so a
+        // mis-published cycle of auto-advancing blocks cannot loop here.
+        for ($steps = 0; $steps < self::MAX_RESOLVE_STEPS; $steps++) {
+            $node = $this->node($targetId);
+            $type = $this->nodeType($node);
+
+            if ($node === null || $type === null) {
+                return null;
+            }
+
+            if ($type->waitsForInput()) {
+                return $targetId;
+            }
+
+            $targetId = $this->target((string) $node['id'], self::OUTPUT_CONTINUE);
         }
 
         return null;

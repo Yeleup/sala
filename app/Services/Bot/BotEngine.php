@@ -16,6 +16,7 @@ use App\Services\DereuMediaDownloader;
 use App\Services\DereuMessenger;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Support\Str;
 use Throwable;
 
@@ -57,6 +58,17 @@ class BotEngine
 
     /** The "resume the interrupted questionnaire" destination of an offer. */
     private const string NAV_ROUTE_RESUME = 'resume';
+
+    /**
+     * A voice message at a menu step is not free — it costs a
+     * transcription plus the classifier call — and a 24-hour window is
+     * open to any number that wrote once. These cap that per contact.
+     */
+    private const string VOICE_RATE_LIMIT_KEY = 'menu-voice:';
+
+    private const int VOICE_RATE_LIMIT_ATTEMPTS = 5;
+
+    private const int VOICE_RATE_LIMIT_SECONDS = 3600;
 
     public function __construct(
         private readonly DereuMessenger $messenger,
@@ -419,15 +431,24 @@ class BotEngine
     {
         $text = trim((string) $message->text);
 
+        // Живое сообщение едет в блок целиком: фото с подписью «сдаю кран»
+        // должно доехать вместе с фотографией, иначе объявление уходит на
+        // модерацию без картинок, а бот просит их заново.
+        $carried = $message;
+
         if ($text === '') {
             $text = (string) $this->transcribeVoice($session, $message);
 
             if ($text === '') {
                 return false;
             }
+
+            // Голосовое — исключение: дальше едет расшифровка, а не аудио.
+            // Оно уже скачано и оплачено, и второй заход стоил бы второй
+            // транскрипции (docs/modules/ai-assistant.md).
+            $carried = InboundMessage::fromText($text);
         }
 
-        $carried = InboundMessage::fromText($text);
         $route = $this->menuRouter->route($session, $definition, $node, $carried);
 
         if ($route === null) {
@@ -435,8 +456,13 @@ class BotEngine
         }
 
         // Про сам сервис бот отвечает сам и остаётся на текущем шаге —
-        // это не навигация, уводить человека некуда.
+        // это не навигация, уводить человека некуда. Догадка на это не
+        // тянет: низкая уверенность — ровно прежнее поведение, повтор меню.
         if ($route->kind === MenuRouteKind::ServiceQuestion) {
+            if ($route->confidence === RouteConfidence::Low) {
+                return false;
+            }
+
             $this->messenger->sendText($contact, $this->replyTexts->get(BotReplyKey::ServiceQuestion));
 
             if (! $menuJustSent) {
@@ -481,17 +507,12 @@ class BotEngine
     {
         $title = $option === null ? self::NAV_CONFIRM_RESUME_TITLE : self::NAV_CONFIRM_GO_TITLE;
 
-        $session->state = ['nav_proposal' => [
-            'route' => $option === null ? self::NAV_ROUTE_RESUME : ScenarioDefinition::optionOutput($option['option_id']),
-            'text' => $text,
-            'title' => $title,
-            'expires_at' => now()->addMinutes(self::NAV_PROPOSAL_TTL_MINUTES)->toIso8601String(),
-        ]];
-        $session->save();
-
-        // str_replace, а не sprintf: текст правит оператор, и одинокий
-        // процент в его редакции («100% техники») уронил бы sprintf с
-        // ValueError — контакт получил бы тишину вместо предложения.
+        // Отправка идёт первой, запись — только после неё: сорвавшаяся
+        // отправка ретраится джобом вебхука целиком, и предложение,
+        // записанное упавшей попыткой, затёрло бы то, которое дойдёт со
+        // следующей. str_replace, а не sprintf: текст правит оператор, и
+        // одинокий процент в его редакции («100% техники») уронил бы
+        // sprintf с ValueError — контакт получил бы тишину.
         $this->messenger->sendButtons(
             $contact,
             $option === null
@@ -499,6 +520,14 @@ class BotEngine
                 : str_replace('%s', $this->optionTitle($definition, $option['option_id']), $this->replyTexts->get(BotReplyKey::NavRouteOffer)),
             [['id' => self::NAV_CONFIRM, 'title' => $title]],
         );
+
+        $session->state = ['nav_proposal' => [
+            'route' => $option === null ? self::NAV_ROUTE_RESUME : ScenarioDefinition::optionOutput($option['option_id']),
+            'text' => $text,
+            'title' => $title,
+            'expires_at' => now()->addMinutes(self::NAV_PROPOSAL_TTL_MINUTES)->toIso8601String(),
+        ]];
+        $session->save();
     }
 
     /**
@@ -528,13 +557,16 @@ class BotEngine
 
         $session->state = null;
 
-        // Too late to act on: «nav_confirm» belongs to no block, so the flow
-        // below lands on the existing stale-button path — an honest text and
-        // the current step repeated.
+        // Too late to act on — the same honest answer a button from an
+        // older version gets: a text and the current step repeated. Handled
+        // right here rather than left to the flow below, because a typed
+        // title never reaches button routing at all: it carries no replyId,
+        // and the navigator would be paid to classify a word it has just
+        // recognized itself.
         if ($this->navProposalExpired($proposal)) {
-            $session->save();
+            $this->handleStaleButton($session, $contact, $scenario, $definition, $node, $type);
 
-            return false;
+            return true;
         }
 
         $carried = InboundMessage::fromText((string) ($proposal['text'] ?? ''));
@@ -565,12 +597,17 @@ class BotEngine
      * Пресс по кнопке предложения или набранный её титул — вся система
      * так и устроена: набрать название кнопки значит нажать её.
      *
+     * Путь титула открыт только набранному тексту: WhatsApp кладёт в текст
+     * человеческий титул нажатой кнопки, поэтому кнопка графа, названная
+     * тем же словом («Продолжить»), иначе подтверждала бы предложение
+     * вместо того, чтобы отработать саму себя.
+     *
      * @param  array<string, mixed>  $proposal
      */
     private function confirmsNavRoute(array $proposal, InboundMessage $message): bool
     {
-        if ($message->replyId === self::NAV_CONFIRM) {
-            return true;
+        if (filled($message->replyId)) {
+            return $message->replyId === self::NAV_CONFIRM;
         }
 
         $title = mb_strtolower(trim((string) ($proposal['title'] ?? '')));
@@ -608,6 +645,21 @@ class BotEngine
      */
     private function executeOptionRoute(BotSession $session, Contact $contact, ScenarioDefinition $definition, array $owner, InboundMessage $carried): void
     {
+        $pausedNode = $this->pausedNode($session, $definition);
+
+        // Ветка опции упирается в тот самый блок, на котором стоит
+        // прерванная анкета: пройти её обычным маршрутом значило бы стереть
+        // снапшот и завести вторую анкету рядом с первой. Классификатор
+        // делает ту же проверку для маршрута, который отдаёт; здесь она
+        // повторена, потому что сохранённое предложение исполняется ходом
+        // позже и уже против опубликованного сейчас графа.
+        if ($pausedNode !== null
+            && $definition->resolveTarget($owner['node_id'], ScenarioDefinition::optionOutput($owner['option_id'])) === ($pausedNode['id'] ?? null)) {
+            $this->resumeFromPaused($session, $contact, $definition, $carried);
+
+            return;
+        }
+
         $this->routeToOption($session, $contact, $definition, $owner);
 
         $node = $definition->node($session->current_node_id);
@@ -618,14 +670,16 @@ class BotEngine
     }
 
     /**
-     * Put the contact back on the questionnaire they walked out of, with the
-     * working memory the snapshot holds. The snapshot is re-validated against
-     * the definition published right now, not the one it was taken under: a
-     * republication between the offer and the confirmation could have moved
-     * or reshaped that block, and restoring answers into a question that no
-     * longer asks them is worse than starting over.
+     * The block of an interrupted questionnaire that is still worth
+     * returning to, or null. The snapshot is re-validated against the
+     * definition published right now, not the one it was taken under: a
+     * republication since could have moved or reshaped that block, and
+     * restoring answers into a question that no longer asks them is worse
+     * than starting over. The TTL itself is BotSession::pausedState()'s.
+     *
+     * @return array<string, mixed>|null
      */
-    private function resumeFromPaused(BotSession $session, Contact $contact, ScenarioDefinition $definition, InboundMessage $carried): void
+    private function pausedNode(BotSession $session, ScenarioDefinition $definition): ?array
     {
         $snapshot = $session->pausedState();
         $node = $snapshot === null ? null : $definition->node($snapshot['node_id']);
@@ -634,6 +688,22 @@ class BotEngine
             || $node === null
             || $definition->nodeType($node) !== BotNodeType::AiInput
             || $definition->nodeFingerprint($node) !== $snapshot['fingerprint']) {
+            return null;
+        }
+
+        return $node;
+    }
+
+    /**
+     * Put the contact back on the questionnaire they walked out of, with the
+     * working memory the snapshot holds.
+     */
+    private function resumeFromPaused(BotSession $session, Contact $contact, ScenarioDefinition $definition, InboundMessage $carried): void
+    {
+        $snapshot = $session->pausedState();
+        $node = $this->pausedNode($session, $definition);
+
+        if ($snapshot === null || $node === null) {
             $this->dropPausedState($session, $contact, $definition);
 
             return;
@@ -679,6 +749,23 @@ class BotEngine
         if (! $message->isVoice()) {
             return null;
         }
+
+        // На кнопочном шаге голосовое стало стоить транскрипции плюс вызова
+        // классификатора, а 24-часовое окно открывает себе любой номер,
+        // написавший однажды. Потолок держится по контакту; превышение
+        // читается ровно как сбой распознавания — повтор меню.
+        $limiterKey = self::VOICE_RATE_LIMIT_KEY.$session->contact_id;
+
+        if (RateLimiter::tooManyAttempts($limiterKey, self::VOICE_RATE_LIMIT_ATTEMPTS)) {
+            Log::warning('Voice messages at a menu step hit the hourly limit; the menu repeats instead.', [
+                'bot_session_id' => $session->id,
+                'contact_id' => $session->contact_id,
+            ]);
+
+            return null;
+        }
+
+        RateLimiter::hit($limiterKey, self::VOICE_RATE_LIMIT_SECONDS);
 
         try {
             $download = $this->mediaDownloader->download((string) $message->mediaId);

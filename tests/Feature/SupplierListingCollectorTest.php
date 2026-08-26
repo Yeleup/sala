@@ -24,6 +24,7 @@ use App\Services\DereuMediaDownloader;
 use App\Services\DereuMessenger;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\JsonSchema\JsonSchemaTypeFactory;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Storage;
 use Laravel\Ai\Prompts\TranscriptionPrompt;
 use Laravel\Ai\Transcription;
@@ -61,6 +62,9 @@ function driverAiNode(): array
 function collectorSession(array $state = []): BotSession
 {
     return BotSession::factory()->waitingAt('collect')->create([
+        // A snapshot needs a real fingerprint to carry: fixed so tests can
+        // assert paused_state copied it from the session.
+        'current_node_fingerprint' => 'collect-fingerprint',
         'state' => array_merge([
             'phase' => 'collecting',
             'attempts' => 0,
@@ -219,6 +223,22 @@ test('an empty AI block text keeps the built-in greeting', function () {
         ->withArgs(fn (Contact $to, string $text) => str_contains($text, 'Расскажите'));
 
     app(SupplierListingCollector::class)->start($session, supplierAiNode() + ['text' => '   ']);
+});
+
+test('start() clears an existing paused_state — a fresh questionnaire outdates the old snapshot', function () {
+    $session = collectorSession();
+    $session->update(['paused_state' => [
+        'node_id' => 'some_other_block',
+        'fingerprint' => 'stale-fingerprint',
+        'state' => ['phase' => 'collecting'],
+        'saved_at' => now()->toIso8601String(),
+    ]]);
+
+    fakeCollectorMessenger()->shouldReceive('sendButtons')->once();
+
+    app(SupplierListingCollector::class)->start($session, supplierAiNode());
+
+    expect($session->fresh()->paused_state)->toBeNull();
 });
 
 test('a complete description creates a draft and asks for confirmation', function () {
@@ -1853,24 +1873,51 @@ test('a refusal never lands in the listing description', function () {
         ->toBe(['Сдаю трактор в Шымкенте, 10000 тг/час']);
 });
 
-test('the «В меню» button saves the draft and ends the block, honestly', function (array $stateOverrides) {
-    // Каждая фаза анкеты — свой набор данных, дошедших до черновика:
-    // «В меню» сохраняет их точно так же, как явный отказ.
+test('the «В меню» button asks to confirm, then saves the draft and ends the block, honestly', function (array $stateOverrides) {
+    // Каждая фаза анкеты — свой набор данных, дошедших до черновика: реальные
+    // кейсы 313/316/320/321/322 из аудита — единственная кнопка «В меню»
+    // служила и «далее», и контакты теряли написанное. Первое «В меню» при
+    // непустой анкете теперь спрашивает подтверждение и не трогает
+    // экстрактор; «Да, в меню» затем сохраняет данные точно так же, как
+    // явный отказ, и оставляет снапшот прерванного шага.
     ListingExtractionAgent::fake()->preventStrayPrompts();
     $session = collectorSession($stateOverrides);
 
-    fakeCollectorMessenger()->shouldReceive('sendText')->once()
+    $messenger = fakeCollectorMessenger();
+    $messenger->shouldReceive('sendButtons')->once()
+        ->withArgs(fn (Contact $to, string $text, array $buttons) => $text === 'Прервать анкету? Всё написанное сохранится — сможете продолжить позже.'
+            && array_column($buttons, 'id') === [SupplierListingCollector::BUTTON_EXIT_CONFIRM, SupplierListingCollector::BUTTON_EXIT_STAY]
+            && array_column($buttons, 'title') === ['Да, в меню', 'Продолжить анкету']);
+    $messenger->shouldReceive('sendText')->once()
         ->withArgs(fn (Contact $to, string $text) => $text === 'Черновик сохранили — он ждёт в кабинете.');
 
-    $outcome = app(SupplierListingCollector::class)->resume(
+    $collector = app(SupplierListingCollector::class);
+
+    $firstOutcome = $collector->resume(
         $session,
         supplierAiNode(),
         new InboundMessage(text: 'В меню', replyId: SupplierListingCollector::BUTTON_MENU),
     );
 
-    expect($outcome)->toBe(AiOutcome::Completed)
+    expect($firstOutcome)->toBe(AiOutcome::InProgress)
+        ->and($session->fresh()->state['exit_confirm'])->toBeTrue()
+        ->and(Listing::count())->toBe(0);
+
+    $secondOutcome = $collector->resume(
+        $session->fresh(),
+        supplierAiNode(),
+        new InboundMessage(text: 'Да, в меню', replyId: SupplierListingCollector::BUTTON_EXIT_CONFIRM),
+    );
+
+    expect($secondOutcome)->toBe(AiOutcome::Completed)
         ->and(Listing::count())->toBe(1);
     ListingExtractionAgent::assertNeverPrompted();
+
+    $paused = $session->fresh()->paused_state;
+    expect($paused['node_id'])->toBe('collect')
+        ->and($paused['fingerprint'])->toBe('collect-fingerprint')
+        ->and($paused['state']['exit_confirm'])->toBeFalse()
+        ->and(Carbon::parse($paused['saved_at']))->toBeInstanceOf(Carbon::class);
 })->with([
     'сбор данных' => [['phase' => 'collecting', 'fields' => ['description' => 'Трактор в аренду']]],
     'подтверждение' => [['phase' => 'confirming', 'fields' => ['description' => 'Трактор в аренду']]],
@@ -1882,14 +1929,25 @@ test('the typed title of «В меню» equals pressing it — the scenario-wid
     ListingExtractionAgent::fake()->preventStrayPrompts();
     $session = collectorSession(['fields' => ['description' => 'Трактор в аренду']]);
 
-    fakeCollectorMessenger()->shouldReceive('sendText')->once()
+    $messenger = fakeCollectorMessenger();
+    $messenger->shouldReceive('sendButtons')->once()
+        ->withArgs(fn (Contact $to, string $text, array $buttons) => $text === 'Прервать анкету? Всё написанное сохранится — сможете продолжить позже.'
+            && array_column($buttons, 'id') === [SupplierListingCollector::BUTTON_EXIT_CONFIRM, SupplierListingCollector::BUTTON_EXIT_STAY]);
+    $messenger->shouldReceive('sendText')->once()
         ->withArgs(fn (Contact $to, string $text) => $text === 'Черновик сохранили — он ждёт в кабинете.');
 
-    // Без replyId — только текст, регистронезависимо и с пробелами по краям.
-    $outcome = app(SupplierListingCollector::class)
-        ->resume($session, supplierAiNode(), new InboundMessage(text: '  в МЕНЮ  '));
+    $collector = app(SupplierListingCollector::class);
 
-    expect($outcome)->toBe(AiOutcome::Completed);
+    // Без replyId — только текст, регистронезависимо и с пробелами по краям.
+    $firstOutcome = $collector->resume($session, supplierAiNode(), new InboundMessage(text: '  в МЕНЮ  '));
+
+    expect($firstOutcome)->toBe(AiOutcome::InProgress)
+        ->and($session->fresh()->state['exit_confirm'])->toBeTrue();
+
+    // Тот же принцип и на кнопке подтверждения: набранный титул тоже работает.
+    $secondOutcome = $collector->resume($session->fresh(), supplierAiNode(), new InboundMessage(text: '  Да, В МЕНЮ  '));
+
+    expect($secondOutcome)->toBe(AiOutcome::Completed);
     ListingExtractionAgent::assertNeverPrompted();
 });
 
@@ -1909,10 +1967,118 @@ test('«В меню» with nothing collected releases the supplier silently — 
     );
 
     expect($outcome)->toBe(AiOutcome::Completed)
-        ->and(Listing::count())->toBe(0);
+        ->and(Listing::count())->toBe(0)
+        ->and($session->fresh()->paused_state)->toBeNull();
 });
 
-test('a worded request for the menu (user_intent «menu») exits the block exactly like the button', function () {
+test('«Продолжить анкету» cancels the exit and repeats the interrupted question', function (InboundMessage $stay) {
+    ListingExtractionAgent::fake()->preventStrayPrompts();
+    $session = collectorSession([
+        'exit_confirm' => true,
+        'last_question' => 'Какая цена или тариф?',
+        'fields' => ['description' => 'Трактор в аренду'],
+    ]);
+
+    fakeCollectorMessenger()->shouldReceive('sendButtons')->once()
+        ->withArgs(fn (Contact $to, string $text, array $buttons) => $text === 'Какая цена или тариф?'
+            && $buttons === [['id' => SupplierListingCollector::BUTTON_MENU, 'title' => SupplierListingCollector::BUTTON_MENU_TITLE]]);
+
+    $outcome = app(SupplierListingCollector::class)->resume($session, supplierAiNode(), $stay);
+
+    expect($outcome)->toBe(AiOutcome::InProgress)
+        ->and($session->fresh()->state['exit_confirm'])->toBeFalse()
+        ->and($session->fresh()->state['phase'])->toBe('collecting');
+    ListingExtractionAgent::assertNeverPrompted();
+})->with([
+    'по id' => [new InboundMessage(replyId: SupplierListingCollector::BUTTON_EXIT_STAY, text: 'Продолжить анкету')],
+    'по набранному титулу' => [new InboundMessage(text: '  продолжить АНКЕТУ  ')],
+]);
+
+test('any input other than the exit buttons during the confirmation is treated as ordinary data and clears the flag', function () {
+    // Человек проигнорировал вопрос «Прервать анкету?» и просто продолжил
+    // диктовать — это и есть «продолжить», без отдельного нажатия кнопки.
+    ListingExtractionAgent::fake([fullExtraction()]);
+    $session = collectorSession(['exit_confirm' => true]);
+
+    fakeCollectorMessenger()->shouldReceive('sendButtons')->once()
+        ->withArgs(fn (Contact $to, string $text, array $buttons) => array_column($buttons, 'title') === ['Да, отправить', 'Исправить', 'В меню']);
+
+    $outcome = app(SupplierListingCollector::class)
+        ->resume($session, supplierAiNode(), new InboundMessage(text: 'Сдаю трактор в Шымкенте, 10000 тг/час'));
+
+    expect($outcome)->toBe(AiOutcome::InProgress)
+        ->and($session->fresh()->state['exit_confirm'])->toBeFalse()
+        ->and($session->fresh()->state['phase'])->toBe('confirming');
+    ListingExtractionAgent::assertPrompted(
+        fn ($prompt): bool => $prompt->contains('Сдаю трактор в Шымкенте, 10000 тг/час'),
+    );
+});
+
+test('a second «В меню» while the exit confirmation is open exits instead of asking again', function () {
+    ListingExtractionAgent::fake()->preventStrayPrompts();
+    $session = collectorSession([
+        'exit_confirm' => true,
+        'fields' => ['description' => 'Трактор в аренду'],
+    ]);
+
+    fakeCollectorMessenger()->shouldReceive('sendText')->once()
+        ->withArgs(fn (Contact $to, string $text) => $text === 'Черновик сохранили — он ждёт в кабинете.');
+
+    $outcome = app(SupplierListingCollector::class)->resume(
+        $session,
+        supplierAiNode(),
+        new InboundMessage(text: 'В меню', replyId: SupplierListingCollector::BUTTON_MENU),
+    );
+
+    expect($outcome)->toBe(AiOutcome::Completed)
+        ->and(Listing::count())->toBe(1);
+    ListingExtractionAgent::assertNeverPrompted();
+});
+
+test('progress made only of an undictated transcript still asks to confirm; the exit writes a snapshot without a draft line', function () {
+    // Ни одного поля не собрано и черновика нет, но фраза уже написана и
+    // уйдёт в экстракцию на следующем ходе — это тоже прогресс, который
+    // подтверждение не должно терять молча.
+    ListingExtractionAgent::fake()->preventStrayPrompts();
+    $session = collectorSession(['transcript' => ['Сдаю трактор в Шымкенте']]);
+
+    $messenger = fakeCollectorMessenger();
+    $messenger->shouldReceive('sendButtons')->once()
+        ->withArgs(fn (Contact $to, string $text, array $buttons) => $text === 'Прервать анкету? Всё написанное сохранится — сможете продолжить позже.');
+    $messenger->shouldReceive('sendText')->never();
+
+    $collector = app(SupplierListingCollector::class);
+
+    $firstOutcome = $collector->resume(
+        $session,
+        supplierAiNode(),
+        new InboundMessage(text: 'В меню', replyId: SupplierListingCollector::BUTTON_MENU),
+    );
+
+    expect($firstOutcome)->toBe(AiOutcome::InProgress);
+
+    $secondOutcome = $collector->resume(
+        $session->fresh(),
+        supplierAiNode(),
+        new InboundMessage(text: 'Да, в меню', replyId: SupplierListingCollector::BUTTON_EXIT_CONFIRM),
+    );
+
+    expect($secondOutcome)->toBe(AiOutcome::Completed)
+        ->and(Listing::count())->toBe(0);
+
+    $paused = $session->fresh()->paused_state;
+    expect($paused)->not->toBeNull()
+        ->and($paused['node_id'])->toBe('collect')
+        ->and($paused['fingerprint'])->toBe('collect-fingerprint')
+        ->and($paused['state']['exit_confirm'])->toBeFalse()
+        ->and($paused['state']['transcript'])->toBe(['Сдаю трактор в Шымкенте']);
+    ListingExtractionAgent::assertNeverPrompted();
+});
+
+test('a worded request for the menu (user_intent «menu») exits the block exactly like the button, without asking to confirm', function () {
+    // Словами — намеренно без подтверждения (подтверждение защищает от
+    // случайного тапа, а не от того, что было сказано осознанно), но
+    // снапшот пишется по тем же общим правилам.
     ListingExtractionAgent::fake([fullExtraction(['user_intent' => 'menu'])]);
     $session = collectorSession([
         'transcript' => ['Сдаю трактор в Шымкенте, 10000 тг/час'],
@@ -1932,6 +2098,11 @@ test('a worded request for the menu (user_intent «menu») exits the block exact
         // Сообщение с просьбой меню изъято: транскрипт остался как был до него.
         ->and($session->fresh()->state['transcript'])
         ->toBe(['Сдаю трактор в Шымкенте, 10000 тг/час']);
+
+    $paused = $session->fresh()->paused_state;
+    expect($paused['node_id'])->toBe('collect')
+        ->and($paused['fingerprint'])->toBe('collect-fingerprint')
+        ->and($paused['state']['exit_confirm'])->toBeFalse();
 });
 
 test('a question about the service does not spend a clarification attempt', function () {

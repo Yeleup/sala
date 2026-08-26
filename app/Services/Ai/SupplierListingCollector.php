@@ -113,6 +113,19 @@ class SupplierListingCollector
     public const string BUTTON_MENU_TITLE = 'В меню';
 
     /**
+     * Confirms leaving a non-empty questionnaire — offered next to
+     * BUTTON_EXIT_STAY only while state['exit_confirm'] is set.
+     */
+    public const string BUTTON_EXIT_CONFIRM = 'collect_exit_yes';
+
+    public const string BUTTON_EXIT_CONFIRM_TITLE = 'Да, в меню';
+
+    /** Cancels the exit and repeats whatever step it interrupted. */
+    public const string BUTTON_EXIT_STAY = 'collect_exit_no';
+
+    public const string BUTTON_EXIT_STAY_TITLE = 'Продолжить анкету';
+
+    /**
      * WhatsApp lists hold at most 10 rows: at most this many places, the
      * last row reserved for the «В меню» exit. A candidate left out is
      * still pickable by typing its exact name — matchLocationChoice
@@ -156,7 +169,11 @@ class SupplierListingCollector
             'button_prompts' => [],
             'button_answers' => [],
             'awaiting_document' => false,
+            'exit_confirm' => false,
         ];
+        // A fresh questionnaire outdates whatever an earlier one left behind
+        // to resume — restoring it is not this method's job (see task 4).
+        $session->paused_state = null;
         $session->save();
 
         $this->messenger->sendButtons(
@@ -178,11 +195,41 @@ class SupplierListingCollector
         // «В меню» — by button tap or its typed title, the scenario-wide
         // convention that typing a button's name equals pressing it
         // (matchesButton already covers BUTTON_SUBMIT/BUTTON_EDIT the same
-        // way) — releases the supplier regardless of the phase.
+        // way) — releases the supplier regardless of the phase. Real cases
+        // 313/316/320/321/322 from the audit: the single button doubled as
+        // «next», and contacts tapping it through a multi-step questionnaire
+        // lost what they had already written. A non-empty questionnaire now
+        // asks to confirm first; a second «В меню» while that question is
+        // still open is the same intent asked twice, not a fresh request, so
+        // it exits instead of looping the question forever.
         if ($this->matchesButton($message, self::BUTTON_MENU, self::BUTTON_MENU_TITLE)) {
-            return $this->exitToMenu($session, $state);
+            if ($state['exit_confirm'] === true) {
+                return $this->exitToMenu($session, $state);
+            }
+
+            if (! $this->hasProgress($state)) {
+                return $this->exitToMenu($session, $state);
+            }
+
+            return $this->askExitConfirmation($session, $state);
         }
 
+        if ($state['exit_confirm'] === true) {
+            return $this->resolveExitConfirmation($session, $state, $message, $node);
+        }
+
+        return $this->dispatchPhase($session, $state, $message, $node);
+    }
+
+    /**
+     * The block's ordinary per-phase routing, shared by an untouched turn
+     * and one that just fell through the exit confirmation unanswered.
+     *
+     * @param  array<string, mixed>  $state
+     * @param  array<string, mixed>  $node
+     */
+    private function dispatchPhase(BotSession $session, array $state, InboundMessage $message, array $node): AiOutcome
+    {
         if ($state['phase'] === 'confirming') {
             return $this->handleConfirmation($session, $state, $message, $node);
         }
@@ -196,6 +243,59 @@ class SupplierListingCollector
         }
 
         return $this->handleCollecting($session, $state, $message, $node);
+    }
+
+    /**
+     * Ask whether the supplier really means to leave a non-empty
+     * questionnaire, with one button per answer. The question itself spends
+     * no clarification attempt and never touches the extractor — it is not
+     * listing data.
+     *
+     * @param  array<string, mixed>  $state
+     */
+    private function askExitConfirmation(BotSession $session, array $state): AiOutcome
+    {
+        $state['exit_confirm'] = true;
+        $this->persist($session, $state);
+        $this->messenger->sendButtons(
+            $session->contact,
+            $this->replyTexts->get(BotReplyKey::CollectExitConfirm),
+            [
+                ['id' => self::BUTTON_EXIT_CONFIRM, 'title' => self::BUTTON_EXIT_CONFIRM_TITLE],
+                ['id' => self::BUTTON_EXIT_STAY, 'title' => self::BUTTON_EXIT_STAY_TITLE],
+            ],
+        );
+
+        return AiOutcome::InProgress;
+    }
+
+    /**
+     * The answer to the exit confirmation: leave, stay and repeat whatever
+     * the exit interrupted, or — anything else — the supplier ignored the
+     * question and kept dictating, which is itself a «stay». The flag is
+     * cleared in every case but the first: a resolved question must not
+     * keep intercepting BUTTON_EXIT_CONFIRM/BUTTON_EXIT_STAY-shaped input on
+     * a later, unrelated turn.
+     *
+     * @param  array<string, mixed>  $state
+     * @param  array<string, mixed>  $node
+     */
+    private function resolveExitConfirmation(BotSession $session, array $state, InboundMessage $message, array $node): AiOutcome
+    {
+        if ($this->matchesButton($message, self::BUTTON_EXIT_CONFIRM, self::BUTTON_EXIT_CONFIRM_TITLE)) {
+            return $this->exitToMenu($session, $state);
+        }
+
+        $state['exit_confirm'] = false;
+
+        if ($this->matchesButton($message, self::BUTTON_EXIT_STAY, self::BUTTON_EXIT_STAY_TITLE)) {
+            $this->persist($session, $state);
+            $this->repeatCurrentStep($session, $state, $node);
+
+            return AiOutcome::InProgress;
+        }
+
+        return $this->dispatchPhase($session, $state, $message, $node);
     }
 
     /**
@@ -486,6 +586,39 @@ class SupplierListingCollector
     }
 
     /**
+     * Whether the questionnaire holds anything worth keeping: an existing
+     * draft — it may already hold photos or audio even when no field got
+     * extracted — or a field the extraction already filled in. The kind is
+     * excluded: it comes from the scenario node, not from the supplier, and
+     * never counts as collected content on its own. Shared by every
+     * draft-preserving exit (abandon(), exitToMenu()) so they agree on what
+     * «nothing collected» means.
+     *
+     * @param  array<string, mixed>  $state
+     * @param  array<string, mixed>  $attributes
+     */
+    private function hasContent(array $state, array $attributes): bool
+    {
+        return $state['draft_id'] !== null
+            || collect($attributes)->except('kind')->contains(fn (mixed $value): bool => filled($value));
+    }
+
+    /**
+     * Whether the questionnaire has anything an interruption would lose: the
+     * draft/field content hasContent() checks, or a transcript entry not yet
+     * run through the extractor — undictated is still progress, since the
+     * next turn's extraction call would turn it into fields. Gates the exit
+     * confirmation (askExitConfirmation()): an empty questionnaire leaves
+     * straight through exitToMenu() as before, case 322 from the audit.
+     *
+     * @param  array<string, mixed>  $state
+     */
+    private function hasProgress(array $state): bool
+    {
+        return $this->hasContent($state, $this->listingAttributes($state)) || $state['transcript'] !== [];
+    }
+
+    /**
      * An explicit refusal releases the supplier through the block's own
      * «continue» output. Whatever was collected is kept as a draft, but no
      * CTA to the web form goes out: the person just said they do not want
@@ -497,14 +630,7 @@ class SupplierListingCollector
     {
         $attributes = $this->listingAttributes($state);
 
-        // An existing draft counts as content on its own — it may already
-        // hold photos or audio even when no field got extracted. The kind
-        // comes from the scenario node, not from the supplier, so it never
-        // counts as collected content.
-        $hasContent = $state['draft_id'] !== null
-            || collect($attributes)->except('kind')->contains(fn (mixed $value): bool => filled($value));
-
-        if (! $hasContent) {
+        if (! $this->hasContent($state, $attributes)) {
             $this->persist($session, $state);
             $this->messenger->sendText($session->contact, 'Хорошо, остановимся.');
 
@@ -532,16 +658,29 @@ class SupplierListingCollector
      * would just repeat what the empty exit already says by saying
      * nothing.
      *
+     * Whenever there is any progress to lose (hasProgress() — a broader
+     * check than the draft/field content below, since a bare transcript
+     * still counts), a snapshot of exactly where the dialog stood goes into
+     * paused_state first: a future resume (task 4) needs it to restore the
+     * step, and exit_confirm is forced false inside it so the very next
+     * answer after a resume is not mistaken for the confirmation branch.
+     *
      * @param  array<string, mixed>  $state
      */
     private function exitToMenu(BotSession $session, array $state): AiOutcome
     {
         $attributes = $this->listingAttributes($state);
 
-        $hasContent = $state['draft_id'] !== null
-            || collect($attributes)->except('kind')->contains(fn (mixed $value): bool => filled($value));
+        if ($this->hasProgress($state)) {
+            $session->paused_state = [
+                'node_id' => $session->current_node_id,
+                'fingerprint' => $session->current_node_fingerprint,
+                'state' => [...$state, 'exit_confirm' => false],
+                'saved_at' => now()->toIso8601String(),
+            ];
+        }
 
-        if (! $hasContent) {
+        if (! $this->hasContent($state, $attributes)) {
             $this->persist($session, $state);
 
             return AiOutcome::Completed;
@@ -1659,6 +1798,7 @@ class SupplierListingCollector
             'button_prompts' => [],
             'button_answers' => [],
             'awaiting_document' => false,
+            'exit_confirm' => false,
         ], $session->state ?? []);
     }
 

@@ -7,6 +7,8 @@ use App\Models\Contact;
 use App\Services\Bot\AiAssistant;
 use App\Services\Bot\BotEngine;
 use App\Services\Bot\InboundMessage;
+use App\Services\Bot\MenuRouter;
+use App\Services\Bot\NullMenuRouter;
 use App\Services\Bot\PassthroughAiAssistant;
 use App\Services\Bot\ScenarioDefinition;
 use App\Services\DereuMessenger;
@@ -14,6 +16,11 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 use Mockery\MockInterface;
 
 uses(RefreshDatabase::class);
+
+// Этот файл проверяет сам движок, а не ИИ-навигатора: без заглушки
+// нераспознанный текст и первое сообщение диалога уходили бы в модель.
+// Маршрутизация меню живёт в BotEngineMenuRoutingTest.
+beforeEach(fn () => app()->bind(MenuRouter::class, NullMenuRouter::class));
 
 /**
  * Старт → приветствие (текст) → меню ролей (кнопки) с двумя ветками;

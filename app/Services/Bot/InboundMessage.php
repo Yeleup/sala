@@ -55,6 +55,20 @@ class InboundMessage
         );
     }
 
+    /**
+     * A plain text message the engine composes itself rather than receives:
+     * the AI navigator carries text it already holds — a voice transcription,
+     * or the text saved with a navigation proposal — into the block it routes
+     * to. Deliberately carries nothing else: the audio has already been
+     * transcribed (a second download would be paid for twice), and the
+     * pressed confirmation button belongs to the navigator, not to the block
+     * the text lands in.
+     */
+    public static function fromText(string $text): self
+    {
+        return new self(text: $text);
+    }
+
     public static function fromWebhookEvent(DereuWebhookEvent $event): self
     {
         $type = (string) ($event->payload['type'] ?? '');

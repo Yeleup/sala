@@ -155,6 +155,38 @@ class ScenarioDefinition
     }
 
     /**
+     * Every option of every buttons/list node in the graph, keyed by option
+     * id (ids are unique graph-wide — see optionOwner()). The AI
+     * navigator's catalog of possible destinations for a message that
+     * matched none of the current menu's own buttons: deliberately not
+     * limited to the current node, since a message may name a more
+     * specific option nested elsewhere in the graph.
+     *
+     * @return array<string, array{node_id: string, option_id: string, title: string, context: string}>
+     */
+    public function menuOptions(): array
+    {
+        $options = [];
+
+        foreach ($this->definition['nodes'] ?? [] as $node) {
+            if (! in_array($this->nodeType($node), [BotNodeType::ButtonMenu, BotNodeType::ListMenu], true)) {
+                continue;
+            }
+
+            foreach ($this->options($node) as $option) {
+                $options[$option['id']] = [
+                    'node_id' => (string) $node['id'],
+                    'option_id' => (string) $option['id'],
+                    'title' => (string) ($option['title'] ?? ''),
+                    'context' => (string) ($node['text'] ?? ''),
+                ];
+            }
+        }
+
+        return $options;
+    }
+
+    /**
      * Whether the flow must stop at this block for the contact's reply.
      * A «WhatsApp-сообщение» block without buttons is fire-and-forget.
      *

@@ -83,6 +83,26 @@ describe('читатель BotReplyTexts', function () {
 
         expect($texts->get(BotReplyKey::StaleButton))->toBe('Свой текст');
     });
+
+    test('новые ключи навигации без переопределений возвращают стандартный текст', function (BotReplyKey $key) {
+        expect(app(BotReplyTexts::class)->get($key))->toBe($key->default());
+    })->with([
+        BotReplyKey::NavRouteOffer,
+        BotReplyKey::NavResumeOffer,
+        BotReplyKey::NavResumed,
+        BotReplyKey::CollectExitConfirm,
+    ]);
+
+    test('строка в таблице переопределяет стандартный текст новых ключей навигации', function (BotReplyKey $key) {
+        BotReplyText::query()->create(['key' => $key->value, 'text' => 'Свой текст']);
+
+        expect(app(BotReplyTexts::class)->get($key))->toBe('Свой текст');
+    })->with([
+        BotReplyKey::NavRouteOffer,
+        BotReplyKey::NavResumeOffer,
+        BotReplyKey::NavResumed,
+        BotReplyKey::CollectExitConfirm,
+    ]);
 });
 
 describe('страница «Ответы бота»', function () {

@@ -15,6 +15,7 @@ enum AiOperationType: string implements HasLabel
     case SearchQueryExtraction = 'search_query_extraction';
     case Transcription = 'transcription';
     case Embedding = 'embedding';
+    case MenuRouting = 'menu_routing';
 
     public function getLabel(): string
     {
@@ -24,6 +25,7 @@ enum AiOperationType: string implements HasLabel
             self::SearchQueryExtraction => 'Разбор поискового запроса',
             self::Transcription => 'Транскрибация аудио',
             self::Embedding => 'Векторизация для поиска',
+            self::MenuRouting => 'Маршрутизация текста из меню',
         };
     }
 }

@@ -3,6 +3,7 @@
 use App\Console\Commands\ProcessScenarioRunTimeouts;
 use App\Console\Commands\RedispatchUnprocessedDereuEvents;
 use App\Console\Commands\RunListingRenewalCycle;
+use App\Console\Commands\SyncWhatsappTemplates;
 use Illuminate\Foundation\Inspiring;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Schedule;
@@ -10,6 +11,11 @@ use Illuminate\Support\Facades\Schedule;
 Artisan::command('inspire', function () {
     $this->comment(Inspiring::quote());
 })->purpose('Display an inspiring quote');
+
+// Deliberately before the 04:00 renewal cycle — the day's biggest template
+// send: a category re-classification or a revoked approval must be in the
+// registry (and alerted on) before the cycle starts paying per message.
+Schedule::command(SyncWhatsappTemplates::class)->dailyAt('03:30');
 
 // The 30-day relevance cycle: 04:00 UTC ≈ 10:00 по Астане, so the poll
 // lands in the supplier's morning.

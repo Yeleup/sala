@@ -2,12 +2,14 @@
 
 use App\Enums\WhatsappTemplateCategory;
 use App\Enums\WhatsappTemplateStatus;
+use App\Models\User;
 use App\Models\WhatsappTemplate;
 use App\Services\WhatsappTemplateRegistry;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\Request;
 use Illuminate\Http\Client\RequestException;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
 
 uses(RefreshDatabase::class);
 
@@ -214,6 +216,79 @@ test('верхний регистр от Meta разбирается, а не г
     expect(WhatsappTemplate::query()->where('name', 'listing_renewal')->sole())
         ->status->toBe(WhatsappTemplateStatus::Approved)
         ->category->toBe(WhatsappTemplateCategory::Marketing);
+});
+
+test('транзиентно пустой ответ Dereu не сносит локальный реестр', function () {
+    WhatsappTemplate::factory()->approved()->create();
+    WhatsappTemplate::factory()->create();
+    fakeRemoteTemplates([]);
+
+    // Пустой список неотличим от «в Meta удалили всё разом»: поверив ему,
+    // синхронизация снесла бы весь реестр — включая утверждённые шаблоны,
+    // через которые идут все уведомления. Отказ безопаснее доверия.
+    expect(fn () => app(WhatsappTemplateRegistry::class)->sync())->toThrow(RuntimeException::class)
+        ->and(WhatsappTemplate::count())->toBe(2);
+});
+
+test('пустой ответ при пустом локальном реестре — штатная синхронизация', function () {
+    fakeRemoteTemplates([]);
+
+    expect(app(WhatsappTemplateRegistry::class)->sync())->toBe(['total' => 0, 'changes' => []]);
+});
+
+test('об изменениях реестра узнаёт каждый администратор — и журнал ошибок', function () {
+    Log::spy();
+    $admins = User::factory()->count(2)->create();
+    WhatsappTemplate::factory()->approved()->create([
+        'name' => 'several_listings_renewal',
+        'language' => 'ru',
+        'category' => WhatsappTemplateCategory::Utility,
+    ]);
+
+    fakeRemoteTemplates([[
+        'id' => 7,
+        'name' => 'several_listings_renewal',
+        'language' => 'ru',
+        'category' => 'marketing',
+        'status' => 'approved',
+        'components' => [['type' => 'BODY', 'text' => 'Текст.']],
+    ]]);
+
+    app(WhatsappTemplateRegistry::class)->sync();
+
+    // Флеш-уведомление кнопки видит только нажавший, а плановую ночную
+    // синхронизацию не видит никто: подорожание вчетверо должно долежать
+    // до каждого администратора и до мониторинга error-лога.
+    Log::shouldHaveReceived('error')->once();
+
+    $admins->each(function (User $admin): void {
+        $notification = $admin->notifications()->sole();
+
+        expect($notification->data['title'])->toContain('Meta изменила шаблоны')
+            ->and($notification->data['body'])->toContain('several_listings_renewal');
+    });
+});
+
+test('синхронизация без изменений не тревожит администраторов', function () {
+    $admin = User::factory()->create();
+    WhatsappTemplate::factory()->approved()->create([
+        'name' => 'listing_renewal',
+        'language' => 'ru',
+        'category' => WhatsappTemplateCategory::Utility,
+    ]);
+
+    fakeRemoteTemplates([[
+        'id' => 7,
+        'name' => 'listing_renewal',
+        'language' => 'ru',
+        'category' => 'utility',
+        'status' => 'approved',
+        'components' => [['type' => 'BODY', 'text' => 'Текст.']],
+    ]]);
+
+    app(WhatsappTemplateRegistry::class)->sync();
+
+    expect($admin->notifications()->count())->toBe(0);
 });
 
 test('нераспознанное значение не понижает уже известный шаблон', function () {

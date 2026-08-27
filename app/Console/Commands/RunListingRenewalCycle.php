@@ -27,10 +27,16 @@ use Illuminate\Support\Collection;
  *
  * A batch that cannot go out (the batch template is not approved by Meta
  * yet, a transport failure) degrades to the per-listing questions right
- * here, in the same run. There is no second chance: a publication is
- * pollable only on its last day, and the next run archives it. Silence
- * would cost the supplier his whole search presence — twelve paid
- * templates are the cheaper accident.
+ * here, in the same run: silence would cost the supplier his whole
+ * search presence, and twelve paid templates are the cheaper accident.
+ * A question that still went unasked (nothing could be sent, or Meta
+ * rejected the accepted message asynchronously — see
+ * ListingRenewalPollFailureHandler) gets exactly one more cycle: the
+ * expired-but-unasked publication is spared for a grace day and re-polled
+ * by the next run instead of being archived without a question ever
+ * reaching the supplier. One retry only — after the grace day the
+ * archive is unconditional, so an unreachable supplier cannot keep a
+ * dead listing in the search.
  *
  * The poll itself is orchestrated by the published «Истекает объявление»
  * / «Истекает несколько объявлений» scenarios (an isolated run per poll);
@@ -44,6 +50,17 @@ class RunListingRenewalCycle extends Command
 {
     public function handle(ScenarioRunner $runner, ListingRenewalNotifier $notifier): int
     {
+        // The archive pass runs first: the poll window reaches one grace
+        // day past the expiry, so an expired-but-unasked listing being
+        // re-polled below must not be archived by the very same run.
+        $archived = 0;
+
+        Listing::query()->expiredWithoutConfirmation()->get()
+            ->each(function (Listing $listing) use (&$archived): void {
+                $listing->archive();
+                $archived++;
+            });
+
         $polled = 0;
 
         Listing::query()->dueForRenewalPoll()->with('supplier')->get()
@@ -51,14 +68,6 @@ class RunListingRenewalCycle extends Command
             ->each(function (Collection $listings) use ($runner, $notifier, &$polled): void {
                 /** @var Collection<int, Listing> $listings */
                 $polled += $this->pollSupplier($listings, $runner, $notifier);
-            });
-
-        $archived = 0;
-
-        Listing::query()->expiredWithoutConfirmation()->get()
-            ->each(function (Listing $listing) use (&$archived): void {
-                $listing->archive();
-                $archived++;
             });
 
         $this->info("Опросов отправлено: {$polled}, заархивировано: {$archived}.");

@@ -33,8 +33,10 @@ class ListingRenewalNotifier
     public function __construct(private readonly DereuMessenger $messenger) {}
 
     /**
-     * True when the poll went out; false leaves the listing unpolled so
-     * the next daily cycle retries (e.g. the template is not approved yet).
+     * True when the poll went out; false leaves the listing unpolled
+     * (e.g. the template is not approved yet) — the next daily cycle then
+     * retries once on the grace day before the expired listing archives
+     * (see Listing::dueForRenewalPoll).
      */
     public function sendPoll(Listing $listing): bool
     {
@@ -94,8 +96,9 @@ class ListingRenewalNotifier
 
     /**
      * The batch variant: one question about every listing of the batch.
-     * True when the poll went out; false leaves the whole batch unpolled
-     * so the next daily cycle retries it.
+     * True when the poll went out; false leaves the whole batch unpolled —
+     * the next daily cycle then retries once on the grace day before the
+     * expired listings archive (see Listing::dueForRenewalPoll).
      */
     public function sendBatchPoll(ListingRenewalBatch $batch): bool
     {

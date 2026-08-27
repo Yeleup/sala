@@ -397,8 +397,13 @@ class Listing extends Model
     }
 
     /**
-     * Published listings whose 30-day period ends within a day and that
-     * have not been polled in this period yet.
+     * Published listings due for the 30-day relevance poll: unpolled and
+     * inside the polling window — the last day of the period plus one
+     * grace day past it. The grace day exists for publications whose poll
+     * never went out (a send failure, or Meta rejected the accepted
+     * message asynchronously and the failure handler unmarked the
+     * listing): they get exactly one more cycle to be actually asked
+     * before the auto-archive takes them.
      */
     #[Scope]
     protected function dueForRenewalPoll(Builder $query): void
@@ -406,20 +411,29 @@ class Listing extends Model
         $query
             ->where('status', ListingStatus::Published)
             ->whereNull('renewal_requested_at')
-            ->where('expires_at', '>', now())
+            ->where('expires_at', '>', now()->subDay())
             ->where('expires_at', '<=', now()->addDay());
     }
 
     /**
      * Published listings whose period ran out without a confirmation —
-     * they auto-archive («мёртвые души» leave the search).
+     * they auto-archive («мёртвые души» leave the search). A listing that
+     * was never actually asked (the poll failed to go out or to deliver)
+     * is spared for one grace day so the poll can be retried; after that
+     * it archives regardless — an unreachable supplier must not keep a
+     * dead listing in the search forever.
      */
     #[Scope]
     protected function expiredWithoutConfirmation(Builder $query): void
     {
         $query
             ->where('status', ListingStatus::Published)
-            ->where('expires_at', '<=', now());
+            ->where('expires_at', '<=', now())
+            ->where(function (Builder $query): void {
+                $query
+                    ->whereNotNull('renewal_requested_at')
+                    ->orWhere('expires_at', '<=', now()->subDay());
+            });
     }
 
     /**

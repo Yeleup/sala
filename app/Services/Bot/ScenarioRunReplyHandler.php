@@ -36,6 +36,23 @@ class ScenarioRunReplyHandler
     }
 
     /**
+     * The run token out of a flow:{token}:{option} button payload — the
+     * reverse of payload(), used to tie an undelivered scenario message
+     * back to its run. Null for any other button id.
+     */
+    public static function runToken(string $replyId): ?string
+    {
+        if (! str_starts_with($replyId, self::PAYLOAD_PREFIX)) {
+            return null;
+        }
+
+        $rest = substr($replyId, strlen(self::PAYLOAD_PREFIX));
+        $separator = strpos($rest, ':');
+
+        return $separator === false ? null : substr($rest, 0, $separator);
+    }
+
+    /**
      * True when the message was a run button reply and is fully handled —
      * the engine must not run the main dialog for it.
      */

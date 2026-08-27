@@ -81,6 +81,17 @@ class MetaDeliveryError
      */
     private const string UNKNOWN_CAUSE = 'Meta не назвала причину';
 
+    /**
+     * Codes that condemn the whole account rather than one recipient:
+     * while one of them stands, sends are dying to everyone, so monitoring
+     * must not wait for these failures to accumulate a share — a single
+     * one is already the incident (July 2026: 527 of 528 templates were
+     * killed by 131042 before anyone looked at a counter).
+     *
+     * @var list<int>
+     */
+    private const array ACCOUNT_LEVEL_CODES = [131042, 131048, 131064, 130429];
+
     public static function explain(?string $reason): string
     {
         if ($reason === null || trim($reason) === '') {
@@ -94,6 +105,23 @@ class MetaDeliveryError
         }
 
         return self::CAUSES[$code] ?? $reason;
+    }
+
+    /**
+     * The account-level code carried by the reason, or null when the reason
+     * is absent, unrecognised, or blames the recipient rather than the
+     * account. Reuses the same guarded extraction as explain(), so a code
+     * never gets read out of the middle of a phone number or business_id.
+     */
+    public static function accountLevelCode(?string $reason): ?int
+    {
+        if ($reason === null) {
+            return null;
+        }
+
+        $code = self::code($reason);
+
+        return in_array($code, self::ACCOUNT_LEVEL_CODES, true) ? $code : null;
     }
 
     /**

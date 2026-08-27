@@ -129,7 +129,7 @@ class ListingModerationNotifier
 
             return ModerationNoticeOutcome::Delivered;
         } catch (Throwable $e) {
-            Log::warning('Failed to deliver the moderation verdict to the supplier.', [
+            Log::error('Failed to deliver the moderation verdict to the supplier.', [
                 'listing_id' => $listing->id,
                 'error' => $e->getMessage(),
             ]);

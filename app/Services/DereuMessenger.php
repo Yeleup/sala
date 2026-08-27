@@ -221,6 +221,16 @@ class DereuMessenger
             // original failure.
             $this->journalFailedSend($contact, $type, $payload, $template, $e);
 
+            // Error level regardless of what the caller does with the
+            // exception: a synchronous 429/5xx from Dereu is the same dead
+            // channel as Meta's async rejection, and monitoring counts
+            // error lines, not swallowed throwables.
+            Log::error('WhatsApp send failed synchronously.', [
+                'contact_id' => $contact->id,
+                'type' => $type,
+                'error' => $e->getMessage(),
+            ]);
+
             throw $e;
         }
 

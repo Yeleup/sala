@@ -1,5 +1,6 @@
 <?php
 
+use App\Console\Commands\MonitorWhatsappDeliveryFailures;
 use App\Console\Commands\ProcessScenarioRunTimeouts;
 use App\Console\Commands\RedispatchUnprocessedDereuEvents;
 use App\Console\Commands\RunListingRenewalCycle;
@@ -24,3 +25,9 @@ Schedule::command(ProcessScenarioRunTimeouts::class)->hourly();
 // and never re-dispatches, so only this sweep stands between such an event
 // and the bot silently ignoring the message.
 Schedule::command(RedispatchUnprocessedDereuEvents::class)->everyFiveMinutes();
+
+// The active alarm of the WhatsApp channel: failed counters on the chat
+// and report pages are passive, and the July 2026 incident (527 of 528
+// templates killed by code 131042) was noticed late. Five minutes keeps
+// the reaction time close to the alert's own sliding window.
+Schedule::command(MonitorWhatsappDeliveryFailures::class)->everyFiveMinutes();

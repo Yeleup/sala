@@ -80,7 +80,7 @@ class CustomerRequestNotifier
 
             return true;
         } catch (Throwable $e) {
-            Log::warning('Failed to notify the supplier about a customer request.', [
+            Log::error('Failed to notify the supplier about a customer request.', [
                 'customer_request_id' => $request->id,
                 'error' => $e->getMessage(),
             ]);

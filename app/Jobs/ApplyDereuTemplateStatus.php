@@ -6,6 +6,7 @@ use App\Enums\WhatsappTemplateStatus;
 use App\Models\DereuCompany;
 use App\Models\DereuWebhookEvent;
 use App\Models\WhatsappTemplate;
+use App\Services\WhatsappTemplateAlerts;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
 use Illuminate\Support\Facades\Log;
@@ -26,7 +27,7 @@ class ApplyDereuTemplateStatus implements ShouldQueue
 
     public function __construct(public DereuWebhookEvent $event) {}
 
-    public function handle(): void
+    public function handle(WhatsappTemplateAlerts $alerts): void
     {
         $event = $this->event->fresh();
 
@@ -64,16 +65,27 @@ class ApplyDereuTemplateStatus implements ShouldQueue
         }
 
         if ($name !== '' && $language !== '' && $status !== null) {
-            WhatsappTemplate::query()
+            $template = WhatsappTemplate::query()
                 ->where('name', $name)
                 ->where('language', $language)
-                ->first()
-                ?->update([
-                    'status' => $status,
-                    'rejection_reason' => $status === WhatsappTemplateStatus::Rejected
-                        ? ($payload['reason'] ?? null)
-                        : null,
-                ]);
+                ->first();
+
+            $becameRejected = $template !== null
+                && $status === WhatsappTemplateStatus::Rejected
+                && $template->status !== WhatsappTemplateStatus::Rejected;
+
+            $template?->update([
+                'status' => $status,
+                'rejection_reason' => $status === WhatsappTemplateStatus::Rejected
+                    ? ($payload['reason'] ?? null)
+                    : null,
+            ]);
+
+            // Only the transition alarms: a redelivered verdict about an
+            // already rejected template adds nothing but noise.
+            if ($becameRejected) {
+                $alerts->templateRejected($template);
+            }
         }
 
         $event->update(['processed_at' => now()]);

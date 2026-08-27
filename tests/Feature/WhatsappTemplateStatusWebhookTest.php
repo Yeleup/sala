@@ -3,8 +3,10 @@
 use App\Enums\WhatsappTemplateStatus;
 use App\Jobs\ApplyDereuTemplateStatus;
 use App\Models\DereuWebhookEvent;
+use App\Models\User;
 use App\Models\WhatsappTemplate;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Str;
 use Illuminate\Testing\TestResponse;
@@ -90,6 +92,48 @@ test('a re-approval after rejection clears the stored reason', function () {
     expect(WhatsappTemplate::sole())
         ->status->toBe(WhatsappTemplateStatus::Approved)
         ->rejection_reason->toBeNull();
+});
+
+test('переход шаблона в «Отклонён» будит администраторов', function () {
+    Log::spy();
+    $admin = User::factory()->create();
+    connectedDereuCompany(['dereu_company_id' => 'co_abc123']);
+    WhatsappTemplate::factory()->create(['name' => 'listing_renewal', 'language' => 'ru']);
+
+    postSignedTemplateStatus(templateStatusPayload([
+        'payload' => [
+            'name' => 'listing_renewal',
+            'language' => 'ru',
+            'status' => 'rejected',
+            'reason' => 'INVALID_FORMAT: пример не совпадает с переменными',
+        ],
+    ]));
+
+    // Отклонённый шаблон молча глушит каждый поток, который шлёт через
+    // него вне окна; строчка в реестре сама себя не покажет — тревога
+    // должна дойти до каждого администратора и до мониторинга.
+    Log::shouldHaveReceived('error')->once();
+
+    $notification = $admin->notifications()->sole();
+    expect($notification->data['title'])->toContain('listing_renewal')
+        ->and($notification->data['body'])->toContain('INVALID_FORMAT');
+});
+
+test('повторное отклонение уже отклонённого шаблона тревогу не дублирует', function () {
+    $admin = User::factory()->create();
+    connectedDereuCompany(['dereu_company_id' => 'co_abc123']);
+    WhatsappTemplate::factory()->rejected()->create(['name' => 'listing_renewal', 'language' => 'ru']);
+
+    postSignedTemplateStatus(templateStatusPayload([
+        'payload' => [
+            'name' => 'listing_renewal',
+            'language' => 'ru',
+            'status' => 'rejected',
+            'reason' => 'Отклонён повторно',
+        ],
+    ]));
+
+    expect($admin->notifications()->count())->toBe(0);
 });
 
 test('an event of an unknown template is acknowledged without creating anything', function () {

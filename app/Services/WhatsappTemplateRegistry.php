@@ -17,7 +17,10 @@ use RuntimeException;
  */
 class WhatsappTemplateRegistry
 {
-    public function __construct(private readonly DereuPlatformClient $client) {}
+    public function __construct(
+        private readonly DereuPlatformClient $client,
+        private readonly WhatsappTemplateAlerts $alerts,
+    ) {}
 
     /**
      * Register a template with Meta and store the local pending row. The
@@ -74,8 +77,8 @@ class WhatsappTemplateRegistry
      * locally. Local rows that no longer exist remotely are removed.
      *
      * The sync is the only channel through which Meta's own verdict about
-     * a template reaches this system — the template_status_update webhook
-     * carries no category — so it reports what it changed instead of
+     * a template's category reaches this system — the template_status_update
+     * webhook carries no category — so it reports what it changed instead of
      * changing it silently. Meta re-categorises templates on its own, and
      * utility → marketing multiplies the price of every send through that
      * template roughly fourfold: the operator has to learn about it from
@@ -89,6 +92,20 @@ class WhatsappTemplateRegistry
 
         $this->client->syncTemplates($externalId);
         $remote = $this->client->listTemplates($externalId);
+
+        // An empty list with a non-empty local registry is indistinguishable
+        // from «everything was deleted in Meta at once» — and a transient
+        // upstream hiccup that answers 200 with no data looks exactly like
+        // that. Believing it would wipe the whole registry, approved
+        // templates included, and stop every notification flow. Refusing is
+        // the safe reading; a genuine mass deletion is resolved by deleting
+        // the rows by hand.
+        if ($remote === [] && WhatsappTemplate::query()->exists()) {
+            throw new RuntimeException(
+                'Dereu вернул пустой список шаблонов при непустом локальном реестре — синхронизация прервана, реестр не изменён.',
+            );
+        }
+
         $changes = [];
 
         foreach ($remote as $item) {
@@ -136,7 +153,7 @@ class WhatsappTemplateRegistry
             });
 
         if ($changes !== []) {
-            Log::warning('Синхронизация изменила реестр шаблонов.', ['changes' => $changes]);
+            $this->alerts->registryChanged($changes);
         }
 
         return ['total' => count($remote), 'changes' => $changes];

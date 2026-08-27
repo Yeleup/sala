@@ -299,3 +299,33 @@ test('no read receipt is attempted when no Dereu company is connected', function
 
     Http::assertNothingSent();
 });
+
+test('a differently spelled number lands on the contact WhatsApp already knows', function () {
+    // Номер — единственная опознавательная метка контакта. Написание,
+    // отличное от каноничного, заводило второй контакт: исходящая история
+    // оставалась на первом, входящие ложились на второй, и ответ на кнопку
+    // сценария пропадал как «чужой».
+    $contact = Contact::factory()->create(['phone' => '77011234567']);
+
+    test()->mock(BotEngine::class)
+        ->shouldReceive('handle')->once()
+        ->withArgs(fn (Contact $to, InboundMessage $message) => $to->is($contact));
+
+    runDereuWebhookJob(inboundMessageEvent(['from' => '+7 (701) 123-45-67']));
+
+    expect(Contact::count())->toBe(1)
+        ->and($contact->fresh()->last_inbound_at)->not->toBeNull();
+});
+
+test('a dead job finds the contact by a differently spelled number too', function () {
+    $contact = Contact::factory()->create(['phone' => '77011234567', 'last_inbound_at' => now()]);
+    $event = inboundMessageEvent(['from' => '+77011234567']);
+
+    test()->mock(DereuMessenger::class)
+        ->shouldReceive('sendText')->once()
+        ->withArgs(fn (Contact $to, string $text) => $to->is($contact));
+
+    (new ProcessDereuWebhookEvent($event))->failed(new RuntimeException('boom'));
+
+    expect($event->fresh()->processed_at)->not->toBeNull();
+});

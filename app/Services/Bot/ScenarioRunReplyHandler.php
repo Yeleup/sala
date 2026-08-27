@@ -10,6 +10,7 @@ use App\Models\Listing;
 use App\Models\ListingRenewalBatch;
 use App\Models\ScenarioRun;
 use App\Services\DereuMessenger;
+use Illuminate\Support\Facades\Log;
 
 /**
  * Routes button replies of scenario runs. Every button a run sends
@@ -55,9 +56,26 @@ class ScenarioRunReplyHandler
             return true;
         }
 
-        $run = ScenarioRun::query()->where('token', substr($rest, 0, $separator))->first();
+        $token = substr($rest, 0, $separator);
+        $run = ScenarioRun::query()->where('token', $token)->first();
 
-        if ($run === null || $run->contact_id !== $contact->id) {
+        if ($run === null) {
+            return true;
+        }
+
+        if ($run->contact_id !== $contact->id) {
+            // Кнопку нарисовали мы и адресовали конкретному контакту, так
+            // что живой токен от кого-то другого — это либо пересланное
+            // сообщение, либо контакт, разъехавшийся надвое на разном
+            // написании номера. Решать за чужой запуск нельзя, но и терять
+            // ответ без следа тоже: именно так подтверждения продления
+            // уходили в никуда, а объявления — в архив.
+            Log::warning('A scenario run reply arrived from a contact the run was not addressed to.', [
+                'token' => $token,
+                'contact_id' => $contact->id,
+                'run_contact_id' => $run->contact_id,
+            ]);
+
             return true;
         }
 

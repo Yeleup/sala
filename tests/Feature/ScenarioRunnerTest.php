@@ -24,6 +24,7 @@ use App\Services\TemplateFallback;
 use App\Services\WhatsappTemplateLibrary;
 use Filament\Actions\Testing\TestAction;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Collection;
 use Livewire\Livewire;
 use Mockery\MockInterface;
@@ -364,6 +365,28 @@ describe('ответы по токену flow:{token}:{option}', function () {
         expect($handled)->toBeTrue()
             ->and($request->refresh()->status)->toBe(CustomerRequestStatus::Pending)
             ->and($run->refresh()->status)->toBe(ScenarioRunStatus::Active);
+    });
+
+    test('ответ по чужому токену оставляет след в журнале', function () {
+        [$run] = launchedRequestRun();
+        $stranger = Contact::factory()->withOpenSessionWindow()->create();
+
+        Log::spy();
+
+        app(ScenarioRunReplyHandler::class)->handle(
+            $stranger,
+            new InboundMessage(replyId: "flow:{$run->token}:accept"),
+        );
+
+        // Кнопку рисовали мы и адресовали конкретному контакту, так что
+        // ответ «от чужого» — это либо пересланное сообщение, либо разъехавшийся
+        // надвое контакт. Проглатывать такое молча значит терять ответ без
+        // следа: именно так подтверждения продления уходили в никуда.
+        Log::shouldHaveReceived('warning')->withArgs(
+            fn (string $message, array $context): bool => ($context['token'] ?? null) === $run->token
+                && ($context['contact_id'] ?? null) === $stranger->id
+                && ($context['run_contact_id'] ?? null) === $run->contact_id,
+        );
     });
 
     test('движок отдаёт flow-ответ обработчику запусков, не трогая основной диалог', function () {

@@ -13,6 +13,7 @@ use App\Services\Bot\BotEngine;
 use App\Services\Bot\InboundMessage;
 use App\Services\DereuMessenger;
 use App\Services\DereuPlatformClient;
+use App\Support\PhoneNumber;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
 use Illuminate\Queue\Middleware\WithoutOverlapping;
@@ -104,9 +105,9 @@ class ProcessDereuWebhookEvent implements ShouldQueue
             return;
         }
 
-        $phone = (string) ($event->payload['from'] ?? '');
+        $phone = $this->senderPhone($event);
 
-        if ($phone === '') {
+        if ($phone === null) {
             $event->update(['processed_at' => now()]);
 
             return;
@@ -191,7 +192,9 @@ class ProcessDereuWebhookEvent implements ShouldQueue
             'error' => $exception?->getMessage(),
         ]);
 
-        $contact = Contact::query()->where('phone', (string) ($event->payload['from'] ?? ''))->first();
+        $phone = $this->senderPhone($event);
+
+        $contact = $phone === null ? null : Contact::query()->where('phone', $phone)->first();
 
         if ($contact === null) {
             return;
@@ -208,6 +211,19 @@ class ProcessDereuWebhookEvent implements ShouldQueue
                 'error' => $e->getMessage(),
             ]);
         }
+    }
+
+    /**
+     * Отправитель в каноничном виде. Номер — единственная опознавательная
+     * метка контакта, а написание, пришедшее от Dereu, каноничному не
+     * обязано соответствовать; сверка «как есть» заводила бы на другом
+     * написании второй контакт, разрывая переписку надвое: исходящее
+     * остаётся на первом, входящее ложится на второй, а ответ на кнопку
+     * сценария отбрасывается как чужой.
+     */
+    private function senderPhone(DereuWebhookEvent $event): ?string
+    {
+        return PhoneNumber::normalize((string) ($event->payload['from'] ?? ''));
     }
 
     private function syncContact(DereuWebhookEvent $event, string $phone): Contact

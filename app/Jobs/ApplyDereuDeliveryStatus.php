@@ -96,6 +96,14 @@ class ApplyDereuDeliveryStatus implements ShouldQueue
      */
     private function resendThroughTemplateFallback(ChannelMessage $entry, string $reason): bool
     {
+        // The claim below erases the fallback, so on a re-run of the same
+        // failure event «never had a fallback» and «already spent it, and
+        // the template went out» are the same empty column — and opposite
+        // answers here. The re-send stamp is what tells them apart.
+        if ($entry->template_fallback_resent_at !== null) {
+            return true;
+        }
+
         if ($entry->template_fallback === null || ! $this->isWindowRejection($reason)) {
             return false;
         }
@@ -128,6 +136,10 @@ class ApplyDereuDeliveryStatus implements ShouldQueue
                 array_map(strval(...), (array) ($fallback['body_parameters'] ?? [])),
                 array_map(strval(...), (array) ($fallback['button_payloads'] ?? [])),
             );
+
+            ChannelMessage::query()
+                ->whereKey($entry->id)
+                ->update(['template_fallback_resent_at' => now()]);
 
             Log::info('Session notification re-sent as a paid template after an async window rejection.', [
                 'channel_message_id' => $entry->id,

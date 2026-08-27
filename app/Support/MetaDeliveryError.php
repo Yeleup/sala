@@ -31,15 +31,16 @@ class MetaDeliveryError
      * each: the line is rendered right after «Не доставлено:» in a chat
      * bubble, so it continues that sentence instead of restating it.
      *
-     * Grouped by what the reader is supposed to do about it — the recipient
-     * ones are the only ones an operator can act on alone; the account ones
-     * mean every send is dead until an administrator fixes Meta's settings;
-     * the passing ones resolve themselves.
+     * Split into four maps by what the reader is supposed to do about it,
+     * and joined back by causes() for lookup. The split is not decoration:
+     * the account group is also what monitoring alerts on, so the grouping
+     * has to be readable by code and not just by a comment.
+     *
+     * The recipient: the operator can act alone.
      *
      * @var array<int, string>
      */
-    private const array CAUSES = [
-        // The recipient: the operator can act.
+    private const array RECIPIENT_CAUSES = [
         131026 => 'на этом номере нет рабочего WhatsApp — свяжитесь звонком и проверьте номер',
         131021 => 'сообщение адресовано на наш же собственный номер — проверьте телефон в карточке',
         131009 => 'Meta не приняла значение в запросе — чаще всего неверно записан номер',
@@ -48,15 +49,34 @@ class MetaDeliveryError
         130472 => 'номер в контрольной группе эксперимента Meta — маркетинг ему не доставляют',
         131049 => 'сработал лимит Meta на маркетинговые сообщения одному человеку',
         131056 => 'слишком часто пишем этому номеру — Meta притормозила отправку',
+    ];
 
-        // The account: nothing is going out to anyone until it is fixed.
+    /**
+     * The account: nothing is going out to anyone until an administrator
+     * fixes Meta's settings. This group doubles as the alert list — a
+     * single such failure is already the incident, so monitoring must not
+     * wait for it to accumulate a share (July 2026: 527 of 528 templates
+     * were killed by 131042 before anyone looked at a counter). The two
+     * therefore have to be one list: kept apart, the hand-written alert
+     * list drifted from this group and both lost 131031 and gained a
+     * throttle code that resolves on its own.
+     *
+     * @var array<int, string>
+     */
+    private const array ACCOUNT_CAUSES = [
         131042 => 'не настроен биллинг WhatsApp Business — платные шаблоны не уходят ни к кому',
         131031 => 'аккаунт WhatsApp Business ограничен Meta — отправка не работает ни к кому',
         131048 => 'Meta ограничила отправку из-за качества нашего номера',
         131064 => 'достигнут лимит сообщений аккаунта из-за нарушений в категориях шаблонов',
         130497 => 'нашему аккаунту запрещено писать в страну этого номера',
+    ];
 
-        // The template.
+    /**
+     * The template: this one flow is dead, the rest of the channel works.
+     *
+     * @var array<int, string>
+     */
+    private const array TEMPLATE_CAUSES = [
         132000 => 'в шаблон передано не столько переменных, сколько в нём объявлено',
         132001 => 'такого шаблона нет в Meta или он ещё не утверждён',
         132007 => 'содержимое шаблона нарушает политику WhatsApp',
@@ -66,8 +86,15 @@ class MetaDeliveryError
 
         // Ours to prevent, not the operator's: the send should have been a template.
         131047 => 'прошло больше 24 часов с последнего сообщения контакта — нужен был шаблон',
+    ];
 
-        // Passing on its own.
+    /**
+     * Passing on its own — including the throttle 130429, which is why it
+     * must not raise an account alarm.
+     *
+     * @var array<int, string>
+     */
+    private const array TRANSIENT_CAUSES = [
         131000 => 'сбой на стороне Meta без объяснения причины',
         131016 => 'сервис Meta временно недоступен',
         131057 => 'аккаунт WhatsApp Business на обслуживании у Meta',
@@ -81,17 +108,6 @@ class MetaDeliveryError
      */
     private const string UNKNOWN_CAUSE = 'Meta не назвала причину';
 
-    /**
-     * Codes that condemn the whole account rather than one recipient:
-     * while one of them stands, sends are dying to everyone, so monitoring
-     * must not wait for these failures to accumulate a share — a single
-     * one is already the incident (July 2026: 527 of 528 templates were
-     * killed by 131042 before anyone looked at a counter).
-     *
-     * @var list<int>
-     */
-    private const array ACCOUNT_LEVEL_CODES = [131042, 131048, 131064, 130429];
-
     public static function explain(?string $reason): string
     {
         if ($reason === null || trim($reason) === '') {
@@ -104,7 +120,7 @@ class MetaDeliveryError
             return $reason;
         }
 
-        return self::CAUSES[$code] ?? $reason;
+        return self::causes()[$code] ?? $reason;
     }
 
     /**
@@ -121,7 +137,18 @@ class MetaDeliveryError
 
         $code = self::code($reason);
 
-        return in_array($code, self::ACCOUNT_LEVEL_CODES, true) ? $code : null;
+        return $code !== null && array_key_exists($code, self::ACCOUNT_CAUSES) ? $code : null;
+    }
+
+    /**
+     * Every known cause, whatever it blames. The union operator keeps the
+     * numeric codes as keys — array unpacking would renumber them.
+     *
+     * @return array<int, string>
+     */
+    private static function causes(): array
+    {
+        return self::RECIPIENT_CAUSES + self::ACCOUNT_CAUSES + self::TEMPLATE_CAUSES + self::TRANSIENT_CAUSES;
     }
 
     /**
@@ -139,7 +166,7 @@ class MetaDeliveryError
             return (int) $matches[1];
         }
 
-        foreach (array_keys(self::CAUSES) as $code) {
+        foreach (array_keys(self::causes()) as $code) {
             if (preg_match('/(?<!\d)'.$code.'(?!\d)/', $reason) === 1) {
                 return $code;
             }

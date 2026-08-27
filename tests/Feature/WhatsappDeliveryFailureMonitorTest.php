@@ -39,7 +39,7 @@ test('всплеск недоставленных исходящих будит 
     }
 });
 
-test('редкие отказы ниже порога доли не тревожат', function () {
+test('единичный отказ в потоке доставленных не тревожит', function () {
     ChannelMessage::factory()->outbound()->create([
         'status' => ChannelMessageStatus::Failed,
         'failure_reason' => 'meta error 131026: Message undeliverable — Message Undeliverable.',
@@ -49,6 +49,35 @@ test('редкие отказы ниже порога доли не тревож
     $this->artisan('whatsapp:monitor-delivery-failures')->assertSuccessful();
 
     expect($this->admins->first()->refresh()->notifications)->toHaveCount(0);
+});
+
+test('отказы ниже порога доли не тревожат даже при достаточной выборке', function () {
+    // 3 из 30 — это 10% при min_failed = 3: выборка порог проходит, доля
+    // нет. Единственный случай, разделяющий два гейта: без него порог доли
+    // можно вырезать из команды целиком, и сьют останется зелёным.
+    ChannelMessage::factory()->outbound()->count(3)->create([
+        'status' => ChannelMessageStatus::Failed,
+        'failure_reason' => 'meta error 131026: Message undeliverable — Message Undeliverable.',
+    ]);
+    ChannelMessage::factory()->outbound()->delivered()->count(27)->create();
+
+    $this->artisan('whatsapp:monitor-delivery-failures')->assertSuccessful();
+
+    expect($this->admins->first()->refresh()->notifications)->toHaveCount(0);
+});
+
+test('доля ровно на пороге уже тревожит', function () {
+    // 3 из 12 — ровно 25%: граница включительная, иначе настроенный порог
+    // означал бы «строго больше» и читался бы не так, как записан.
+    ChannelMessage::factory()->outbound()->count(3)->create([
+        'status' => ChannelMessageStatus::Failed,
+        'failure_reason' => 'meta error 131026: Message undeliverable — Message Undeliverable.',
+    ]);
+    ChannelMessage::factory()->outbound()->delivered()->count(9)->create();
+
+    $this->artisan('whatsapp:monitor-delivery-failures')->assertSuccessful();
+
+    expect($this->admins->first()->refresh()->notifications)->toHaveCount(1);
 });
 
 test('единичные отказы не всплеск даже при стопроцентной доле', function () {

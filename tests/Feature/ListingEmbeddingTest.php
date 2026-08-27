@@ -36,6 +36,21 @@ test('в тестовом окружении эмбеддинги по умол�
     expect(Embeddings::isFaked())->toBeTrue();
 });
 
+test('дефолтный фейк детерминирован: один текст — один и тот же вектор', function () {
+    // Штатный дефолт пакета строит вектор из mt_rand(). Такой вектор
+    // попадает в listing_embeddings при любом сохранении опубликованного
+    // объявления и участвует в косинусном ранжировании, то есть делает
+    // случайными данные поиска во всём сьюте. Падения от этого начинаются
+    // не сразу, а когда кто-нибудь снизит порог похожести, — и выглядят
+    // как плавающий баг поиска.
+    $first = Embeddings::for(['экскаватор'])->dimensions(ListingEmbeddings::DIMENSIONS)->generate()->first();
+    $again = Embeddings::for(['экскаватор'])->dimensions(ListingEmbeddings::DIMENSIONS)->generate()->first();
+    $other = Embeddings::for(['вертолёт'])->dimensions(ListingEmbeddings::DIMENSIONS)->generate()->first();
+
+    expect($again)->toBe($first)
+        ->and($other)->not->toBe($first);
+});
+
 test('одобрение объявления ставит генерацию эмбеддинга в очередь', function () {
     Queue::fake();
     $listing = Listing::factory()->pendingModeration()->create();

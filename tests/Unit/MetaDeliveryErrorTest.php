@@ -65,9 +65,13 @@ test('аккаунт-уровневый код распознаётся в лю�
         'meta error 131064: Messaging limit reached due to template category violations.',
         131064,
     ],
-    'пропускная способность' => [
-        'meta error 130429: Rate limit hit — Cloud API message throughput has been reached.',
-        130429,
+    'аккаунт ограничен Meta' => [
+        'meta error 131031: Account has been locked — Your account has been restricted from sending messages.',
+        131031,
+    ],
+    'запрет на страну получателя' => [
+        'meta error 130497: Your account is not allowed to send messages to this country.',
+        130497,
     ],
 ]);
 
@@ -78,6 +82,15 @@ test('не-аккаунтные и пустые причины не дают а�
     'код получателя, не аккаунта' => ['meta error 131026: Message undeliverable — Message Undeliverable.'],
     'аккаунт-код внутри длинного числа' => ['Meta rejected message to 77713042955'],
     'строка без кода' => ['Some transport error'],
+    // 130429 — придержанное Meta сообщение, которое уйдёт само: тревога
+    // «не уходит ничего никому» на нём означала бы danger-уведомление
+    // каждый час по обычному троттлингу в часы пик.
+    'пропускная способность — проходит сама' => [
+        'meta error 130429: Rate limit hit — Cloud API message throughput has been reached.',
+    ],
+    'приостановленный шаблон — умер один поток, не канал' => [
+        'meta error 132015: Template is paused due to low quality.',
+    ],
 ]);
 
 test('код находится и в ответе неудавшегося запроса отправки', function () {

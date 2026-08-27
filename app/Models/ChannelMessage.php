@@ -23,7 +23,7 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
     'contact_id', 'direction', 'type', 'text', 'payload', 'wamid',
     'dereu_message_id', 'status', 'failure_reason', 'sent_at', 'delivered_at', 'read_at',
     'whatsapp_template_id', 'estimated_cost_usd', 'cost_status', 'pricing_snapshot',
-    'template_fallback',
+    'template_fallback', 'template_fallback_resent_at',
 ])]
 class ChannelMessage extends Model
 {
@@ -97,6 +97,7 @@ class ChannelMessage extends Model
             'cost_status' => AiCostStatus::class,
             'pricing_snapshot' => 'array',
             'template_fallback' => 'array',
+            'template_fallback_resent_at' => 'datetime',
         ];
     }
 }

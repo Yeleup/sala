@@ -2,6 +2,7 @@
 
 use App\Enums\BotScenarioTrigger;
 use App\Enums\ListingStatus;
+use App\Enums\WhatsappTemplateStatus;
 use App\Models\BotScenario;
 use App\Models\ChannelMessage;
 use App\Models\Contact;
@@ -214,6 +215,68 @@ describe('недоставленный опрос актуальности', fun
         ]]);
 
         test()->mock(DereuMessenger::class)->shouldReceive('sendTemplate')->once();
+
+        failedRenewalDelivery($uuid, 'Message failed to send because more than 24 hours have passed since the customer last replied to this number.');
+
+        expect($listing->refresh()->renewal_requested_at)->not->toBeNull();
+    });
+
+    test('неутверждённый к моменту отказа шаблон-фолбэк отметку не спасает', function () {
+        // План Б есть, но шаблон к этому моменту отклонён Meta: вопрос
+        // никуда не уходит, и объявление обязано вернуться в очередь на
+        // опрос — иначе оно уедет в архив неспрошенным.
+        $listing = polledListing();
+        $template = WhatsappTemplate::factory()->create(['status' => WhatsappTemplateStatus::Rejected]);
+        $uuid = (string) Str::uuid();
+        interactivePollEntry($listing, $uuid)->update(['template_fallback' => [
+            'whatsapp_template_id' => $template->id,
+            'body_parameters' => ['Кран'],
+            'button_payloads' => [NotificationReplyHandler::renewalYesId($listing)],
+        ]]);
+
+        failedRenewalDelivery($uuid, 'Message failed to send because more than 24 hours have passed since the customer last replied to this number.');
+
+        expect($listing->refresh()->renewal_requested_at)->toBeNull();
+    });
+
+    test('сорвавшаяся переотправка шаблоном отметку не спасает', function () {
+        // План Б выбран, но отправка упала (Dereu ответил ошибкой): попытка
+        // одна, и вопрос остался недоставленным.
+        $listing = polledListing();
+        $template = WhatsappTemplate::factory()->approved()->create();
+        $uuid = (string) Str::uuid();
+        interactivePollEntry($listing, $uuid)->update(['template_fallback' => [
+            'whatsapp_template_id' => $template->id,
+            'body_parameters' => ['Кран'],
+            'button_payloads' => [NotificationReplyHandler::renewalYesId($listing)],
+        ]]);
+
+        test()->mock(DereuMessenger::class)
+            ->shouldReceive('sendTemplate')
+            ->once()
+            ->andThrow(new RuntimeException('Dereu недоступен'));
+
+        failedRenewalDelivery($uuid, 'Message failed to send because more than 24 hours have passed since the customer last replied to this number.');
+
+        expect($listing->refresh()->renewal_requested_at)->toBeNull();
+    });
+
+    test('повторная обработка того же отказа не снимает отметку с уже переотправленного опроса', function () {
+        // Джобу переигрывают (ретрай или пятиминутный свипер необработанных
+        // событий). Клейм плана Б стирает фолбэк, поэтому без отметки о
+        // состоявшейся переотправке второй прогон читал бы «плана Б не было»
+        // и вернул объявление в очередь — поставщик получил бы тот же
+        // вопрос второй раз, и второй платный шаблон.
+        $listing = polledListing();
+        $template = WhatsappTemplate::factory()->approved()->create();
+        $uuid = (string) Str::uuid();
+        $entry = interactivePollEntry($listing, $uuid);
+        $entry->update([
+            'template_fallback' => null,
+            'template_fallback_resent_at' => now(),
+        ]);
+
+        test()->mock(DereuMessenger::class)->shouldReceive('sendTemplate')->never();
 
         failedRenewalDelivery($uuid, 'Message failed to send because more than 24 hours have passed since the customer last replied to this number.');
 

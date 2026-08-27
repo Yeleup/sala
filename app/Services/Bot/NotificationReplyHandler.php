@@ -88,6 +88,37 @@ class NotificationReplyHandler
     }
 
     /**
+     * The listing a per-listing renewal poll button refers to — the
+     * reverse of renewalYesId/renewalNoId, used to tie an undelivered
+     * poll message back to its listing. Null for any other button id.
+     */
+    public static function renewalButtonListingId(string $replyId): ?int
+    {
+        foreach ([self::RENEWAL_YES_PREFIX, self::RENEWAL_NO_PREFIX] as $prefix) {
+            if (str_starts_with($replyId, $prefix)) {
+                return (int) substr($replyId, strlen($prefix));
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * The batch a batch renewal poll button refers to — the reverse of
+     * the batch*Id builders. Null for any other button id.
+     */
+    public static function renewalButtonBatchId(string $replyId): ?int
+    {
+        foreach ([self::BATCH_RENEW_ALL_PREFIX, self::BATCH_ARCHIVE_ALL_PREFIX, self::BATCH_PICK_PREFIX] as $prefix) {
+            if (str_starts_with($replyId, $prefix)) {
+                return (int) substr($replyId, strlen($prefix));
+            }
+        }
+
+        return null;
+    }
+
+    /**
      * True when the message was a notification reply and is fully handled —
      * the engine must not run the scenario for it.
      */

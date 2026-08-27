@@ -7,6 +7,7 @@ use App\Models\ChannelMessage;
 use App\Models\DereuWebhookEvent;
 use App\Models\WhatsappTemplate;
 use App\Services\DereuMessenger;
+use App\Services\ListingRenewalPollFailureHandler;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
 use Illuminate\Support\Facades\Log;
@@ -28,7 +29,7 @@ class ApplyDereuDeliveryStatus implements ShouldQueue
 
     public function __construct(public DereuWebhookEvent $event) {}
 
-    public function handle(): void
+    public function handle(ListingRenewalPollFailureHandler $renewalPolls): void
     {
         $event = $this->event->fresh();
 
@@ -66,7 +67,16 @@ class ApplyDereuDeliveryStatus implements ShouldQueue
                 'reason' => $event->payload['reason'] ?? null,
             ]);
 
-            $this->resendThroughTemplateFallback($entry, (string) ($event->payload['reason'] ?? ''));
+            $resent = $entry !== null
+                && $this->resendThroughTemplateFallback($entry, (string) ($event->payload['reason'] ?? ''));
+
+            // A message that is definitively undelivered must not leave a
+            // renewal poll counted as asked — the listing would be archived
+            // without a question. A successful template re-send keeps the
+            // mark: the same question is still on its way.
+            if ($entry !== null && ! $resent) {
+                $renewalPolls->handle($entry);
+            }
         }
 
         $event->update(['processed_at' => now()]);
@@ -79,11 +89,15 @@ class ApplyDereuDeliveryStatus implements ShouldQueue
      * claimed atomically before sending, so a redelivered failure event
      * cannot pay twice, and the template send itself never carries a
      * fallback, so a failed re-send cannot loop.
+     *
+     * True when the notification is still on its way — the template went
+     * out, or a concurrent handler claimed the fallback and owns the
+     * outcome. False means the message is definitively undelivered.
      */
-    private function resendThroughTemplateFallback(?ChannelMessage $entry, string $reason): void
+    private function resendThroughTemplateFallback(ChannelMessage $entry, string $reason): bool
     {
-        if ($entry === null || $entry->template_fallback === null || ! $this->isWindowRejection($reason)) {
-            return;
+        if ($entry->template_fallback === null || ! $this->isWindowRejection($reason)) {
+            return false;
         }
 
         $claimed = ChannelMessage::query()
@@ -92,7 +106,7 @@ class ApplyDereuDeliveryStatus implements ShouldQueue
             ->update(['template_fallback' => null]) === 1;
 
         if (! $claimed) {
-            return;
+            return true;
         }
 
         $fallback = $entry->template_fallback;
@@ -104,7 +118,7 @@ class ApplyDereuDeliveryStatus implements ShouldQueue
                 'whatsapp_template_id' => $fallback['whatsapp_template_id'] ?? null,
             ]);
 
-            return;
+            return false;
         }
 
         try {
@@ -119,11 +133,15 @@ class ApplyDereuDeliveryStatus implements ShouldQueue
                 'channel_message_id' => $entry->id,
                 'whatsapp_template_id' => $template->id,
             ]);
+
+            return true;
         } catch (\Throwable $e) {
             Log::warning('Failed to re-send the notification as a template.', [
                 'channel_message_id' => $entry->id,
                 'error' => $e->getMessage(),
             ]);
+
+            return false;
         }
     }
 

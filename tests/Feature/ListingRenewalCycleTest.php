@@ -130,13 +130,42 @@ describe('ежедневный опрос актуальности', function ()
     });
 
     test('истёкшее без подтверждения объявление автоматически архивируется', function () {
-        $expired = Listing::factory()->expired()->create();
+        $expired = Listing::factory()->expired()->create(['renewal_requested_at' => now()->subDay()]);
         $active = Listing::factory()->published()->create(['expires_at' => now()->addDays(10)]);
 
         $this->artisan('listings:run-renewal-cycle')->assertSuccessful();
 
         expect($expired->refresh()->status)->toBe(ListingStatus::Archived)
             ->and($active->refresh()->status)->toBe(ListingStatus::Published);
+    });
+
+    test('истёкшее объявление, чей опрос так и не ушёл, не архивируется — его переспрашивают', function () {
+        // Вчерашний опрос не состоялся (сбой отправки или асинхронный отказ
+        // Meta снял отметку): вопрос не был задан, архив подождёт сутки.
+        $listing = expiringListing();
+        $listing->update(['expires_at' => now()->subHours(2)]);
+
+        fakeCycleMessenger()->shouldReceive('sendButtons')->once();
+
+        $this->artisan('listings:run-renewal-cycle')->assertSuccessful();
+
+        expect($listing->refresh())
+            ->status->toBe(ListingStatus::Published)
+            ->renewal_requested_at->not->toBeNull();
+    });
+
+    test('если опрос не ушёл и за льготные сутки, объявление всё же архивируется', function () {
+        // Бессрочный недозвон держал бы «мёртвую душу» в поиске вечно:
+        // повтор ровно один, дальше — архив.
+        $listing = expiringListing();
+        $listing->update(['expires_at' => now()->subHours(30)]);
+
+        $messenger = fakeCycleMessenger();
+        $messenger->shouldNotReceive('sendButtons');
+
+        $this->artisan('listings:run-renewal-cycle')->assertSuccessful();
+
+        expect($listing->refresh()->status)->toBe(ListingStatus::Archived);
     });
 
     test('продление сбрасывает отметку опроса — следующий цикл спросит снова', function () {
@@ -205,8 +234,8 @@ describe('опрос пачкой: одно сообщение на постав
     });
 
     test('пока пачечный шаблон не утверждён, спрашиваем по объявлению — молчание стоило бы поставщику всей выдачи', function () {
-        // Второго шанса нет: объявление опрашивается только в последние
-        // сутки, следующий прогон его уже архивирует.
+        // Откладывать «на завтра» нельзя: льготный повтор всего один, и
+        // тратить его, когда спросить можно прямо сейчас, — лишний риск.
         $supplier = Contact::factory()->withClosedSessionWindow()->create();
         $listings = expiringListingsOf($supplier, 3);
         $single = WhatsappTemplate::factory()->approved()->create([

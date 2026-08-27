@@ -7,6 +7,7 @@ use App\Models\BotReplyText;
 use App\Models\BotScenario;
 use App\Models\BotSession;
 use App\Models\Contact;
+use App\Models\Listing;
 use App\Services\Ai\VoiceTranscriber;
 use App\Services\Bot\AiAssistant;
 use App\Services\Bot\BotEngine;
@@ -272,6 +273,32 @@ describe('высокая уверенность — переход без воп
             ->current_node_fingerprint->toBe(navFingerprint('collect'))
             ->paused_state->toBeNull()
             ->state->toBe(navPausedSnapshot()['state']);
+    });
+
+    test('возврат к анкете, чей черновик уже ушёл, не обещает «всё написанное на месте»', function () {
+        // Черновик прерванной анкеты успели отправить на проверку из
+        // веб-кабинета: коллектор завершит блок честным статусом, и
+        // обещание «всё написанное на месте» прямо перед этим — ложь.
+        $scenario = navScenario();
+        $contact = Contact::factory()->create();
+        $listing = Listing::factory()->pendingModeration()->create();
+        $snapshot = navPausedSnapshot();
+        $snapshot['state']['draft_id'] = $listing->id;
+        $session = navSessionAt($scenario, $contact, 'menu', ['paused_state' => $snapshot]);
+
+        navRouter()->shouldReceive('route')->once()->andReturn(MenuRoute::toResume(RouteConfidence::High));
+
+        $assistant = navAssistant();
+        $assistant->shouldNotReceive('start');
+        $assistant->shouldReceive('resume')->once()->andReturn(AiOutcome::Completed);
+
+        // Единственный текст — от узла после анкеты: NavResumed не уходит.
+        navMessenger()->shouldReceive('sendText')->once()
+            ->withArgs(fn (Contact $to, string $text): bool => $text === 'Анкета закрыта');
+
+        app(BotEngine::class)->handle($contact, new InboundMessage(text: 'продолжим анкету'));
+
+        expect($session->fresh()->paused_state)->toBeNull();
     });
 
     test('опция ведёт в узел прерванной анкеты через промежуточный блок — это возврат, а не вторая анкета', function () {

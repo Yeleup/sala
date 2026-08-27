@@ -11,6 +11,7 @@ use App\Models\BotScenario;
 use App\Models\BotSession;
 use App\Models\Contact;
 use App\Services\Ai\CtaLinkBuilder;
+use App\Services\Ai\SupplierListingCollector;
 use App\Services\Ai\VoiceTranscriber;
 use App\Services\DereuMediaDownloader;
 use App\Services\DereuMessenger;
@@ -713,7 +714,13 @@ class BotEngine
         $session->state = $snapshot['state'];
         $this->waitAt($session, (string) $node['id'], $snapshot['fingerprint']);
 
-        $this->messenger->sendText($contact, $this->replyTexts->get(BotReplyKey::NavResumed));
+        // «Всё написанное на месте» обещало бы продолжение, которого не
+        // будет: черновик прерванной анкеты успел уйти из-под неё (его
+        // отправили на проверку из кабинета, опубликовали или удалили из
+        // админки), и коллектор сейчас завершит блок честным статусом.
+        if (! SupplierListingCollector::draftMovedOn((array) ($snapshot['state'] ?? []), $session->contact_id)) {
+            $this->messenger->sendText($contact, $this->replyTexts->get(BotReplyKey::NavResumed));
+        }
 
         // Никакого start(): приветствие блока человек уже слышал, а
         // коллектор сам заэкстрактит написанное и задаст следующий вопрос.

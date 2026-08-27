@@ -11,6 +11,7 @@ use App\Enums\LicenceType;
 use App\Enums\ListingKind;
 use App\Enums\ListingMediaType;
 use App\Enums\ListingOrigin;
+use App\Enums\ListingStatus;
 use App\Enums\RepairPlace;
 use App\Enums\UserIntent;
 use App\Models\BotSession;
@@ -192,6 +193,10 @@ class SupplierListingCollector
     {
         $state = $this->normalizeState($session);
 
+        if (($movedOn = $this->completeIfDraftMovedOn($session, $state)) !== null) {
+            return $movedOn;
+        }
+
         // «В меню» — by button tap or its typed title, the scenario-wide
         // convention that typing a button's name equals pressing it
         // (matchesButton already covers BUTTON_SUBMIT/BUTTON_EDIT the same
@@ -243,6 +248,94 @@ class SupplierListingCollector
         }
 
         return $this->handleCollecting($session, $state, $message, $node);
+    }
+
+    /**
+     * The draft can leave the questionnaire's hands between turns: a
+     * moderator publishes or deletes it straight from the admin panel, or
+     * the supplier submits it from the web cabinet. Continuing the dialog
+     * would edit a listing that is no longer a draft — or die trying to
+     * re-submit it, which the contact used to see as «Не получилось
+     * обработать сообщение» after the job ran out of retries. So any
+     * message into such a session ends it with an honest status line
+     * instead. Draft and Rejected stay in the questionnaire: both are
+     * still the supplier's to edit. Null — the draft is where the
+     * questionnaire left it, the turn proceeds as usual.
+     *
+     * @param  array<string, mixed>  $state
+     */
+    private function completeIfDraftMovedOn(BotSession $session, array $state): ?AiOutcome
+    {
+        if (! self::draftMovedOn($state, $session->contact_id)) {
+            return null;
+        }
+
+        $draft = Listing::find($state['draft_id']);
+
+        if ($draft === null) {
+            $this->messenger->sendText(
+                $session->contact,
+                'Этот черновик уже удалён. Если нужно, начните заново из меню.',
+            );
+
+            return AiOutcome::Completed;
+        }
+
+        // A draft handed to another supplier by the operator: its signed web
+        // links died with the ownership (assertLinkIssuedToCurrentOwner), and
+        // the previous owner's chat session must not keep editing it either.
+        // The status stays private — it is another supplier's listing now.
+        if ($draft->contact_id !== $session->contact_id) {
+            $this->messenger->sendText(
+                $session->contact,
+                'Этот черновик уже недоступен. Если нужно, начните заново из меню.',
+            );
+
+            return AiOutcome::Completed;
+        }
+
+        if ($draft->status === ListingStatus::PendingModeration) {
+            $this->messenger->sendText(
+                $session->contact,
+                'Это объявление уже ушло на проверку. Как только модератор решит — сразу напишем.',
+            );
+
+            return AiOutcome::Completed;
+        }
+
+        $this->messenger->sendCtaUrl(
+            $session->contact,
+            $draft->status === ListingStatus::Archived
+                ? 'Это объявление уже в архиве. Вернуть его в поиск можно из кабинета — кнопка ниже.'
+                : 'Это объявление уже проверено и опубликовано. Управлять им можно в кабинете — кнопка ниже.',
+            'Мои объявления',
+            $this->cta->myListingsUrl($session->contact),
+        );
+
+        return AiOutcome::Completed;
+    }
+
+    /**
+     * Whether the questionnaire state points at a draft that is no longer
+     * the questionnaire's to edit — deleted, handed to another supplier by
+     * the operator, or in any status besides Draft and Rejected. Public
+     * with the navigator in mind: a paused snapshot whose draft moved on
+     * must not be greeted with «всё написанное на месте» right before the
+     * guard above ends the block.
+     *
+     * @param  array<string, mixed>  $state
+     */
+    public static function draftMovedOn(array $state, int $contactId): bool
+    {
+        if (($state['draft_id'] ?? null) === null) {
+            return false;
+        }
+
+        $draft = Listing::find($state['draft_id']);
+
+        return $draft === null
+            || $draft->contact_id !== $contactId
+            || ! in_array($draft->status, [ListingStatus::Draft, ListingStatus::Rejected], true);
     }
 
     /**

@@ -61,7 +61,7 @@ function driverAiNode(): array
  */
 function collectorSession(array $state = []): BotSession
 {
-    return BotSession::factory()->waitingAt('collect')->create([
+    $session = BotSession::factory()->waitingAt('collect')->create([
         // A snapshot needs a real fingerprint to carry: fixed so tests can
         // assert paused_state copied it from the session.
         'current_node_fingerprint' => 'collect-fingerprint',
@@ -73,6 +73,16 @@ function collectorSession(array $state = []): BotSession
             'draft_id' => null,
         ], $state),
     ]);
+
+    // Анкета правит только собственный черновик (ensureDraft() заводит его
+    // на контакте сессии), поэтому переданный тесту draft_id привязывается
+    // к контакту сессии — как в проде. Несовпадение владельца тесты гварда
+    // собирают вручную, минуя хелпер.
+    if (($state['draft_id'] ?? null) !== null) {
+        Listing::whereKey($state['draft_id'])->update(['contact_id' => $session->contact_id]);
+    }
+
+    return $session;
 }
 
 function fakeCollectorMessenger(): MockInterface
@@ -525,6 +535,158 @@ test('the edit button on a deleted draft explains instead of staying silent', fu
         ->resume($session, supplierAiNode(), new InboundMessage(text: 'Исправить', replyId: SupplierListingCollector::BUTTON_EDIT));
 
     expect($outcome)->toBe(AiOutcome::Completed);
+});
+
+test('the submit button on a draft published from the admin panel explains instead of dying', function () {
+    // Гонка из продакшена (контакт 337): модератор опубликовал черновик из
+    // админки, пока поставщик смотрел на сводку. Нажатие «Да, отправить»
+    // падало в submitForModeration() на LogicException, джоба умирала, и
+    // контакту уходило «Не получилось обработать сообщение».
+    $draft = Listing::factory()->published()->create(['title' => 'Ремонт автоэлектрики']);
+    $session = collectorSession(['phase' => 'confirming', 'draft_id' => $draft->id]);
+
+    fakeCollectorMessenger()->shouldReceive('sendCtaUrl')->once()
+        ->withArgs(fn (Contact $to, string $text, string $button, string $url) => str_contains($text, 'уже проверено и опубликовано')
+            && $button === 'Мои объявления'
+            && mb_strlen($button) <= 20
+            && str_contains($url, "/supplier/{$session->contact_id}/listings")
+            && str_contains($url, 'signature='));
+
+    $outcome = app(SupplierListingCollector::class)
+        ->resume($session, supplierAiNode(), new InboundMessage(text: 'Да, отправить', replyId: SupplierListingCollector::BUTTON_SUBMIT));
+
+    expect($outcome)->toBe(AiOutcome::Completed)
+        ->and($draft->fresh()->status)->toBe(ListingStatus::Published);
+});
+
+test('the submit button on a draft already on moderation reports the pending check', function () {
+    // Поставщик отправил черновик на проверку из веб-кабинета и вернулся к
+    // старой кнопке в чате: повторный сабмит невозможен, но и молчание с
+    // «Не получилось обработать» здесь не ответ.
+    $draft = Listing::factory()->pendingModeration()->create();
+    $session = collectorSession(['phase' => 'confirming', 'draft_id' => $draft->id]);
+
+    fakeCollectorMessenger()->shouldReceive('sendText')->once()
+        ->withArgs(fn (Contact $to, string $text) => str_contains($text, 'уже ушло на проверку'));
+
+    $outcome = app(SupplierListingCollector::class)
+        ->resume($session, supplierAiNode(), new InboundMessage(text: 'Да, отправить', replyId: SupplierListingCollector::BUTTON_SUBMIT));
+
+    expect($outcome)->toBe(AiOutcome::Completed)
+        ->and($draft->fresh()->status)->toBe(ListingStatus::PendingModeration);
+});
+
+test('the submit button on an archived draft points to the cabinet instead of dying', function () {
+    $draft = Listing::factory()->archived()->create();
+    $session = collectorSession(['phase' => 'confirming', 'draft_id' => $draft->id]);
+
+    fakeCollectorMessenger()->shouldReceive('sendCtaUrl')->once()
+        ->withArgs(fn (Contact $to, string $text, string $button, string $url) => str_contains($text, 'в архиве')
+            && $button === 'Мои объявления'
+            && str_contains($url, "/supplier/{$session->contact_id}/listings"));
+
+    $outcome = app(SupplierListingCollector::class)
+        ->resume($session, supplierAiNode(), new InboundMessage(text: 'Да, отправить', replyId: SupplierListingCollector::BUTTON_SUBMIT));
+
+    expect($outcome)->toBe(AiOutcome::Completed)
+        ->and($draft->fresh()->status)->toBe(ListingStatus::Archived);
+});
+
+test('the submit button on a deleted draft explains instead of pretending success', function () {
+    // Черновик удалили из админки между сводкой и нажатием: старый код
+    // молча «отправлял» несуществующее объявление и рапортовал «Готово!».
+    $draft = Listing::factory()->create();
+    $draftId = $draft->id;
+    $draft->delete();
+    $session = collectorSession(['phase' => 'confirming', 'draft_id' => $draftId]);
+
+    fakeCollectorMessenger()->shouldReceive('sendText')->once()
+        ->withArgs(fn (Contact $to, string $text) => str_contains($text, 'уже удалён'));
+
+    $outcome = app(SupplierListingCollector::class)
+        ->resume($session, supplierAiNode(), new InboundMessage(text: 'Да, отправить', replyId: SupplierListingCollector::BUTTON_SUBMIT));
+
+    expect($outcome)->toBe(AiOutcome::Completed);
+});
+
+test('the submit button on a draft handed to another supplier explains instead of touching it', function () {
+    // Оператор передал объявление другому поставщику из админки: подписанные
+    // веб-ссылки прежнего владельца эту передачу уже переживают не могут
+    // (assertLinkIssuedToCurrentOwner), а живая чат-сессия прежнего владельца
+    // продолжала бы править чужой черновик и слать его на модерацию.
+    // Черновик заводится мимо хелпера: collectorSession() нарочно привязывает
+    // переданный draft_id к контакту сессии.
+    $session = collectorSession(['phase' => 'confirming']);
+    $foreign = Listing::factory()->create();
+    $session->state = [...$session->state, 'draft_id' => $foreign->id];
+    $session->save();
+
+    fakeCollectorMessenger()->shouldReceive('sendText')->once()
+        ->withArgs(fn (Contact $to, string $text) => str_contains($text, 'уже недоступен'));
+
+    $outcome = app(SupplierListingCollector::class)
+        ->resume($session, supplierAiNode(), new InboundMessage(text: 'Да, отправить', replyId: SupplierListingCollector::BUTTON_SUBMIT));
+
+    expect($outcome)->toBe(AiOutcome::Completed)
+        ->and($foreign->fresh()->status)->toBe(ListingStatus::Draft);
+});
+
+test('extra details after an external publication never edit the published listing', function () {
+    // Вторая половина той же гонки: дописанные после публикации уточнения
+    // прогонялись через экстрактор и молча правили опубликованное объявление
+    // в обход модерации. Экстрактор не зафейкан нарочно: дойди сообщение до
+    // него — тест упал бы на реальном вызове провайдера.
+    $draft = Listing::factory()->published()->create(['title' => 'Ремонт автоэлектрики']);
+    $session = collectorSession([
+        'phase' => 'confirming',
+        'draft_id' => $draft->id,
+        'transcript' => ['Ремонтирую автоэлектрику в Алматы'],
+    ]);
+
+    fakeCollectorMessenger()->shouldReceive('sendCtaUrl')->once()
+        ->withArgs(fn (Contact $to, string $text) => str_contains($text, 'уже проверено и опубликовано'));
+
+    $outcome = app(SupplierListingCollector::class)
+        ->resume($session, supplierAiNode(), new InboundMessage(text: 'Ещё ремонт моторов и ходовки'));
+
+    expect($outcome)->toBe(AiOutcome::Completed)
+        ->and($draft->fresh()->title)->toBe('Ремонт автоэлектрики');
+});
+
+test('the menu button after an external publication does not save over the published listing', function () {
+    // «В меню» с непустой анкетой шёл через exitToMenu(), а тот пишет
+    // собранные поля в черновик — в том числе в уже опубликованный.
+    $draft = Listing::factory()->published()->create(['title' => 'Ремонт автоэлектрики']);
+    $session = collectorSession([
+        'phase' => 'confirming',
+        'draft_id' => $draft->id,
+        'fields' => ['title' => 'Совсем другой заголовок', 'description' => 'Другое описание'],
+    ]);
+
+    fakeCollectorMessenger()->shouldReceive('sendCtaUrl')->once()
+        ->withArgs(fn (Contact $to, string $text) => str_contains($text, 'уже проверено и опубликовано'));
+
+    $outcome = app(SupplierListingCollector::class)
+        ->resume($session, supplierAiNode(), new InboundMessage(text: 'В меню', replyId: SupplierListingCollector::BUTTON_MENU));
+
+    expect($outcome)->toBe(AiOutcome::Completed)
+        ->and($draft->fresh()->title)->toBe('Ремонт автоэлектрики');
+});
+
+test('a rejected draft stays in the questionnaire and resubmits for moderation', function () {
+    // Отклонённый черновик — по-прежнему в руках поставщика: гвард статусов
+    // не должен выкидывать его из анкеты, повторный сабмит легален.
+    $draft = Listing::factory()->rejected()->create();
+    $session = collectorSession(['phase' => 'confirming', 'draft_id' => $draft->id]);
+
+    fakeCollectorMessenger()->shouldReceive('sendText')->once()
+        ->withArgs(fn (Contact $to, string $text) => str_contains($text, 'ушло на проверку'));
+
+    $outcome = app(SupplierListingCollector::class)
+        ->resume($session, supplierAiNode(), new InboundMessage(text: 'Да, отправить', replyId: SupplierListingCollector::BUTTON_SUBMIT));
+
+    expect($outcome)->toBe(AiOutcome::Completed)
+        ->and($draft->fresh()->status)->toBe(ListingStatus::PendingModeration);
 });
 
 test('extra details during confirmation are re-extracted and confirmed again', function () {

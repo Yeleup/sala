@@ -12,6 +12,7 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\Request;
 use Illuminate\Http\Client\RequestException;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 
 uses(RefreshDatabase::class);
@@ -244,6 +245,21 @@ test('a rejected send leaves a failed entry in the channel journal', function ()
         ->and($entry->direction)->toBe(ChannelDirection::Outbound)
         ->and($entry->text)->toBe('Привет!')
         ->and($entry->failure_reason)->not->toBeNull();
+});
+
+test('a rejected send is logged at the error level, not a warning', function () {
+    Http::fake(['api.dereu.test/*' => Http::response(['error' => 'rate limited'], 429)]);
+    connectedDereuCompany();
+    $contact = Contact::factory()->withOpenSessionWindow()->create();
+    Log::spy();
+
+    expect(fn () => app(DereuMessenger::class)->sendText($contact, 'Привет!'))
+        ->toThrow(RequestException::class);
+
+    // Мониторинг считает только error-строки: синхронный 429/5xx от Dereu,
+    // оставлявший после себя лишь warning, для него не существовал — при
+    // том что это тот же «бот замолчал», что и асинхронный отказ Meta.
+    Log::shouldHaveReceived('error')->once();
 });
 
 test('a session message outside the 24-hour window is refused locally', function () {

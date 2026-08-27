@@ -83,7 +83,7 @@ class ListingRenewalNotifier
 
             return true;
         } catch (Throwable $e) {
-            Log::warning('Failed to send the renewal poll.', [
+            Log::error('Failed to send the renewal poll.', [
                 'listing_id' => $listing->id,
                 'error' => $e->getMessage(),
             ]);
@@ -142,7 +142,7 @@ class ListingRenewalNotifier
 
             return true;
         } catch (Throwable $e) {
-            Log::warning('Failed to send the batch renewal poll.', [
+            Log::error('Failed to send the batch renewal poll.', [
                 'listing_renewal_batch_id' => $batch->id,
                 'error' => $e->getMessage(),
             ]);

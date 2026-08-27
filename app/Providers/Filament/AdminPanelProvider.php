@@ -31,9 +31,10 @@ class AdminPanelProvider extends PanelProvider
             ->id('admin')
             ->path('admin')
             ->login()
-            // The bell in the topbar: alerts about the WhatsApp template
-            // registry (Meta re-categorised or rejected a template) land as
-            // database notifications for every administrator.
+            // The bell in the topbar: alerts that must reach an administrator
+            // who is not looking — Meta re-categorised or rejected a template,
+            // a spike of undelivered messages — land as database notifications
+            // for every administrator.
             ->databaseNotifications()
             ->colors([
                 'primary' => Color::Amber,

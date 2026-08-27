@@ -50,6 +50,36 @@ test('код не вычитывается из середины длинног�
         ->and(MetaDeliveryError::explain($phone))->toBe($phone);
 });
 
+test('аккаунт-уровневый код распознаётся в любой форме причины', function (string $reason, int $expected) {
+    expect(MetaDeliveryError::accountLevelCode($reason))->toBe($expected);
+})->with([
+    'биллинг в каноничной форме' => [
+        'meta error 131042: Business eligibility payment issue — Message failed to send because your WhatsApp Business account currency is not configured.',
+        131042,
+    ],
+    'качество номера в теле HTTP-ответа' => [
+        'HTTP request returned status code 400: {"error":{"code":131048,"title":"Spam rate limit hit"}}',
+        131048,
+    ],
+    'лимит категорий шаблонов' => [
+        'meta error 131064: Messaging limit reached due to template category violations.',
+        131064,
+    ],
+    'пропускная способность' => [
+        'meta error 130429: Rate limit hit — Cloud API message throughput has been reached.',
+        130429,
+    ],
+]);
+
+test('не-аккаунтные и пустые причины не дают аккаунт-кода', function (?string $reason) {
+    expect(MetaDeliveryError::accountLevelCode($reason))->toBeNull();
+})->with([
+    'причины нет' => [null],
+    'код получателя, не аккаунта' => ['meta error 131026: Message undeliverable — Message Undeliverable.'],
+    'аккаунт-код внутри длинного числа' => ['Meta rejected message to 77713042955'],
+    'строка без кода' => ['Some transport error'],
+]);
+
 test('код находится и в ответе неудавшегося запроса отправки', function () {
     // Отправка, не принятая Dereu, кладёт в журнал сообщение HTTP-исключения
     // с телом ответа — без форматирования «meta error <код>».

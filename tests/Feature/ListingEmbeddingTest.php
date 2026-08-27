@@ -32,6 +32,10 @@ function fakeEmbeddingResponse(int $tokens = 120): void
     });
 }
 
+test('в тестовом окружении эмбеддинги по умолчанию фейковые', function () {
+    expect(Embeddings::isFaked())->toBeTrue();
+});
+
 test('одобрение объявления ставит генерацию эмбеддинга в очередь', function () {
     Queue::fake();
     $listing = Listing::factory()->pendingModeration()->create();

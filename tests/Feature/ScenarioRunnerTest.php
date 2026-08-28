@@ -892,3 +892,100 @@ describe('сценарий «Продление нескольких объяв�
         }
     });
 });
+
+describe('запуск, погашенный таймаутом', function () {
+    function unwiredTimeoutScenario(): BotScenario
+    {
+        return BotScenario::factory()
+            ->trigger(BotScenarioTrigger::ListingExpiring)
+            ->published([
+                'nodes' => [
+                    ['id' => 'start', 'type' => 'start'],
+                    ['id' => 'ask', 'type' => 'message', 'text' => 'Ответьте, пожалуйста.', 'channel' => 'session',
+                        'timeout_hours' => 2, 'options' => [['id' => 'ok', 'title' => 'Хорошо']]],
+                    ['id' => 'thanks', 'type' => 'text', 'text' => 'Спасибо!'],
+                    ['id' => 'end', 'type' => 'end'],
+                ],
+                'edges' => [
+                    ['from' => 'start', 'output' => 'continue', 'to' => 'ask'],
+                    ['from' => 'ask', 'output' => 'option:ok', 'to' => 'thanks'],
+                    ['from' => 'thanks', 'output' => 'continue', 'to' => 'end'],
+                ],
+            ])
+            ->create(['name' => 'Без ветки таймаута']);
+    }
+
+    test('неподключённая ветка таймаута помечает запуск «Не ответили», а не «Завершён»', function () {
+        $supplier = Contact::factory()->withOpenSessionWindow()->create();
+
+        $messenger = runnerMessenger();
+        $messenger->shouldReceive('sendButtons')->once();
+
+        $run = app(ScenarioRunner::class)->launch(unwiredTimeoutScenario(), $supplier);
+
+        $this->travel(3)->hours();
+        $this->artisan('bot:process-run-timeouts')->assertSuccessful();
+
+        // «Завершён» и «Не ответили» — разные исходы: по первому видно, что
+        // человек нажал кнопку, по второму — что вопрос остался без ответа.
+        expect($run->refresh()->status)->toBe(ScenarioRunStatus::TimedOut)
+            ->and($run->timeout_at)->toBeNull()
+            ->and($run->current_node_id)->toBeNull();
+    });
+
+    test('поздняя кнопка зовёт в кабинет, а не сообщает о зафиксированном ответе', function () {
+        $supplier = Contact::factory()->withOpenSessionWindow()->create();
+
+        $messenger = runnerMessenger();
+        $messenger->shouldReceive('sendButtons')->once();
+
+        $run = app(ScenarioRunner::class)->launch(unwiredTimeoutScenario(), $supplier);
+
+        $this->travel(3)->hours();
+        $this->artisan('bot:process-run-timeouts')->assertSuccessful();
+
+        // «Ответ был зафиксирован ранее» — неправда для промолчавшего:
+        // ему нужен не отказ, а путь к тому же решению в кабинете.
+        $messenger->shouldReceive('sendText')->once()->withArgs(
+            fn (Contact $contact, string $text): bool => $contact->is($supplier)
+                && str_contains($text, 'Срок этого вопроса вышел')
+                && ! str_contains($text, 'зафиксирован'),
+        );
+
+        $handled = app(ScenarioRunReplyHandler::class)->handle(
+            $supplier,
+            new InboundMessage(replyId: "flow:{$run->token}:ok"),
+        );
+
+        expect($handled)->toBeTrue()
+            ->and($run->refresh()->status)->toBe(ScenarioRunStatus::TimedOut);
+    });
+
+    test('опрос актуальности объявления ждёт ответа сутки', function () {
+        installFlowScenarios();
+        $supplier = Contact::factory()->withOpenSessionWindow()->create();
+        $listing = Listing::factory()->published()->for($supplier, 'supplier')
+            ->create(['expires_at' => now()->addHours(12)]);
+
+        runnerMessenger()->shouldReceive('sendButtons')->once();
+
+        $scenario = BotScenario::publishedForTrigger(BotScenarioTrigger::ListingExpiring);
+        $run = app(ScenarioRunner::class)->launch($scenario, $supplier, $listing);
+
+        expect($run->timeout_at)->not->toBeNull()
+            ->and($run->timeout_at->diffInMinutes(now()->addDay()))->toBeLessThan(1);
+    });
+
+    test('опрос актуальности пачки ждёт ответа сутки', function () {
+        installFlowScenarios();
+        $supplier = Contact::factory()->withOpenSessionWindow()->create();
+        Listing::factory()->count(3)->published()->for($supplier, 'supplier')
+            ->create(['expires_at' => now()->addHours(12)]);
+
+        runnerMessenger()->shouldReceive('sendButtons')->once();
+
+        $this->artisan('listings:run-renewal-cycle')->assertSuccessful();
+
+        expect(ScenarioRun::sole()->timeout_at->diffInMinutes(now()->addDay()))->toBeLessThan(1);
+    });
+});

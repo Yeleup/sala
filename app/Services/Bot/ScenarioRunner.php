@@ -115,7 +115,7 @@ class ScenarioRunner
 
     /**
      * The reply timeout of a waiting run: follow the block's «timeout»
-     * output, or quietly finish the run when it is not wired.
+     * output, or close the run as unanswered when it is not wired.
      */
     public function handleTimeout(ScenarioRun $run): void
     {
@@ -123,7 +123,7 @@ class ScenarioRunner
         $node = $definition?->node($run->current_node_id);
 
         if ($definition === null || $node === null) {
-            $this->complete($run);
+            $this->timedOut($run);
 
             return;
         }
@@ -131,7 +131,7 @@ class ScenarioRunner
         $target = $definition->target($node['id'], ScenarioDefinition::OUTPUT_TIMEOUT);
 
         if ($target === null) {
-            $this->complete($run);
+            $this->timedOut($run);
 
             return;
         }
@@ -337,6 +337,22 @@ class ScenarioRunner
     {
         $run->forceFill([
             'status' => ScenarioRunStatus::Completed,
+            'current_node_id' => null,
+            'timeout_at' => null,
+        ])->save();
+    }
+
+    /**
+     * Ожидание кончилось, а вести запуск некуда — выход таймаута у блока
+     * не подключён. Запуск гаснет отдельным статусом: «Завершён» в
+     * журнале читается как принятое человеком решение, а решения не было.
+     * Ответ по кнопке после этого уже не идёт по графу, поэтому нажавшему
+     * отвечает ScenarioRunReplyHandler.
+     */
+    private function timedOut(ScenarioRun $run): void
+    {
+        $run->forceFill([
+            'status' => ScenarioRunStatus::TimedOut,
             'current_node_id' => null,
             'timeout_at' => null,
         ])->save();

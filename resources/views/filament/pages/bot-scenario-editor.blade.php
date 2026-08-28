@@ -447,7 +447,7 @@
                     // сервер при сохранении нормализует отсутствующий вид так же.
                     nodes: (initial.nodes ?? []).map((n) => ({ text: '', options: [], ...(n.type === 'ai' ? { kind: 'rental' } : {}), ...n })),
                     edges: initial.edges ?? [],
-                    config: config ?? { runBased: false, templates: [], variables: [], conditions: [], actions: [], fallbacks: [], fallbacksUrl: '' },
+                    config: config ?? { runBased: false, defaultTimeoutHours: 24, templates: [], variables: [], conditions: [], actions: [], fallbacks: [], fallbacksUrl: '' },
                     pan: { x: 40, y: 20 },
                     scale: 1,
                     selectedId: null,
@@ -988,7 +988,7 @@
                             node.channel = 'adaptive'
                             node.template_name = ''
                             node.variables = []
-                            node.timeout_hours = 0
+                            node.timeout_hours = this.config.defaultTimeoutHours
                             node.options = [{ id: this.newOptionId(), title: '' }]
                         }
 

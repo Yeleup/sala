@@ -3,6 +3,7 @@
 namespace App\Services\Bot;
 
 use App\Enums\BotReplyKey;
+use App\Enums\ScenarioRunStatus;
 use App\Exceptions\SessionWindowClosed;
 use App\Models\Contact;
 use App\Models\CustomerRequest;
@@ -97,7 +98,7 @@ class ScenarioRunReplyHandler
         }
 
         if (! $run->isActive()) {
-            $this->tellDecisionIsFinal($contact);
+            $this->tellRunIsClosed($contact, $run);
 
             return true;
         }
@@ -141,13 +142,21 @@ class ScenarioRunReplyHandler
     }
 
     /**
-     * A click on a button of an already finished run — the decision it
-     * asked about was consumed (or timed out) earlier.
+     * A click on a button of an already closed run. Which of the two
+     * answers it gets is the whole point of keeping «Не ответили» apart
+     * from «Завершён»: a run that timed out consumed no decision, so
+     * telling its supplier that «ответ был зафиксирован ранее» would be a
+     * lie — they are pointed at the cabinet, where the same decision is
+     * still theirs to make.
      */
-    protected function tellDecisionIsFinal(Contact $contact): void
+    protected function tellRunIsClosed(Contact $contact, ScenarioRun $run): void
     {
+        $key = $run->status === ScenarioRunStatus::TimedOut
+            ? BotReplyKey::RunTimedOut
+            : BotReplyKey::RunDecisionFinal;
+
         try {
-            $this->messenger->sendText($contact, $this->replyTexts->get(BotReplyKey::RunDecisionFinal));
+            $this->messenger->sendText($contact, $this->replyTexts->get($key));
         } catch (SessionWindowClosed) {
             // The reply itself normally opens the window; losing this
             // courtesy note is fine.

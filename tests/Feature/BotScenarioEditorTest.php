@@ -129,6 +129,20 @@ test('конфиг редактора отдаёт список видов об�
         ->and(collect($kinds)->firstWhere('value', 'driver')['label'])->toBe('Водитель / машинист');
 });
 
+test('конфиг редактора предлагает суточный срок ожидания новому блоку сообщения', function () {
+    BotScenario::factory()->create();
+
+    // Блок с кнопками и без срока ждёт ответа вечно и никогда не уходит из
+    // «Ждёт ответа» — предзаполненное поле не даёт собрать такой блок молча.
+    $editor = Livewire::test(BotScenarioEditor::class);
+
+    expect($editor->instance()->editorConfig()['defaultTimeoutHours'])->toBe(24);
+
+    // Предложение должно доехать до холста — им предзаполняется поле срока
+    // у только что созданного блока.
+    $editor->assertSee('defaultTimeoutHours', escape: false);
+});
+
 test('publishing a valid graph applies the draft and bumps the version', function () {
     BotScenario::factory()->create();
 

@@ -4,6 +4,7 @@ namespace App\Console\Commands;
 
 use App\Enums\BotScenarioTrigger;
 use App\Models\BotScenario;
+use App\Services\Bot\ScenarioDefinition;
 use App\Services\Bot\ScenarioValidator;
 use App\Services\WhatsappTemplateLibrary;
 use Illuminate\Console\Attributes\Description;
@@ -286,10 +287,16 @@ class InstallDefaultBotScenario extends Command
     }
 
     /**
-     * Продление объявления: 30-дневный опрос актуальности. Запуск живёт
-     * без таймаута: поздний ответ по уже заархивированному объявлению
-     * (в т.ч. авто-архивом по истечении срока) идёт по выходу
-     * «Объявление уже в архиве» самого действия — ничего не воскресает.
+     * Продление объявления: 30-дневный опрос актуальности. Ветка таймаута
+     * не подключена — молчание и так уводит публикацию в архив по
+     * истечении срока, воскрешать нечего, — но срок ожидания задан: через
+     * сутки опрос закрывается статусом «Не ответили». Без него запуск
+     * висел бы в журнале вечно, и промолчавший поставщик не отличался бы
+     * от того, чей ответ ещё ждут. Сутки — ровно тот момент, когда
+     * суточный цикл уже заархивировал публикацию, то есть вопрос потерял
+     * смысл. Поздний ответ по графу после этого не идёт: нажавшему
+     * отвечает встроенный текст «Срок вопроса вышел», который зовёт в
+     * кабинет — там то же решение доступно вручную.
      *
      * @return array{nodes: list<array<string, mixed>>, edges: list<array<string, mixed>>}
      */
@@ -302,6 +309,7 @@ class InstallDefaultBotScenario extends Command
                     'channel' => 'adaptive',
                     'template_name' => WhatsappTemplateLibrary::LISTING_RENEWAL,
                     'variables' => ['listing.title'],
+                    'timeout_hours' => ScenarioDefinition::SUGGESTED_TIMEOUT_HOURS,
                     'options' => [
                         ['id' => 'yes', 'title' => 'Да, актуально'],
                         ['id' => 'no', 'title' => 'Нет, в архив'],
@@ -337,9 +345,10 @@ class InstallDefaultBotScenario extends Command
      * обо всех. [Все актуальны] и [Все в архив] решают за всю пачку;
      * [Разобрать по одному] уводит в кабинет, где видно каждое
      * объявление по отдельности — нажатие кнопки открывает 24-часовое
-     * окно, поэтому CTA-ссылка уходит бесплатным сообщением. Таймаута
-     * нет: молчание и так уводит публикации в архив по истечении срока, а
-     * поздний ответ идёт по выходу «Все объявления уже в архиве».
+     * окно, поэтому CTA-ссылка уходит бесплатным сообщением. Ветка
+     * таймаута не подключена — молчание и так уводит публикации в архив
+     * по истечении срока, — но срок ожидания тот же суточный, что и у
+     * поштучного опроса: иначе запуск ждал бы ответа вечно.
      *
      * @return array{nodes: list<array<string, mixed>>, edges: list<array<string, mixed>>}
      */
@@ -352,6 +361,7 @@ class InstallDefaultBotScenario extends Command
                     'channel' => 'adaptive',
                     'template_name' => WhatsappTemplateLibrary::SEVERAL_LISTINGS_RENEWAL,
                     'variables' => ['listings.expiring_first', 'listings.expiring_rest'],
+                    'timeout_hours' => ScenarioDefinition::SUGGESTED_TIMEOUT_HOURS,
                     'options' => [
                         ['id' => 'all_yes', 'title' => 'Все актуальны'],
                         ['id' => 'one_by_one', 'title' => 'Разобрать по одному'],

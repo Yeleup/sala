@@ -8,6 +8,7 @@ use App\Models\DereuWebhookEvent;
 use App\Models\WhatsappTemplate;
 use App\Services\DereuMessenger;
 use App\Services\ListingRenewalPollFailureHandler;
+use App\Services\ScenarioRunDeliveryFailureHandler;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
 use Illuminate\Support\Facades\Log;
@@ -29,7 +30,7 @@ class ApplyDereuDeliveryStatus implements ShouldQueue
 
     public function __construct(public DereuWebhookEvent $event) {}
 
-    public function handle(ListingRenewalPollFailureHandler $renewalPolls): void
+    public function handle(ListingRenewalPollFailureHandler $renewalPolls, ScenarioRunDeliveryFailureHandler $runs): void
     {
         $event = $this->event->fresh();
 
@@ -76,6 +77,7 @@ class ApplyDereuDeliveryStatus implements ShouldQueue
             // mark: the same question is still on its way.
             if ($entry !== null && ! $resent) {
                 $renewalPolls->handle($entry);
+                $runs->handle($entry);
             }
         }
 

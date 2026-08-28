@@ -59,6 +59,18 @@ class ScenarioDefinition
     public const string OUTPUT_TIMEOUT = 'timeout';
 
     /**
+     * Срок ожидания, который конструктор предлагает новому блоку
+     * «WhatsApp-сообщение», и он же стоит у типовых опросов продления.
+     *
+     * Это предзаполнение поля, а не поведение по умолчанию: у уже
+     * сохранённого блока пустой срок по-прежнему значит «ждать сколько
+     * угодно». Предлагается именно сутки — шаг всей проактивной
+     * автоматики: и 30-дневный цикл актуальности, и вопрос поставщику
+     * живут в суточном ритме.
+     */
+    public const int SUGGESTED_TIMEOUT_HOURS = 24;
+
+    /**
      * Fires when a «Действие» block's domain precondition no longer holds
      * (the request is already decided, the listing is not published).
      * Success stays on "continue", so older published snapshots keep

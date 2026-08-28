@@ -49,7 +49,7 @@ class ListingRenewalPollFailureHandler
      */
     protected function polledListings(ChannelMessage $failed): Collection
     {
-        $buttonIds = $this->buttonIds($failed);
+        $buttonIds = $failed->buttonIds();
 
         $listings = Listing::query()
             ->findMany($buttonIds->map(NotificationReplyHandler::renewalButtonListingId(...))->filter());
@@ -93,28 +93,6 @@ class ListingRenewalPollFailureHandler
                 $run->subject instanceof ListingRenewalBatch => collect($run->subject->listings),
                 default => collect(),
             });
-    }
-
-    /**
-     * The machine ids of every button the message carried: the reply
-     * buttons of an interactive message and the quick-reply payloads of a
-     * template message.
-     *
-     * @return Collection<int, string>
-     */
-    protected function buttonIds(ChannelMessage $message): Collection
-    {
-        $payload = $message->payload ?? [];
-
-        $interactive = collect($payload['action']['buttons'] ?? [])
-            ->map(fn (mixed $button): mixed => is_array($button) ? ($button['reply']['id'] ?? null) : null);
-
-        $template = collect($payload['components'] ?? [])
-            ->filter(fn (mixed $component): bool => is_array($component) && ($component['type'] ?? null) === 'button')
-            ->flatMap(fn (array $component): Collection => collect($component['parameters'] ?? [])
-                ->map(fn (mixed $parameter): mixed => is_array($parameter) ? ($parameter['payload'] ?? null) : null));
-
-        return $interactive->merge($template)->filter(fn (mixed $id): bool => is_string($id))->values();
     }
 
     /**

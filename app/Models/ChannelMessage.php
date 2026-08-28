@@ -11,6 +11,7 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Support\Collection;
 
 /**
  * One WhatsApp message in the channel journal — inbound or outbound, with
@@ -50,6 +51,30 @@ class ChannelMessage extends Model
     public function aiOperations(): HasMany
     {
         return $this->hasMany(AiOperation::class);
+    }
+
+    /**
+     * The machine ids of every button the message carried: the reply
+     * buttons of an interactive message and the quick-reply payloads of a
+     * template message. They are what ties an undelivered message back to
+     * what it was asking about — the answer would have carried the same
+     * ids.
+     *
+     * @return Collection<int, string>
+     */
+    public function buttonIds(): Collection
+    {
+        $payload = $this->payload ?? [];
+
+        $interactive = collect($payload['action']['buttons'] ?? [])
+            ->map(fn (mixed $button): mixed => is_array($button) ? ($button['reply']['id'] ?? null) : null);
+
+        $template = collect($payload['components'] ?? [])
+            ->filter(fn (mixed $component): bool => is_array($component) && ($component['type'] ?? null) === 'button')
+            ->flatMap(fn (array $component): Collection => collect($component['parameters'] ?? [])
+                ->map(fn (mixed $parameter): mixed => is_array($parameter) ? ($parameter['payload'] ?? null) : null));
+
+        return $interactive->merge($template)->filter(fn (mixed $id): bool => is_string($id))->values();
     }
 
     /**

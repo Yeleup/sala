@@ -14,6 +14,7 @@ use App\Enums\ScenarioVariable;
 use App\Models\BotScenario;
 use App\Models\WhatsappTemplate;
 use App\Services\Bot\BotReplyTexts;
+use App\Services\Bot\ScenarioDefinition;
 use App\Services\Bot\ScenarioValidator;
 use BackedEnum;
 use Filament\Notifications\Notification;
@@ -109,6 +110,7 @@ class BotScenarioEditor extends Page
 
         return [
             'runBased' => $trigger->isRunBased(),
+            'defaultTimeoutHours' => ScenarioDefinition::SUGGESTED_TIMEOUT_HOURS,
             'templates' => WhatsappTemplate::query()->orderBy('name')->get()
                 ->map(fn (WhatsappTemplate $template): array => [
                     'name' => $template->name,

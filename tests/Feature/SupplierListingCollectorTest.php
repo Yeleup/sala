@@ -10,6 +10,7 @@ use App\Enums\ListingKind;
 use App\Enums\ListingMediaType;
 use App\Enums\ListingStatus;
 use App\Enums\RepairPlace;
+use App\Exceptions\OutboundRequestBlocked;
 use App\Models\AiOperation;
 use App\Models\BotReplyText;
 use App\Models\BotSession;
@@ -2606,4 +2607,23 @@ test('a successful extraction resets the provider failure streak', function () {
         ->resume($session, supplierAiNode(), new InboundMessage(text: 'Сдаю трактор в Шымкенте, 10000 тг/час'));
 
     expect($session->fresh()->state['provider_failures'])->toBe(0);
+});
+
+test('a photo the local guard blocked stops the turn instead of being treated as unreadable', function () {
+    ListingExtractionAgent::fake()->preventStrayPrompts();
+    $session = collectorSession();
+
+    test()->mock(DereuMediaDownloader::class)
+        ->shouldReceive('download')->once()->with('photo-blocked')
+        ->andThrow(OutboundRequestBlocked::host('api.dereu.example'));
+
+    fakeCollectorMessenger()->shouldNotReceive('sendButtons');
+
+    expect(fn () => app(SupplierListingCollector::class)->resume(
+        $session,
+        supplierAiNode(),
+        new InboundMessage(mediaType: ListingMediaType::Photo, mediaId: 'photo-blocked'),
+    ))->toThrow(OutboundRequestBlocked::class);
+
+    ListingExtractionAgent::assertNeverPrompted();
 });

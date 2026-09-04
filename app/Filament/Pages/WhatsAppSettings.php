@@ -7,6 +7,7 @@ use App\Filament\Clusters\WhatsApp\WhatsAppCluster;
 use App\Models\DereuCompany;
 use App\Services\DereuConnect;
 use App\Services\DereuPlatformClient;
+use App\Support\DereuOutboundGuard;
 use BackedEnum;
 use Filament\Actions\Action;
 use Filament\Infolists\Components\TextEntry;
@@ -90,14 +91,16 @@ class WhatsAppSettings extends Page
             Action::make('connect')
                 ->label('Подключить WhatsApp')
                 ->icon(Heroicon::OutlinedLink)
-                ->visible(fn (): bool => $this->missingConfigKeys() === [] && ! $this->company?->isConnected())
+                ->visible(fn (): bool => ! $this->channelIsBlockedHere()
+                    && $this->missingConfigKeys() === []
+                    && ! $this->company?->isConnected())
                 ->action(fn () => $this->startConnect()),
 
             Action::make('reissueApiKey')
                 ->label('Перевыпустить API-ключ')
                 ->icon(Heroicon::OutlinedKey)
                 ->color(fn (): string => $this->company?->hasApiKey() ? 'gray' : 'warning')
-                ->visible(fn (): bool => (bool) $this->company?->isConnected())
+                ->visible(fn (): bool => ! $this->channelIsBlockedHere() && (bool) $this->company?->isConnected())
                 ->requiresConfirmation()
                 ->modalHeading('Перевыпустить API-ключ?')
                 ->modalDescription('Dereu выпустит новый ключ компании, прежний перестанет действовать сразу.')
@@ -107,7 +110,7 @@ class WhatsAppSettings extends Page
                 ->label('Отключить номер')
                 ->icon(Heroicon::OutlinedNoSymbol)
                 ->color('danger')
-                ->visible(fn (): bool => (bool) $this->company?->isConnected())
+                ->visible(fn (): bool => ! $this->channelIsBlockedHere() && (bool) $this->company?->isConnected())
                 ->requiresConfirmation()
                 ->modalHeading('Отключить WhatsApp?')
                 ->modalDescription('Приём и отправка сообщений через этот номер прекратятся сразу. Уже принятые входящие Dereu хранит ещё 30 дней.')
@@ -118,6 +121,11 @@ class WhatsAppSettings extends Page
     public function content(Schema $schema): Schema
     {
         return $schema->components([
+            Callout::make('WhatsApp недоступен с этой машины')
+                ->description('Локальная установка работает на копии боевых данных, поэтому всё, что ведёт в Dereu, отключено: подключение номера сообщило бы Meta реальный номер, а отправка ушла бы реальным поставщикам. Чтобы прогнать канал целиком, направьте DEREU_BASE_URL на мок, поднятый на этой машине.')
+                ->warning()
+                ->visible(fn (): bool => $this->channelIsBlockedHere()),
+
             Callout::make('Интеграция с Dereu не настроена')
                 ->description(fn (): string => 'Не заполнены: '.implode(', ', $this->missingConfigKeys()).'. Значения выдаёт оператор Dereu вместе с platform key.')
                 ->warning()
@@ -191,6 +199,17 @@ class WhatsAppSettings extends Page
                         ->copyable(),
                 ]),
         ]);
+    }
+
+    /**
+     * Whether this machine is barred from the channel — asked once for the
+     * whole page: if any half of Dereu is out of reach, the page must not
+     * offer the other half either.
+     */
+    protected function channelIsBlockedHere(): bool
+    {
+        return DereuOutboundGuard::blocksUrl((string) config('services.dereu.base_url'))
+            || DereuOutboundGuard::blocksUrl((string) config('services.dereu.connect.url'));
     }
 
     /**

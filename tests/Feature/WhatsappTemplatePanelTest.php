@@ -2,11 +2,13 @@
 
 use App\Enums\WhatsappTemplateCategory;
 use App\Enums\WhatsappTemplateStatus;
+use App\Exceptions\OutboundRequestBlocked;
 use App\Filament\Resources\WhatsappTemplates\Pages\CreateWhatsappTemplate;
 use App\Filament\Resources\WhatsappTemplates\Pages\ListWhatsappTemplates;
 use App\Models\User;
 use App\Models\WhatsappTemplate;
 use App\Services\WhatsappTemplateLibrary;
+use App\Services\WhatsappTemplateRegistry;
 use Filament\Actions\Testing\TestAction;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
@@ -185,4 +187,24 @@ test('синхронизация со сменой категории подни
 
     expect(WhatsappTemplate::query()->where('name', 'listing_renewal')->sole()->category)
         ->toBe(WhatsappTemplateCategory::Marketing);
+});
+
+test('a template registration the local guard blocked is reported, not turned into a server error', function () {
+    test()->mock(WhatsappTemplateRegistry::class)
+        ->shouldReceive('create')->once()
+        ->andThrow(OutboundRequestBlocked::host('api.dereu.example'));
+
+    Livewire::test(CreateWhatsappTemplate::class)
+        ->fillForm([
+            'name' => 'listing_renewal',
+            'language' => 'ru',
+            'category' => 'utility',
+            'body' => 'Объявление «{{1}}» скоро истечёт. Оно ещё актуально?',
+            'body_examples' => [['value' => 'Автокран 25т']],
+        ])
+        ->call('create')
+        ->assertHasNoFormErrors()
+        ->assertNotified('WhatsApp недоступен с этой машины');
+
+    expect(WhatsappTemplate::count())->toBe(0);
 });

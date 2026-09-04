@@ -4,6 +4,7 @@ namespace App\Services\Ai;
 
 use App\Enums\AiOutcome;
 use App\Enums\AiTask;
+use App\Exceptions\OutboundRequestBlocked;
 use App\Models\BotSession;
 use App\Services\Bot\AiAssistant;
 use App\Services\Bot\InboundMessage;
@@ -61,6 +62,11 @@ class ScenarioAiAssistant implements AiAssistant
             ]);
 
             return $message->withVoice($download['contents'], $transcription);
+        } catch (OutboundRequestBlocked $e) {
+            // Blocked locally is not a recording the bot failed to read:
+            // asking the contact to type instead would hide the block
+            // behind the known download-failure wording.
+            throw $e;
         } catch (Throwable $e) {
             Log::warning('Voice message could not be downloaded or transcribed for the AI block.', [
                 'bot_session_id' => $session->id,

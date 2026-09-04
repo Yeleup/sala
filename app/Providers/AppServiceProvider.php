@@ -9,7 +9,9 @@ use App\Services\Ai\ScenarioAiAssistant;
 use App\Services\Bot\AiAssistant;
 use App\Services\Bot\MenuRouter;
 use App\Services\DereuConnect;
+use App\Support\DereuOutboundGuard;
 use Illuminate\Support\Facades\Event;
+use Illuminate\Support\Facades\Http;
 use Illuminate\Support\ServiceProvider;
 
 class AppServiceProvider extends ServiceProvider
@@ -41,5 +43,10 @@ class AppServiceProvider extends ServiceProvider
     public function boot(): void
     {
         Event::subscribe(RecordAiAttempts::class);
+
+        // The block lives on the client, not on the callers — see
+        // DereuOutboundGuard. Registered unconditionally: the guard itself
+        // decides, so there is one place holding the rule.
+        Http::globalRequestMiddleware(new DereuOutboundGuard);
     }
 }

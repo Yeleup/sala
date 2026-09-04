@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Support\DereuOutboundGuard;
 use RuntimeException;
 
 /**
@@ -62,6 +63,11 @@ class DereuConnect
         ?string $companyName = null,
     ): string {
         $this->ensureConfigured();
+
+        // The browser redirect is the one path to Dereu the HTTP client
+        // never sees, so it asks the guard itself rather than relying on
+        // whoever offers the button to have remembered.
+        DereuOutboundGuard::ensureReachable($this->connectUrl);
 
         $payload = [
             'external_id' => $externalId,

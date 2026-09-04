@@ -2,6 +2,11 @@
 
 use App\Services\DereuConnect;
 use Illuminate\Support\Carbon;
+use Tests\TestCase;
+
+// connectUrl() спрашивает гвард исходящих, а тот читает окружение и
+// конфигурацию — значит, этому тесту нужно приложение.
+uses(TestCase::class);
 
 afterEach(function () {
     Carbon::setTestNow();

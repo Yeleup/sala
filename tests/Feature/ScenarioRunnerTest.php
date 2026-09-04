@@ -5,6 +5,7 @@ use App\Enums\CustomerRequestStatus;
 use App\Enums\ListingStatus;
 use App\Enums\ScenarioRunStatus;
 use App\Enums\WhatsappTemplateStatus;
+use App\Exceptions\OutboundRequestBlocked;
 use App\Filament\Resources\CustomerRequests\Pages\ListCustomerRequests;
 use App\Filament\Resources\ScenarioRuns\ScenarioRunResource;
 use App\Models\BotScenario;
@@ -24,8 +25,8 @@ use App\Services\TemplateFallback;
 use App\Services\WhatsappTemplateLibrary;
 use Filament\Actions\Testing\TestAction;
 use Illuminate\Foundation\Testing\RefreshDatabase;
-use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\Log;
 use Livewire\Livewire;
 use Mockery\MockInterface;
 
@@ -988,4 +989,19 @@ describe('запуск, погашенный таймаутом', function () {
 
         expect(ScenarioRun::sole()->timeout_at->diffInMinutes(now()->addDay()))->toBeLessThan(1);
     });
+});
+
+test('заблокированная на этой машине отправка не хоронит запуск сценария', function () {
+    installFlowScenarios();
+    $request = runnerPendingRequest();
+
+    runnerMessenger()->shouldReceive('sendButtons')->once()
+        ->andThrow(OutboundRequestBlocked::host('api.dereu.example'));
+
+    $scenario = BotScenario::publishedForTrigger(BotScenarioTrigger::NewCustomerRequest);
+
+    expect(fn () => app(ScenarioRunner::class)->launch($scenario, $request->listing->supplier, $request))
+        ->toThrow(OutboundRequestBlocked::class);
+
+    expect(ScenarioRun::sole()->status)->toBe(ScenarioRunStatus::Active);
 });

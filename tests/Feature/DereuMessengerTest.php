@@ -2,6 +2,7 @@
 
 use App\Enums\ChannelDirection;
 use App\Enums\ChannelMessageStatus;
+use App\Exceptions\OutboundRequestBlocked;
 use App\Exceptions\SessionWindowClosed;
 use App\Models\ChannelMessage;
 use App\Models\Contact;
@@ -385,4 +386,31 @@ test('the channel is chosen by the window: session text inside, template outside
     app(DereuMessenger::class)->sendTextOrTemplate($closedContact, 'Объявление скоро истечёт', $template, ['x']);
     Http::assertSent(fn (Request $request) => $request['type'] === 'template'
         && $request['payload']['name'] === $template->name);
+});
+
+test('a send the local guard blocked is not journalled as a delivery failure', function () {
+    config()->set('services.dereu.base_url', 'https://api.dereu.example/api/v1');
+    app()->instance('env', 'local');
+
+    connectedDereuCompany(['api_key' => 'dereu_testkey']);
+    $contact = Contact::factory()->withOpenSessionWindow()->create(['phone' => '77011234567']);
+
+    expect(fn () => app(DereuMessenger::class)->sendText($contact, 'Привет!'))
+        ->toThrow(OutboundRequestBlocked::class);
+
+    expect(ChannelMessage::query()->count())->toBe(0);
+});
+
+test('a send the local guard blocked is not counted as a dead channel', function () {
+    config()->set('services.dereu.base_url', 'https://api.dereu.example/api/v1');
+    app()->instance('env', 'local');
+
+    Log::spy();
+    connectedDereuCompany(['api_key' => 'dereu_testkey']);
+    $contact = Contact::factory()->withOpenSessionWindow()->create(['phone' => '77011234567']);
+
+    expect(fn () => app(DereuMessenger::class)->sendText($contact, 'Привет!'))
+        ->toThrow(OutboundRequestBlocked::class);
+
+    Log::shouldNotHaveReceived('error');
 });

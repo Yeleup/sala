@@ -3,6 +3,7 @@
 use App\Enums\AiOutcome;
 use App\Enums\ListingMediaType;
 use App\Enums\RouteConfidence;
+use App\Exceptions\OutboundRequestBlocked;
 use App\Models\BotReplyText;
 use App\Models\BotScenario;
 use App\Models\BotSession;
@@ -746,6 +747,23 @@ describe('вопрос про сервис на шаге меню', function () 
 });
 
 describe('голосовое на шаге меню', function () {
+    test('голосовое, заблокированное гвардом этой машины, не выдаётся за нерасшифрованное', function () {
+        $scenario = navScenario();
+        $contact = Contact::factory()->create();
+        navSessionAt($scenario, $contact, 'menu');
+
+        test()->mock(DereuMediaDownloader::class)
+            ->shouldReceive('download')->once()->with('AUDIO-BLOCKED')
+            ->andThrow(OutboundRequestBlocked::host('api.dereu.example'));
+
+        navMessenger()->shouldNotReceive('sendButtons');
+
+        expect(fn () => app(BotEngine::class)->handle(
+            $contact,
+            new InboundMessage(mediaType: ListingMediaType::Audio, mediaId: 'AUDIO-BLOCKED'),
+        ))->toThrow(OutboundRequestBlocked::class);
+    });
+
     test('расшифровка уходит и роутеру, и анкете — без второго скачивания', function () {
         $scenario = navScenario();
         $contact = Contact::factory()->create();

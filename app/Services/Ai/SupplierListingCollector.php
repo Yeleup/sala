@@ -14,6 +14,7 @@ use App\Enums\ListingOrigin;
 use App\Enums\ListingStatus;
 use App\Enums\RepairPlace;
 use App\Enums\UserIntent;
+use App\Exceptions\OutboundRequestBlocked;
 use App\Models\BotSession;
 use App\Models\Brand;
 use App\Models\Category;
@@ -1257,6 +1258,10 @@ class SupplierListingCollector
         // walks the unreadable path — mirroring how voice failures behave.
         try {
             $download = $this->mediaDownloader->download((string) $message->mediaId);
+        } catch (OutboundRequestBlocked $e) {
+            // See the voice path: a local block is not a failure profile of
+            // the photo, and must not be dressed as one.
+            throw $e;
         } catch (Throwable $e) {
             Log::warning('Photo download failed; the message is treated as unreadable.', [
                 'bot_session_id' => $session->id,

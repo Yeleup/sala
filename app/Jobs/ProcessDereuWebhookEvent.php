@@ -4,6 +4,7 @@ namespace App\Jobs;
 
 use App\Enums\ChannelDirection;
 use App\Enums\ChannelMessageStatus;
+use App\Exceptions\OutboundRequestBlocked;
 use App\Models\ChannelMessage;
 use App\Models\Contact;
 use App\Models\DereuCompany;
@@ -123,7 +124,18 @@ class ProcessDereuWebhookEvent implements ShouldQueue
 
         $this->showTypingIndicator($platform, $event);
 
-        $engine->handle($contact, InboundMessage::fromWebhookEvent($event));
+        try {
+            $engine->handle($contact, InboundMessage::fromWebhookEvent($event));
+        } catch (OutboundRequestBlocked $e) {
+            // Nothing on this machine can reach the channel, so a retry
+            // would only replay the engine — paid model calls included —
+            // to be blocked again, and the apology of a dead job would be
+            // blocked in its turn.
+            Log::warning('Inbound message processing stopped: the WhatsApp channel is blocked on this machine.', [
+                'event_id' => $event->event_id,
+                'host' => $e->host,
+            ]);
+        }
 
         $event->update(['processed_at' => now()]);
     }

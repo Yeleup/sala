@@ -7,6 +7,7 @@ use App\Enums\AiOutcome;
 use App\Enums\CustomerRequestStatus;
 use App\Enums\ListingMediaType;
 use App\Enums\RepairPlace;
+use App\Exceptions\OutboundRequestBlocked;
 use App\Models\AiOperation;
 use App\Models\BotSession;
 use App\Models\Contact;
@@ -1771,4 +1772,21 @@ test('сказанный заказчиком выезд превращаетс�
     // с предметом поиска, а не выводится заново из каждого сообщения.
     expect($outcome)->toBe(AiOutcome::InProgress)
         ->and($session->refresh()->state['needs_travel'])->toBeTrue();
+});
+
+test('a voice message the local guard blocked stops the turn instead of blaming the recording', function () {
+    SearchQueryExtractionAgent::fake()->preventStrayPrompts();
+    test()->mock(DereuMediaDownloader::class)
+        ->shouldReceive('download')->once()->with('voice-blocked')
+        ->andThrow(OutboundRequestBlocked::host('api.dereu.example'));
+
+    fakeSearchMessenger()->shouldNotReceive('sendButtons');
+
+    $session = searchSession();
+
+    expect(fn () => app(ScenarioAiAssistant::class)->resume(
+        $session,
+        customerAiNode(),
+        new InboundMessage(mediaType: ListingMediaType::Audio, mediaId: 'voice-blocked'),
+    ))->toThrow(OutboundRequestBlocked::class);
 });

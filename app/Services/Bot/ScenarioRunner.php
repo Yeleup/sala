@@ -8,6 +8,7 @@ use App\Enums\ScenarioActionOutcome;
 use App\Enums\ScenarioCondition;
 use App\Enums\ScenarioMessageChannel;
 use App\Enums\ScenarioRunStatus;
+use App\Exceptions\OutboundRequestBlocked;
 use App\Models\BotScenario;
 use App\Models\Contact;
 use App\Models\ScenarioRun;
@@ -74,6 +75,11 @@ class ScenarioRunner
 
         try {
             $this->advance($run, $definition, $definition->startNodeId());
+        } catch (OutboundRequestBlocked $e) {
+            // The channel is barred on this machine, so nothing was
+            // attempted: recording a terminal failure would put a local
+            // block into the journal of a real supplier's run.
+            throw $e;
         } catch (Throwable $e) {
             $this->fail($run, $e);
 
@@ -108,6 +114,11 @@ class ScenarioRunner
 
         try {
             $this->advance($run, $definition, $definition->target($node['id'], ScenarioDefinition::optionOutput($optionId)));
+        } catch (OutboundRequestBlocked $e) {
+            // The channel is barred on this machine, so nothing was
+            // attempted: recording a terminal failure would put a local
+            // block into the journal of a real supplier's run.
+            throw $e;
         } catch (Throwable $e) {
             $this->fail($run, $e);
         }
@@ -138,6 +149,11 @@ class ScenarioRunner
 
         try {
             $this->advance($run, $definition, $target);
+        } catch (OutboundRequestBlocked $e) {
+            // The channel is barred on this machine, so nothing was
+            // attempted: recording a terminal failure would put a local
+            // block into the journal of a real supplier's run.
+            throw $e;
         } catch (Throwable $e) {
             $this->fail($run, $e);
         }

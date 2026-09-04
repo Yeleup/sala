@@ -7,6 +7,7 @@ use App\Enums\BotNodeType;
 use App\Enums\BotReplyKey;
 use App\Enums\MenuRouteKind;
 use App\Enums\RouteConfidence;
+use App\Exceptions\OutboundRequestBlocked;
 use App\Models\BotScenario;
 use App\Models\BotSession;
 use App\Models\Contact;
@@ -781,6 +782,10 @@ class BotEngine
                 'contact_id' => $session->contact_id,
                 'bot_session_id' => $session->id,
             ]));
+        } catch (OutboundRequestBlocked $e) {
+            // A local block is not an unreadable recording: repeating the
+            // menu would hide it behind the ordinary download failure.
+            throw $e;
         } catch (Throwable $e) {
             Log::warning('Voice message at a menu step could not be downloaded or transcribed.', [
                 'bot_session_id' => $session->id,

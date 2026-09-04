@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Enums\ChannelDirection;
 use App\Enums\ChannelMessageStatus;
+use App\Exceptions\OutboundRequestBlocked;
 use App\Exceptions\SessionWindowClosed;
 use App\Models\ChannelMessage;
 use App\Models\Contact;
@@ -213,6 +214,11 @@ class DereuMessenger
                     'payload' => $payload,
                 ])
                 ->throw();
+        } catch (OutboundRequestBlocked $e) {
+            // Nothing left the machine, so this is not a delivery failure:
+            // a journal row would show the operator a message that was
+            // never sent, and feed the undelivered-spike alarm with it.
+            throw $e;
         } catch (Throwable $e) {
             // A failed attempt must leave a trace: without it the operator
             // chat shows a dialog where the bot «just went silent», and the

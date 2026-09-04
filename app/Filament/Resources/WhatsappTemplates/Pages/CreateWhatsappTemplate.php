@@ -3,9 +3,12 @@
 namespace App\Filament\Resources\WhatsappTemplates\Pages;
 
 use App\Enums\WhatsappTemplateCategory;
+use App\Exceptions\OutboundRequestBlocked;
 use App\Filament\Resources\WhatsappTemplates\WhatsappTemplateResource;
 use App\Services\WhatsappTemplateRegistry;
+use Filament\Notifications\Notification;
 use Filament\Resources\Pages\CreateRecord;
+use Filament\Support\Exceptions\Halt;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Http\Client\RequestException;
 use Illuminate\Validation\ValidationException;
@@ -45,6 +48,16 @@ class CreateWhatsappTemplate extends CreateRecord
                 components: $components,
                 example: $examples === [] ? null : ['body_text' => [$examples]],
             );
+        } catch (OutboundRequestBlocked $e) {
+            // The template never left the machine, so this is not a refusal
+            // by Meta and must not be shown on the form as one.
+            Notification::make()
+                ->title('WhatsApp недоступен с этой машины')
+                ->body('Локальная установка работает на копии боевых данных, поэтому шаблон не отправлен в Dereu и не создан. Зарегистрируйте его на боевом контуре.')
+                ->warning()
+                ->send();
+
+            throw new Halt;
         } catch (RequestException $e) {
             throw ValidationException::withMessages([
                 'data.body' => 'Dereu/Meta отклонили шаблон: '.($e->response->json('message') ?? $e->getMessage()),

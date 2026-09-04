@@ -1,5 +1,6 @@
 <?php
 
+use App\Exceptions\OutboundRequestBlocked;
 use App\Jobs\ProcessDereuWebhookEvent;
 use App\Models\Contact;
 use App\Models\DereuWebhookEvent;
@@ -326,6 +327,20 @@ test('a dead job finds the contact by a differently spelled number too', functio
         ->withArgs(fn (Contact $to, string $text) => $to->is($contact));
 
     (new ProcessDereuWebhookEvent($event))->failed(new RuntimeException('boom'));
+
+    expect($event->fresh()->processed_at)->not->toBeNull();
+});
+
+test('a reply the local guard blocked closes the event instead of replaying the engine', function () {
+    test()->mock(BotEngine::class)
+        ->shouldReceive('handle')->once()
+        ->andThrow(OutboundRequestBlocked::host('api.dereu.example'));
+
+    $event = inboundMessageEvent();
+
+    // Не бросает — значит, очередь не переигрывает движок вместе с его
+    // платными вызовами модели.
+    runDereuWebhookJob($event);
 
     expect($event->fresh()->processed_at)->not->toBeNull();
 });

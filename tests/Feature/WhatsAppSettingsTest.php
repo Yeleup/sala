@@ -39,6 +39,15 @@ afterEach(function () {
 });
 
 /**
+ * Хосты живого канала — не мок на этой машине, который гвард пропускает.
+ */
+function liveDereuHosts(): void
+{
+    config()->set('services.dereu.base_url', 'https://api.dereu.example/api/v1');
+    config()->set('services.dereu.connect.url', 'https://connect.dereu.example/connect');
+}
+
+/**
  * @return array{0: string, 1: string} result + sig, как их шлёт OUT-редирект Dereu
  */
 function signedDereuConnectResult(array $overrides = []): array
@@ -103,6 +112,32 @@ test('the connect action redirects to a signed hosted signup url and stores a on
 
 test('the connect action is visible when the number is not connected', function () {
     Livewire::test(WhatsAppSettings::class)->assertActionVisible('connect');
+});
+
+test('the connect action is hidden on a local machine, which must not touch the live number', function () {
+    liveDereuHosts();
+    app()->instance('env', 'local');
+
+    Livewire::test(WhatsAppSettings::class)->assertActionHidden('connect');
+});
+
+test('the actions that reach Dereu are hidden on a local machine too', function () {
+    liveDereuHosts();
+    connectedDereuCompany();
+    app()->instance('env', 'local');
+
+    Livewire::test(WhatsAppSettings::class)
+        ->assertActionHidden('reissueApiKey')
+        ->assertActionHidden('disconnect');
+});
+
+test('the page says why it offers nothing that reaches Dereu on a local machine', function () {
+    liveDereuHosts();
+    app()->instance('env', 'local');
+
+    $this->get(WhatsAppSettings::getUrl())
+        ->assertOk()
+        ->assertSee('копии боевых данных');
 });
 
 test('the connect action is hidden once the number is connected', function () {

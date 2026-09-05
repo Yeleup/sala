@@ -40,6 +40,17 @@ describe('оператор смотрит объявление глазами з
             ->assertSee('г.Шымкент');
     });
 
+    test('предпросмотр водителя показывает технику словами рядом с категориями', function () {
+        // Оператор видит страницу так, как её увидит заказчик: техника вне
+        // справочника стоит в той же строке, пока категория не заведена.
+        $driver = Listing::factory()->driver()->pendingModeration()->create(['unlisted_machinery' => 'Автобус']);
+        $driver->machineCategories()->attach(categoryNamed('Экскаватор')->id);
+
+        $this->get(route('moderation.listings.preview', $driver))
+            ->assertOk()
+            ->assertSee('Экскаватор, Автобус');
+    });
+
     test('в предпросмотре нет «Выбрать» — заявку от лица заказчика оператор не оформляет', function () {
         $listing = Listing::factory()->published()->create();
 

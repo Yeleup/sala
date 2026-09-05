@@ -47,7 +47,7 @@ class ListingEmbeddings
             ],
             ListingKind::Driver => [
                 blank($listing->person_name) ? null : 'Водитель: '.$listing->person_name,
-                $listing->machineCategories->isEmpty() ? null : 'Техника: '.$listing->machineCategories->pluck('name')->implode(', '),
+                $listing->machineryLine() === null ? null : 'Техника: '.$listing->machineryLine(),
             ],
         };
 

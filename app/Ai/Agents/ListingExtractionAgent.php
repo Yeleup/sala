@@ -30,6 +30,11 @@ use Stringable;
  * collector can ask for it. Dictionary-backed fields (the rental category
  * and brand, the driver's machine categories) are constrained to the
  * operator's dictionaries both in the prompt and in the response schema.
+ * The driver's questionnaire adds an escape hatch to that constraint:
+ * machinery the dictionary lacks («автобус») goes into unlisted_machinery
+ * as free text, so an answer the enum cannot express no longer collapses
+ * into null and the same question asked again — the collector handles the
+ * field itself, and it is never a clarifying_question target.
  * Unlike the category, the brand is optional and never asked about. The
  * title is the one field the model composes itself from the supplier's
  * words instead of extracting — it is never asked about either.
@@ -189,8 +194,8 @@ class ListingExtractionAgent implements Agent, HasStructuredOutput
     private function driverFields(): string
     {
         $machineCategoriesHint = $this->categories === []
-            ? 'справочник категорий пуст — всегда оставляй machine_categories равным null.'
-            : 'категории техники, на которой работает водитель, — СТРОГО из списка ниже, дословно, как в списке; можно несколько. Не придумывай и не перефразируй категории; если ни одна не подходит или ты не уверен — оставь null.';
+            ? 'справочник категорий пуст — всегда оставляй machine_categories равным null; техника, которой нет в списке, идёт в unlisted_machinery.'
+            : 'категории техники, на которой работает водитель, — СТРОГО из списка ниже, дословно, как в списке; можно несколько. Не придумывай и не перефразируй категории; если ни одна не подходит или ты не уверен — оставь null. Техника, которой нет в списке, идёт в unlisted_machinery.';
 
         return <<<TEXT
         - title: короткое название объявления на русском в именительном падеже, до 60 символов —
@@ -199,6 +204,9 @@ class ListingExtractionAgent implements Agent, HasStructuredOutput
           ясна — заполни. Не вставляй в название лишние детали.
         - person_name: имя водителя, как он сам представился. Не представился — null.
         - machine_categories: {$machineCategoriesHint}
+        - unlisted_machinery: техника, на которой работает водитель, если её НЕТ в списке категорий —
+          его же словами, одним-двумя словами в именительном падеже («автобус», «водовоз»). Техника
+          из списка сюда не попадает — она идёт в machine_categories. Не названа — null.
         - licence_type: удостоверение водителя — строго одно из driver_licence (водительское),
           tractor_operator (тракторист-машинист), other (другой документ). Заполняй, только
           если водитель сказал, какое у него удостоверение; иначе null.
@@ -292,6 +300,7 @@ class ListingExtractionAgent implements Agent, HasStructuredOutput
                 'machine_categories' => ($this->categories === []
                     ? $schema->array()->items($schema->string())
                     : $schema->array()->items($schema->string()->enum($this->categories)))->nullable()->required(),
+                'unlisted_machinery' => $schema->string()->nullable()->required(),
                 'licence_type' => $schema->string()->enum(array_column(LicenceType::cases(), 'value'))->nullable()->required(),
                 'experience_years' => $schema->integer()->nullable()->required(),
                 'travels_to_other_cities' => $schema->boolean()->nullable()->required(),

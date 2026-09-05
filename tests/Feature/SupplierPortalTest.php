@@ -11,6 +11,7 @@ use App\Models\User;
 use App\Services\Ai\CtaLinkBuilder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\UploadedFile;
+use Illuminate\Support\Arr;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Facades\URL;
 
@@ -535,7 +536,7 @@ describe('анкета по виду', function () {
             ->and($draft->documents()->count())->toBe(1);
     });
 
-    test('техника вне справочника не принимается', function () {
+    test('чужой id категории техники не принимается', function () {
         $draft = Listing::factory()->driver()->create();
         storedDocumentFor($draft);
 
@@ -545,6 +546,73 @@ describe('анкета по виду', function () {
 
         $response->assertSessionHasErrors(['machine_categories.0']);
         expect($draft->refresh())->status->toBe(ListingStatus::Draft);
+    });
+
+    test('техника словами заменяет чекбоксы: анкета без категорий уходит на модерацию', function () {
+        // Инцидент с «Автобусом»: справочник не знает технику водителя —
+        // в вебе он пишет её словами, категорию подберёт оператор.
+        $draft = Listing::factory()->driver()->create();
+        storedDocumentFor($draft);
+
+        $this->post(portalLinks()->updateUrl($draft), Arr::except(validDriverPayload($draft, [
+            'unlisted_machinery' => 'автобус',
+        ]), 'machine_categories'))->assertRedirect()->assertSessionHasNoErrors();
+
+        $draft->refresh();
+        expect($draft->status)->toBe(ListingStatus::PendingModeration)
+            // Хранится с заглавной, как названия категорий, — кто бы ни написал.
+            ->and($draft->unlisted_machinery)->toBe('Автобус')
+            ->and($draft->machineCategories)->toBeEmpty();
+    });
+
+    test('техника словами вместо прежних чекбоксов снимает отмеченные категории', function () {
+        // Поставщик передумал: снял все чекбоксы и написал технику словами —
+        // прежняя привязка к справочнику уходит вместе с чекбоксами.
+        $draft = Listing::factory()->driver()->create();
+        $draft->machineCategories()->sync([categoryNamed('Экскаватор')->id]);
+        storedDocumentFor($draft);
+
+        $this->post(portalLinks()->updateUrl($draft), Arr::except(validDriverPayload($draft, [
+            'unlisted_machinery' => 'автобус',
+        ]), 'machine_categories'))->assertRedirect()->assertSessionHasNoErrors();
+
+        expect($draft->refresh()->machineCategories)->toBeEmpty()
+            ->and($draft->unlisted_machinery)->toBe('Автобус');
+    });
+
+    test('без техники из списка и без техники словами форма просит одно из двух', function () {
+        $draft = Listing::factory()->driver()->create();
+        storedDocumentFor($draft);
+
+        $response = $this->post(portalLinks()->updateUrl($draft), Arr::except(validDriverPayload($draft), 'machine_categories'));
+
+        $response->assertSessionHasErrors(['machine_categories' => 'Отметьте технику из списка или напишите её словами.'])
+            ->assertSessionDoesntHaveErrors(['unlisted_machinery']);
+        expect($draft->refresh())->status->toBe(ListingStatus::Draft);
+    });
+
+    test('техника словами длиннее 120 символов не принимается', function () {
+        $draft = Listing::factory()->driver()->create();
+        storedDocumentFor($draft);
+
+        $response = $this->post(portalLinks()->updateUrl($draft), validDriverPayload($draft, [
+            'unlisted_machinery' => str_repeat('а', 121),
+        ]));
+
+        $response->assertSessionHasErrors(['unlisted_machinery' => 'Поле «техника словами» слишком длинное (не более 120 символов).']);
+        expect($draft->refresh())->status->toBe(ListingStatus::Draft);
+    });
+
+    test('форма водителя предлагает написать технику словами и помнит написанное', function () {
+        $draft = Listing::factory()->driver()->create(['unlisted_machinery' => 'автобус']);
+
+        $this->get(portalLinks()->editUrl($draft))
+            ->assertOk()
+            ->assertSee('Техники нет в списке? Напишите словами')
+            ->assertSee('name="unlisted_machinery"', false)
+            ->assertSee('value="Автобус"', false)
+            ->assertSee('Например: автобус')
+            ->assertSee('Оператор подберёт категорию при проверке.');
     });
 
     test('форма водителя показывает анкету вида и загрузку документа вместо цены', function () {
@@ -559,6 +627,7 @@ describe('анкета по виду', function () {
             ->assertSee('Готов выезжать в другие города')
             ->assertSee('Техника, на которой работаете')
             ->assertSee('name="machine_categories[]"', false)
+            ->assertSee('name="unlisted_machinery"', false)
             ->assertSee('Снимок увидит только оператор — в объявлении он не показывается.')
             ->assertDontSee('Цена / тариф')
             ->assertDontSee('name="category_id"', false)
@@ -586,18 +655,22 @@ describe('анкета по виду', function () {
             ->assertSee('Цена за диагностику (необязательно)')
             ->assertSee('Описание (необязательно)')
             ->assertDontSee('name="category_id"', false)
-            ->assertDontSee('name="machine_categories[]"', false);
+            ->assertDontSee('name="machine_categories[]"', false)
+            ->assertDontSee('name="unlisted_machinery"', false);
     });
 
-    test('просмотр анкеты водителя показывает поля вида списком', function () {
-        $listing = Listing::factory()->driver()->pendingModeration()->create(['title' => 'Машинист экскаватора']);
+    test('просмотр анкеты водителя показывает поля вида списком, техника словами — в одной строке с категориями', function () {
+        $listing = Listing::factory()->driver()->pendingModeration()->create([
+            'title' => 'Машинист экскаватора',
+            'unlisted_machinery' => 'Автобус',
+        ]);
         $listing->machineCategories()->sync([categoryNamed('Экскаватор')->id]);
         storedDocumentFor($listing);
 
         $this->get(portalLinks()->editUrl($listing))
             ->assertOk()
             ->assertSee('Серик')
-            ->assertSee('Экскаватор')
+            ->assertSee('Экскаватор, Автобус')
             ->assertSee('Тракторист-машинист')
             ->assertSee('8 лет')
             ->assertSee('Готов выезжать в другие города')
@@ -608,15 +681,15 @@ describe('анкета по виду', function () {
     test('карточки «Мои объявления» показывают подзаголовок по виду', function () {
         $contact = Contact::factory()->create();
         Listing::factory()->for($contact, 'supplier')->repair()->create();
-        $driver = Listing::factory()->for($contact, 'supplier')->driver()->create();
+        $driver = Listing::factory()->for($contact, 'supplier')->driver()->create(['unlisted_machinery' => 'Автобус']);
         $driver->machineCategories()->sync([categoryNamed('Экскаватор')->id]);
 
         $this->get(portalLinks()->myListingsUrl($contact))
             ->assertOk()
             ->assertSee('Сервис «Мотор»')
             ->assertSee('Диагностика, ремонт двигателя')
-            ->assertSee('Серик')
-            ->assertSee('Экскаватор');
+            // У водителя — имя и техника, включая названную словами.
+            ->assertSee('Серик · Экскаватор, Автобус');
     });
 });
 

@@ -13,6 +13,7 @@ use Database\Factories\ListingFactory;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Attributes\Scope;
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Database\Eloquent\Casts\Attribute;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -21,6 +22,7 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\HasOne;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Str;
 use InvalidArgumentException;
 use LogicException;
 
@@ -29,7 +31,7 @@ use LogicException;
  * every business field may stay empty until the supplier completes it via
  * the web interface.
  */
-#[Fillable(['contact_id', 'origin', 'created_by_user_id', 'kind', 'title', 'category_id', 'brand_id', 'description', 'location_id', 'location_detail', 'price', 'person_name', 'services', 'experience_years', 'repair_place', 'travels_to_other_cities', 'licence_type', 'document_verified_at', 'document_verified_by', 'status', 'rejection_reason', 'moderated_by_user_id', 'moderated_at', 'expires_at', 'renewal_requested_at'])]
+#[Fillable(['contact_id', 'origin', 'created_by_user_id', 'kind', 'title', 'category_id', 'brand_id', 'description', 'location_id', 'location_detail', 'price', 'person_name', 'services', 'experience_years', 'repair_place', 'travels_to_other_cities', 'licence_type', 'unlisted_machinery', 'document_verified_at', 'document_verified_by', 'status', 'rejection_reason', 'moderated_by_user_id', 'moderated_at', 'expires_at', 'renewal_requested_at'])]
 class Listing extends Model
 {
     /** @use HasFactory<ListingFactory> */
@@ -58,7 +60,7 @@ class Listing extends Model
      * the places that sync the pivot of a published listing dispatch
      * GenerateListingEmbedding themselves.
      */
-    private const array EMBEDDING_SOURCE_FIELDS = ['status', 'kind', 'title', 'category_id', 'brand_id', 'description', 'location_id', 'location_detail', 'person_name', 'services'];
+    private const array EMBEDDING_SOURCE_FIELDS = ['status', 'kind', 'title', 'category_id', 'brand_id', 'description', 'location_id', 'location_detail', 'person_name', 'services', 'unlisted_machinery'];
 
     /**
      * Media rows go away with the listing via the DB cascade, but the
@@ -161,6 +163,38 @@ class Listing extends Model
         $parts = array_filter([$this->location?->name, $this->location_detail]);
 
         return $parts === [] ? null : implode(', ', $parts);
+    }
+
+    /**
+     * The driver's machinery as one line: the dictionary categories in
+     * the order of the relation, then the machinery he named in his own
+     * words because the dictionary had no entry for it. The single source
+     * of the «техника» line for the catalog, the cabinet, the matcher and
+     * the embeddings — until the operator adds the missing category, the
+     * customer must still see what the driver operates.
+     */
+    public function machineryLine(): ?string
+    {
+        $parts = array_filter([
+            ...$this->machineCategories->pluck('name')->all(),
+            $this->unlisted_machinery,
+        ]);
+
+        return $parts === [] ? null : implode(', ', $parts);
+    }
+
+    /**
+     * The machinery a driver named outside the dictionary is stored the way
+     * a category name reads — trimmed, first letter capitalized — whoever
+     * typed it: the bot, the supplier in the web form or the operator.
+     * Every «техника» line joins it to category names, and «Экскаватор,
+     * автобус» would read as a typo. An emptied field is null, not «».
+     */
+    protected function unlistedMachinery(): Attribute
+    {
+        return Attribute::make(
+            set: fn (?string $value): ?string => filled($value) ? Str::ucfirst(trim($value)) : null,
+        );
     }
 
     /** @return HasMany<ListingMedia, $this> */

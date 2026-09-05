@@ -13,6 +13,7 @@ use App\Models\Listing;
 use App\Models\ListingMedia;
 use App\Models\User;
 use Filament\Schemas\Components\Component;
+use Filament\Tables\Columns\TextColumn;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\Storage;
@@ -46,19 +47,37 @@ describe('форма объявления по виду', function () {
         'аренда' => [
             'publishable',
             ['category_id', 'brand_id', 'price'],
-            ['person_name', 'services', 'repair_place', 'machine_categories', 'licence_type', 'experience_years', 'travels_to_other_cities', 'document_verified'],
+            ['person_name', 'services', 'repair_place', 'machine_categories', 'unlisted_machinery', 'licence_type', 'experience_years', 'travels_to_other_cities', 'document_verified'],
         ],
         'ремонт' => [
             'repair',
             ['person_name', 'services', 'repair_place', 'price'],
-            ['category_id', 'brand_id', 'machine_categories', 'licence_type', 'experience_years', 'travels_to_other_cities', 'document_verified'],
+            ['category_id', 'brand_id', 'machine_categories', 'unlisted_machinery', 'licence_type', 'experience_years', 'travels_to_other_cities', 'document_verified'],
         ],
         'водитель' => [
             'driver',
-            ['person_name', 'machine_categories', 'licence_type', 'experience_years', 'travels_to_other_cities', 'document_verified'],
+            ['person_name', 'machine_categories', 'unlisted_machinery', 'licence_type', 'experience_years', 'travels_to_other_cities', 'document_verified'],
             ['category_id', 'brand_id', 'price', 'services', 'repair_place'],
         ],
     ]);
+
+    test('техника вне справочника у водителя сохраняется словами и не длиннее колонки', function () {
+        $driver = Listing::factory()->driver()->create();
+
+        Livewire::test(EditListing::class, ['record' => $driver->id])
+            ->assertSchemaComponentExists('unlisted_machinery', checkComponentUsing: fn (Component $field): bool => $field->getLabel() === 'Техника вне справочника')
+            ->fillForm(['unlisted_machinery' => 'Автобус'])
+            ->call('save')
+            ->assertHasNoFormErrors();
+
+        expect($driver->refresh()->unlisted_machinery)->toBe('Автобус');
+
+        // Колонка в базе на 120 символов — форма не пропускает длиннее.
+        Livewire::test(EditListing::class, ['record' => $driver->id])
+            ->fillForm(['unlisted_machinery' => str_repeat('а', 121)])
+            ->call('save')
+            ->assertHasFormErrors(['unlisted_machinery' => ['max']]);
+    });
 
     test('вид выбирается при создании, а на редактировании заморожен', function () {
         Livewire::test(CreateListing::class)
@@ -259,5 +278,30 @@ describe('таблица и поиск по виду', function () {
 
     test('глобальный поиск находит мастера и водителя по имени', function () {
         expect(ListingResource::getGloballySearchableAttributes())->toContain('person_name');
+    });
+
+    test('техника вне справочника видна в таблице словами водителя', function () {
+        // Пишется в нижнем регистре — хранится с заглавной, как категории.
+        $driver = Listing::factory()->driver()->create(['unlisted_machinery' => 'автобус']);
+        $rental = Listing::factory()->create();
+
+        // Бейдж-предупреждение: у такого объявления оператору есть работа
+        // до публикации — завести категорию. Колонку можно спрятать, но
+        // по умолчанию она на экране.
+        Livewire::test(ListListings::class)
+            ->assertCanRenderTableColumn('unlisted_machinery')
+            ->assertTableColumnExists('unlisted_machinery', fn (TextColumn $column): bool => $column->getLabel() === 'Техника вне справочника'
+                && $column->isBadge()
+                && $column->getColor('Автобус') === 'warning'
+                && $column->isToggleable()
+                && ! $column->isToggledHiddenByDefault()
+                && $column->getPlaceholder() === '—')
+            ->assertTableColumnStateSet('unlisted_machinery', 'Автобус', $driver)
+            ->assertTableColumnStateSet('unlisted_machinery', null, $rental)
+            ->assertSee('Автобус')
+            // Оператор, ищущий «автобус» в очереди, находит такое объявление.
+            ->searchTable('автобус')
+            ->assertCanSeeTableRecords([$driver])
+            ->assertCanNotSeeTableRecords([$rental]);
     });
 });

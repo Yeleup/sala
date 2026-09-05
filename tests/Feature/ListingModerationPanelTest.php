@@ -189,6 +189,17 @@ test('the edit page shows media and offers moderation actions for a pending list
     expect($listing->refresh()->status)->toBe(ListingStatus::Published);
 });
 
+test('водитель назвал технику вне справочника — оператор видит её словами и что с ней делать', function () {
+    $listing = Listing::factory()->driver()->pendingModeration()->create(['unlisted_machinery' => 'автобус']);
+
+    // Категорию оператор заводит сам на модерации: слово водителя должно
+    // стоять перед глазами вместе с инструкцией, куда его деть.
+    Livewire::test(EditListing::class, ['record' => $listing->getRouteKey()])
+        ->assertSchemaComponentVisible('unlisted_machinery')
+        ->assertFormSet(['unlisted_machinery' => 'Автобус'])
+        ->assertSee('Водитель назвал технику, которой нет в справочнике. Заведите категорию, отметьте её в поле выше и очистите эту строку.');
+});
+
 test('moderation actions are hidden for an already published listing', function () {
     $listing = Listing::factory()->published()->create();
 

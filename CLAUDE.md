@@ -108,7 +108,7 @@ Business logic changes include (non-exhaustive):
 - Listing lifecycle: statuses, transitions, moderation rules, the 30-day expiry and renewal cycle.
 - Matching rules between customer requests and supplier listings, including text-based geolocation handling.
 - Dialog scenario structure, branching conditions, and how active sessions are updated.
-- AI assistant behavior: clarification question limits (2–3 attempts) and forced handoff to the web interface.
+- AI assistant behavior: clarification question limits (per kind: 3 / 4 / 6 attempts, plus a no-progress cutoff) and forced handoff to the web interface.
 - WhatsApp messaging rules: 24-hour window handling, template message usage, CTA redirects.
 - Handling of concurrent requests for the same equipment (no locking; resolved via communication).
 

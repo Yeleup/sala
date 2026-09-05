@@ -212,3 +212,14 @@ test('сквозной сценарий: одобрение создаёт эм�
 
     expect(ListingEmbedding::query()->where('listing_id', $listing->id)->exists())->toBeTrue();
 });
+
+test('текст эмбеддинга водителя называет технику из справочника и словами одной строкой', function () {
+    $both = Listing::factory()->driver()->create(['unlisted_machinery' => 'Автобус']);
+    $both->machineCategories()->sync([categoryNamed('Экскаватор')->id]);
+    $unlistedOnly = Listing::factory()->driver()->create(['unlisted_machinery' => 'Автобус']);
+
+    $embeddings = app(ListingEmbeddings::class);
+
+    expect($embeddings->sourceText($both->fresh()))->toContain('Техника: Экскаватор, Автобус')
+        ->and($embeddings->sourceText($unlistedOnly))->toContain('Техника: Автобус');
+});

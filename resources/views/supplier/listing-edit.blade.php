@@ -110,6 +110,14 @@
                     </div>
 
                     <div class="field">
+                        {{-- Выход для техники, которой в справочнике нет: чекбоксы тогда не обязательны, категорию заведёт оператор. --}}
+                        <label for="unlisted_machinery">Техники нет в списке? Напишите словами</label>
+                        <input id="unlisted_machinery" name="unlisted_machinery" maxlength="120" value="{{ old('unlisted_machinery', $listing->unlisted_machinery) }}" placeholder="Например: автобус">
+                        <p class="muted" style="margin: 0.25rem 0 0;">Оператор подберёт категорию при проверке.</p>
+                        @error('unlisted_machinery') <p class="error">{{ $message }}</p> @enderror
+                    </div>
+
+                    <div class="field">
                         <label for="licence_type">Тип удостоверения</label>
                         <select id="licence_type" name="licence_type">
                             <option value="" @selected(old('licence_type', $listing->licence_type?->value) === null)>— выберите тип —</option>
@@ -399,7 +407,7 @@
                     <dt>Имя</dt>
                     <dd>{{ $listing->person_name ?: '—' }}</dd>
                     <dt>Техника, на которой работаете</dt>
-                    <dd>{{ $listing->machineCategories->pluck('name')->join(', ') ?: '—' }}</dd>
+                    <dd>{{ $listing->machineryLine() ?: '—' }}</dd>
                     <dt>Тип удостоверения</dt>
                     <dd>{{ $listing->licence_type?->label() ?: '—' }}</dd>
                     <dt>Стаж</dt>

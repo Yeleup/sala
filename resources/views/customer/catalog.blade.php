@@ -92,8 +92,9 @@
                         <p class="listing-line muted">{{ $listing->repair_place->label() }}</p>
                     @endif
                 @elseif ($listing->kind === \App\Enums\ListingKind::Driver)
-                    @if ($listing->machineCategories->isNotEmpty())
-                        <p class="listing-line muted">{{ $listing->machineCategories->pluck('name')->implode(', ') }}</p>
+                    {{-- Категории из справочника плюс техника словами — заказчик видит её, пока оператор не завёл категорию. --}}
+                    @if (filled($listing->machineryLine()))
+                        <p class="listing-line muted">{{ $listing->machineryLine() }}</p>
                     @endif
                     @if ($listing->experience_years !== null)
                         <p class="listing-line">Стаж {{ $listing->experience_years }} лет (со слов исполнителя)</p>

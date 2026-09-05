@@ -314,3 +314,17 @@ test('слово без близкого словарного не притяг�
     // выдумывается, выдача остаётся честно пустой.
     expect(app(ListingMatcher::class)->match('вертолёт'))->toBeEmpty();
 });
+
+test('техника словами из анкеты водителя ищется, когда категории из справочника нет', function () {
+    fakeSemanticSpace();
+
+    // Описание задано явно: случайное из фабрики могло бы само содержать
+    // искомое слово и спрятать отсутствие техники словами в стоге поиска.
+    $driver = Listing::factory()->driver()->published()->create([
+        'description' => 'Работаю аккуратно, без простоев.',
+        'unlisted_machinery' => 'автобус',
+    ]);
+
+    expect(app(ListingMatcher::class)->matchAll('нужен водитель автобуса', kind: ListingKind::Driver)->pluck('id'))
+        ->toContain($driver->id);
+});

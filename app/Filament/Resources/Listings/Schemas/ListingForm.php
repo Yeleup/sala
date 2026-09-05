@@ -259,6 +259,16 @@ class ListingForm
                     ->searchable()
                     ->preload()
                     ->visible(fn (Get $get): bool => self::kindOf($get) === ListingKind::Driver),
+                // Machinery the driver named that the dictionary lacks, in
+                // his own words: the bot keeps it rather than repeating the
+                // same question until the attempt limit runs out. It does
+                // not block publication — the operator adds the category on
+                // moderation, ticks it above and clears this line.
+                TextInput::make('unlisted_machinery')
+                    ->label('Техника вне справочника')
+                    ->helperText('Водитель назвал технику, которой нет в справочнике. Заведите категорию, отметьте её в поле выше и очистите эту строку.')
+                    ->maxLength(120)
+                    ->visible(fn (Get $get): bool => self::kindOf($get) === ListingKind::Driver),
                 Select::make('licence_type')
                     ->label('Тип удостоверения')
                     ->options(collect(LicenceType::cases())->mapWithKeys(

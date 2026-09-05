@@ -74,6 +74,18 @@ class ListingsTable
                     ->searchable()
                     ->placeholder('—')
                     ->toggleable(),
+                // A driver's machinery the dictionary lacks, in his words.
+                // A warning badge rather than plain text: such a listing
+                // still needs the operator's hand before publication — a
+                // category to add and tick — and the queue should show
+                // that at a glance.
+                TextColumn::make('unlisted_machinery')
+                    ->label('Техника вне справочника')
+                    ->searchable()
+                    ->badge()
+                    ->color('warning')
+                    ->placeholder('—')
+                    ->toggleable(),
                 TextColumn::make('brand.name')
                     ->label('Марка')
                     ->searchable()

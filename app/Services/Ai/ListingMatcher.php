@@ -234,6 +234,7 @@ class ListingMatcher
             $listing->person_name,
             $listing->services,
             $listing->machineCategories->pluck('name')->implode(' '),
+            $listing->unlisted_machinery,
             $listing->description,
             $listing->location?->name,
             $listing->location?->search_name,

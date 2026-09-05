@@ -75,7 +75,9 @@ class ListingFactory extends Factory
     /**
      * A driver's questionnaire, filled — except the machine categories,
      * which live on the machineCategories() pivot and are attached by the
-     * test itself. Explicit description, no price: a driver has none.
+     * test itself. Explicit description, no price: a driver has none. The
+     * machinery outside the dictionary stays empty — it is the exception
+     * a test opts into, not the shape of a typical questionnaire.
      */
     public function driver(): static
     {
@@ -88,6 +90,7 @@ class ListingFactory extends Factory
             'category_id' => null,
             'description' => 'Машинист экскаватора, стаж 8 лет.',
             'price' => null,
+            'unlisted_machinery' => null,
         ]);
     }
 

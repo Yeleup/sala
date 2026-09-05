@@ -22,8 +22,9 @@
     опубликованного (шапка со статусом, данные списком, продление и
     снятие с публикации).
     Форма редактирования ветвится по виду объявления: у мастера — имя,
-    услуги и место ремонта, у водителя — техника чекбоксами, удостоверение,
-    стаж, готовность выезжать и замена фото документа (поля цены нет).
+    услуги и место ремонта, у водителя — техника чекбоксами или словами (если
+    её нет в справочнике), удостоверение, стаж, готовность выезжать и замена
+    фото документа (поля цены нет).
 --}}
 <!DOCTYPE html>
 <html lang="ru">
@@ -1154,7 +1155,7 @@
 </div>
 
 <div class="preview-section">
-    <h2>Портал поставщика — анкета водителя, mobile 375px (чекбоксы техники, удостоверение, стаж, готовность выезжать, замена документа; поля цены нет)</h2>
+    <h2>Портал поставщика — анкета водителя, mobile 375px (чекбоксы техники и техника словами, удостоверение, стаж, готовность выезжать, замена документа; поля цены нет)</h2>
     <div class="viewport viewport-mobile">
         <main>
             <a class="back" href="#">&larr; Мои объявления</a>
@@ -1186,6 +1187,12 @@
                         <label style="display: flex; align-items: center; gap: 0.5rem; margin: 0; padding: 0.4375rem 0; font-size: 0.9375rem; font-weight: 400; letter-spacing: normal; text-transform: none; color: #1e293b; cursor: pointer;"><input type="checkbox" checked style="width: auto; margin: 0; accent-color: #2563eb;"> Самосвал</label>
                         <label style="display: flex; align-items: center; gap: 0.5rem; margin: 0; padding: 0.4375rem 0; font-size: 0.9375rem; font-weight: 400; letter-spacing: normal; text-transform: none; color: #1e293b; cursor: pointer;"><input type="checkbox" checked style="width: auto; margin: 0; accent-color: #2563eb;"> Экскаватор</label>
                     </div>
+                </div>
+                <div class="field">
+                    {{-- Выход для техники, которой в справочнике нет: чекбоксы тогда не обязательны, категорию заведёт оператор. --}}
+                    <label>Техники нет в списке? Напишите словами</label>
+                    <input maxlength="120" value="автобус" placeholder="Например: автобус">
+                    <p class="muted" style="margin: 0.25rem 0 0;">Оператор подберёт категорию при проверке.</p>
                 </div>
                 <div class="field">
                     <label>Тип удостоверения</label>

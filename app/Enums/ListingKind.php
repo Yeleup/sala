@@ -72,6 +72,13 @@ enum ListingKind: string
     /**
      * The extraction keys without which the AI collector keeps asking.
      *
+     * The driver's machine_categories is required with a way out: when the
+     * dictionary has no category for what the driver operates, the collector
+     * offers «Нет в списке», keeps the machinery in the driver's own words
+     * and closes the field without a category — the operator picks one on
+     * moderation. The collector owns that exception; this list stays the
+     * plain «what publication needs from the dialog».
+     *
      * @return list<string>
      */
     public function collectorRequiredFields(): array

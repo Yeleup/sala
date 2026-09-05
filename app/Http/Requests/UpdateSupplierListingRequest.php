@@ -85,8 +85,14 @@ class UpdateSupplierListingRequest extends FormRequest
                     'licence_type' => ['required', Rule::enum(LicenceType::class)],
                     'experience_years' => ['required', 'integer', 'min:0', 'max:80'],
                     'travels_to_other_cities' => ['required', 'boolean'],
-                    'machine_categories' => ['required', 'array', 'min:1'],
+                    // The machinery is required in one of two forms: ticked
+                    // from the dictionary, or named in the driver's own words
+                    // when the dictionary has no entry for it — the operator
+                    // then adds the category during moderation. Demanding a
+                    // checkbox here would lock out a driver of a bus.
+                    'machine_categories' => ['required_without:unlisted_machinery', 'array'],
                     'machine_categories.*' => ['integer', Rule::exists('categories', 'id')],
+                    'unlisted_machinery' => ['nullable', 'string', 'max:120'],
                     'description' => ['nullable', 'string', 'max:2000'],
                     // Required only while the listing has no stored document —
                     // decided in after(), where the DB is the source of truth.
@@ -175,8 +181,7 @@ class UpdateSupplierListingRequest extends FormRequest
             'experience_years.min' => 'Стаж не может быть отрицательным.',
             'experience_years.max' => 'Стаж больше :max лет не принимается.',
             'travels_to_other_cities.boolean' => 'Отметка «готов выезжать» повреждена — обновите страницу и попробуйте снова.',
-            'machine_categories.required' => 'Отметьте хотя бы одну категорию техники.',
-            'machine_categories.min' => 'Отметьте хотя бы одну категорию техники.',
+            'machine_categories.required_without' => 'Отметьте технику из списка или напишите её словами.',
             'machine_categories.*.integer' => 'Выберите технику из списка.',
             'machine_categories.*.exists' => 'Выберите технику из списка.',
             'document.image' => 'Документ принимается как фото: JPG, PNG или WebP.',
@@ -208,6 +213,7 @@ class UpdateSupplierListingRequest extends FormRequest
             'experience_years' => 'стаж',
             'travels_to_other_cities' => 'готовность выезжать',
             'machine_categories' => 'техника',
+            'unlisted_machinery' => 'техника словами',
             'document' => 'фото удостоверения',
             'photos.*' => 'фото',
         ];

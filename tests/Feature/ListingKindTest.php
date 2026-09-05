@@ -38,3 +38,12 @@ test('водитель хранит технику связью, а докуме
         ->and($listing->documents()->count())->toBe(1)
         ->and($listing->photos()->count())->toBe(0);   // документ — не фото
 });
+
+test('строка техники водителя — категории плюс техника словами, и пустая, когда нечего показать', function () {
+    $both = Listing::factory()->driver()->create(['unlisted_machinery' => 'Автобус']);
+    $both->machineCategories()->sync([categoryNamed('Экскаватор')->id]);
+
+    expect($both->machineryLine())->toBe('Экскаватор, Автобус')
+        ->and(Listing::factory()->driver()->create(['unlisted_machinery' => 'Автобус'])->machineryLine())->toBe('Автобус')
+        ->and(Listing::factory()->driver()->create()->machineryLine())->toBeNull();
+});

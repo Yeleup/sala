@@ -69,6 +69,28 @@ class SupplierListingCollector
     private const int MAX_BUTTON_PROMPTS = 2;
 
     /**
+     * How many times the «Нет в списке» prompt may go out for a driver whose
+     * machinery the category dictionary lacks. The prompt spends no
+     * clarification attempt — it is an honest explanation plus a button, not
+     * a question the supplier failed to answer — so it must be bounded on
+     * its own: after the second one the machinery field closes by itself and
+     * the questionnaire goes on to the summary with the machinery kept in
+     * the driver's own words for the operator.
+     */
+    private const int MAX_UNLISTED_PROMPTS = 2;
+
+    /**
+     * Text clarifications in a row after which the set of missing fields has
+     * not changed before the collector stops asking and hands over the web
+     * form. Contact 225 (2026-09-04): «Автобус» was inexpressible in the
+     * category enum, and the driver got the same «На какой технике вы
+     * работаете» four times word for word, spending five of six attempts
+     * on a question no answer could satisfy. A question that did not move
+     * the questionnaire twice will not move it the third time.
+     */
+    private const int MAX_STALLED_TURNS = 2;
+
+    /**
      * Questions about the service answered in a row before the collector
      * stops treating a message as one. The abuse case is not a person
      * asking four times but a stuck classification: the question is pulled
@@ -128,6 +150,17 @@ class SupplierListingCollector
     public const string BUTTON_EXIT_STAY_TITLE = 'Продолжить анкету';
 
     /**
+     * Closes the driver's machinery field when the dictionary has no
+     * category for what they operate: the machinery stays in their own
+     * words (unlisted_machinery) and the operator picks the category on
+     * moderation. Offered only by the «Нет в списке» prompt, and — like
+     * every button — recognized by id or by its typed title.
+     */
+    public const string BUTTON_MACHINERY_UNLISTED = 'collect_machinery_unlisted';
+
+    public const string BUTTON_MACHINERY_UNLISTED_TITLE = 'Нет в списке';
+
+    /**
      * WhatsApp lists hold at most 10 rows: at most this many places, the
      * last row reserved for the «В меню» exit. A candidate left out is
      * still pickable by typing its exact name — matchLocationChoice
@@ -172,6 +205,11 @@ class SupplierListingCollector
             'button_answers' => [],
             'awaiting_document' => false,
             'exit_confirm' => false,
+            'unlisted_prompts' => 0,
+            'machinery_skipped' => false,
+            'unlisted_machinery' => null,
+            'stalled_missing' => null,
+            'stalled_turns' => 0,
         ];
         // A fresh questionnaire outdates whatever an earlier one left behind
         // to resume — restoring it is not this method's job (see task 4).
@@ -398,6 +436,21 @@ class SupplierListingCollector
      */
     private function handleCollecting(BotSession $session, array $state, InboundMessage $message, array $node): AiOutcome
     {
+        // «Нет в списке» — by button or its typed title — closes the driver's
+        // machinery field: what they operate stays in their own words and
+        // the operator picks the category on moderation. Resolved before
+        // intake: the press is an answer to the bot, not listing data, so it
+        // never reaches the transcript or the model. Only meaningful while
+        // machinery in words is actually remembered — without it the same
+        // words are ordinary text and walk the usual path.
+        if ($this->matchesButton($message, self::BUTTON_MACHINERY_UNLISTED, self::BUTTON_MACHINERY_UNLISTED_TITLE)
+            && filled($state['unlisted_machinery'] ?? ($state['fields']['unlisted_machinery'] ?? null))) {
+            $state['machinery_skipped'] = true;
+            $state['phase'] = 'collecting';
+
+            return $this->advance($session, $state);
+        }
+
         // The transcript length before intake: a message the extractor
         // classifies as «not about the listing» is rolled back out of it.
         $intakeMark = count($state['transcript']);
@@ -504,6 +557,21 @@ class SupplierListingCollector
             $fields[$field] = $fields[$field] ?? $value;
         }
 
+        // Machinery named in the driver's own words survives the rebuild the
+        // same way: remembered once extracted, put back underneath a turn
+        // that said nothing about the machinery at all (the turn about the
+        // experience). The words of the current turn win, and a turn that
+        // names dictionary machinery while dropping the word is not a slip
+        // but a retraction («не автобус — экскаватор»): the model reads the
+        // whole transcript, so the word is let go rather than put back.
+        if (filled($fields['unlisted_machinery'] ?? null)) {
+            $state['unlisted_machinery'] = $fields['unlisted_machinery'];
+        } elseif (filled($fields['machine_categories'] ?? null)) {
+            $state['unlisted_machinery'] = null;
+        } elseif (filled($state['unlisted_machinery'] ?? null)) {
+            $fields['unlisted_machinery'] = $state['unlisted_machinery'];
+        }
+
         // The supplier introduces themselves once, not once per listing.
         $this->rememberName($session, $fields['person_name'] ?? null);
 
@@ -533,7 +601,7 @@ class SupplierListingCollector
     private function advance(BotSession $session, array $state): AiOutcome
     {
         $kind = $this->kind($state);
-        $missing = $this->missingFields($state['fields'], $kind);
+        $missing = $this->missingFieldsOf($state);
 
         if ($missing === []) {
             $draft = $this->ensureDraft($session, $state);
@@ -631,7 +699,52 @@ class SupplierListingCollector
             return AiOutcome::InProgress;
         }
 
+        // The driver named machinery the dictionary has no category for: a
+        // text question about the machinery cannot be answered — the schema
+        // enum has no room for «автобус» — so the bot says so honestly and
+        // offers to close the field. Free like a button prompt and bounded
+        // like one; past the limit the field closes by itself and the
+        // questionnaire goes on, the machinery kept in words for the
+        // operator. The bounded re-entry recomputes what is still missing.
+        if (! $asksName
+            && in_array('machine_categories', $missing, true)
+            && filled($state['fields']['unlisted_machinery'] ?? null)) {
+            if ($state['unlisted_prompts'] < self::MAX_UNLISTED_PROMPTS) {
+                $state['unlisted_prompts']++;
+                $state['phase'] = 'collecting';
+                $state['last_question'] = $this->unlistedMachineryPrompt($state['fields']['unlisted_machinery']);
+                $this->persist($session, $state);
+                $this->messenger->sendButtons($session->contact, $state['last_question'], [
+                    ['id' => self::BUTTON_MACHINERY_UNLISTED, 'title' => self::BUTTON_MACHINERY_UNLISTED_TITLE],
+                    ['id' => self::BUTTON_MENU, 'title' => self::BUTTON_MENU_TITLE],
+                ]);
+
+                return AiOutcome::InProgress;
+            }
+
+            $state['machinery_skipped'] = true;
+
+            return $this->advance($session, $state);
+        }
+
         if ($state['attempts'] >= $kind->maxClarifications()) {
+            return $this->handOffToWebForm($session, $state);
+        }
+
+        // A text question that left the set of missing fields exactly as it
+        // was is not moving the questionnaire; the same question a third
+        // time in a row would only burn the limit (MAX_STALLED_TURNS). Only
+        // text clarifications count: button prompts, place lists and the
+        // «Нет в списке» prompt return above without touching the streak,
+        // and a turn that filled anything changes the set and resets it.
+        if (($state['stalled_missing'] ?? null) === $missing) {
+            $state['stalled_turns']++;
+        } else {
+            $state['stalled_missing'] = $missing;
+            $state['stalled_turns'] = 0;
+        }
+
+        if ($state['stalled_turns'] >= self::MAX_STALLED_TURNS) {
             return $this->handOffToWebForm($session, $state);
         }
 
@@ -646,6 +759,29 @@ class SupplierListingCollector
         );
 
         return AiOutcome::InProgress;
+    }
+
+    /**
+     * The honest prompt for machinery the dictionary lacks (copy text №1 of
+     * the plan): names the driver's own word so they see it was understood,
+     * offers the listed alternatives, and explains what the button does.
+     */
+    private function unlistedMachineryPrompt(string $machinery): string
+    {
+        return sprintf(
+            '«%s» в нашем списке техники пока нет. Если работаете ещё на чём-то из списка — например, экскаватор, самосвал, кран — напишите. Если нет — нажмите «%s», и категорию подберёт оператор.',
+            $this->unlistedMachineryWord($machinery),
+            self::BUTTON_MACHINERY_UNLISTED_TITLE,
+        );
+    }
+
+    /**
+     * The driver's word for their machinery as the bot quotes it back:
+     * trimmed, first letter capitalized — «Автобус», not «автобус».
+     */
+    private function unlistedMachineryWord(string $machinery): string
+    {
+        return Str::ucfirst(trim($machinery));
     }
 
     /**
@@ -878,10 +1014,22 @@ class SupplierListingCollector
         $greeting = trim((string) ($node['text'] ?? ''))
             ?: $this->kind($state)->greeting();
 
+        // The open question may be the «Нет в списке» prompt: its text tells
+        // the driver to press a button, so the re-send carries that button
+        // too — a prompt naming a button the screen does not show would
+        // read as a broken promise.
+        $machinery = (string) ($state['fields']['unlisted_machinery'] ?? $state['unlisted_machinery'] ?? '');
+        $buttons = $machinery !== '' && $question === $this->unlistedMachineryPrompt($machinery)
+            ? [
+                ['id' => self::BUTTON_MACHINERY_UNLISTED, 'title' => self::BUTTON_MACHINERY_UNLISTED_TITLE],
+                ['id' => self::BUTTON_MENU, 'title' => self::BUTTON_MENU_TITLE],
+            ]
+            : [['id' => self::BUTTON_MENU, 'title' => self::BUTTON_MENU_TITLE]];
+
         $this->messenger->sendButtons(
             $session->contact,
             $question !== '' ? $question : $greeting,
-            [['id' => self::BUTTON_MENU, 'title' => self::BUTTON_MENU_TITLE]],
+            $buttons,
         );
     }
 
@@ -1389,6 +1537,23 @@ class SupplierListingCollector
             $fields['machine_categories'] = is_array($fields['machine_categories'] ?? null)
                 ? $this->canonicalMachineCategories($fields['machine_categories'], $categories)
                 : null;
+
+            $fields['unlisted_machinery'] = $this->normalizeUnlistedMachinery($fields['unlisted_machinery'] ?? null);
+
+            // A word that does match a dictionary category (the operator
+            // added it, the model did not notice) is machinery from the
+            // list, not outside it: moved over, so the «Нет в списке» prompt
+            // never goes out for machinery the dictionary does have.
+            $listed = $this->canonicalCategory($fields['unlisted_machinery'], $categories);
+
+            if ($listed !== null) {
+                $fields['machine_categories'] = collect($fields['machine_categories'] ?? [])
+                    ->push($listed->name)
+                    ->unique()
+                    ->values()
+                    ->all();
+                $fields['unlisted_machinery'] = null;
+            }
         }
 
         return $this->resolveLocation($fields, $state);
@@ -1549,6 +1714,21 @@ class SupplierListingCollector
     }
 
     /**
+     * The machinery the driver named in their own words because the
+     * dictionary had no category for it, as the listing stores and the bot
+     * quotes it — trimmed, first letter capitalized like a category name —
+     * or null when nothing was named.
+     */
+    private function normalizeUnlistedMachinery(mixed $named): ?string
+    {
+        if (! is_string($named) || trim($named) === '') {
+            return null;
+        }
+
+        return $this->unlistedMachineryWord($named);
+    }
+
+    /**
      * Bind the extracted machine categories to the driver's draft. Only
      * when the extraction returned an array: the fields are rebuilt from
      * scratch each turn, and a turn where the model returned null must not
@@ -1630,6 +1810,26 @@ class SupplierListingCollector
         }
 
         $session->contact->update(['display_name' => Str::limit(trim($name), 255, '')]);
+    }
+
+    /**
+     * What the questionnaire still lacks, minus the field the dialog has
+     * closed: the driver's machine_categories once «Нет в списке» was
+     * pressed or the prompt for it ran out. The exception lives here so
+     * missingFields() stays a pure function of the fields and the kind.
+     *
+     * @param  array<string, mixed>  $state
+     * @return list<string>
+     */
+    private function missingFieldsOf(array $state): array
+    {
+        $missing = $this->missingFields($state['fields'], $this->kind($state));
+
+        if (($state['machinery_skipped'] ?? false) !== true) {
+            return $missing;
+        }
+
+        return array_values(array_diff($missing, ['machine_categories']));
     }
 
     /**
@@ -1716,6 +1916,7 @@ class SupplierListingCollector
                 'licence_type' => $fields['licence_type'] ?? null,
                 'experience_years' => $fields['experience_years'] ?? null,
                 'travels_to_other_cities' => $fields['travels_to_other_cities'] ?? null,
+                'unlisted_machinery' => $fields['unlisted_machinery'] ?? null,
             ],
         };
     }
@@ -1753,9 +1954,25 @@ class SupplierListingCollector
         // The composed title is the listing's future public name (search
         // rows, notifications, cabinets) — the supplier must see it before
         // submitting, not first meet it in a notification days later.
+        // Machinery only in the driver's words, with no dictionary category
+        // beside it — neither on this turn nor synced to the draft earlier
+        // (a turn where the model returned null does not erase those): the
+        // listing goes to moderation flagged for the operator, and the
+        // driver is told so before submitting — not left to wonder why the
+        // summary names no category.
+        $unlisted = filled($fields['unlisted_machinery'] ?? null)
+            && blank($fields['machine_categories'] ?? null)
+            && ! $this->draftHasMachineCategories($state)
+            ? sprintf(
+                'Техника «%s» — не из нашего списка: категорию подберёт оператор при проверке.',
+                $this->unlistedMachineryWord((string) $fields['unlisted_machinery']),
+            )
+            : null;
+
         $text = implode("\n", array_filter([
             filled($fields['title'] ?? null) ? 'Название: '.$fields['title'] : null,
             $summary,
+            $unlisted,
             $place !== null ? 'Место: '.$place->label() : null,
         ]));
 
@@ -1797,6 +2014,19 @@ class SupplierListingCollector
     }
 
     /**
+     * Whether the draft already carries dictionary machinery from an
+     * earlier turn — the fields are rebuilt from scratch each turn, so
+     * their emptiness alone says nothing about what was synced before.
+     *
+     * @param  array<string, mixed>  $state
+     */
+    private function draftHasMachineCategories(array $state): bool
+    {
+        return $state['draft_id'] !== null
+            && Listing::query()->whereKey($state['draft_id'])->whereHas('machineCategories')->exists();
+    }
+
+    /**
      * @param  array<string, mixed>  $fields
      */
     private function buildSummary(array $fields, ListingKind $kind): string
@@ -1816,7 +2046,15 @@ class SupplierListingCollector
             ])->filter()->implode(', '),
             ListingKind::Driver => collect([
                 $fields['person_name'] ?? null,
-                implode(', ', (array) ($fields['machine_categories'] ?? [])) ?: null,
+                // The dictionary categories, then the machinery in the
+                // driver's own words — the same line Listing::machineryLine()
+                // builds for the catalog.
+                collect((array) ($fields['machine_categories'] ?? []))
+                    ->push(filled($fields['unlisted_machinery'] ?? null)
+                        ? $this->unlistedMachineryWord((string) $fields['unlisted_machinery'])
+                        : null)
+                    ->filter()
+                    ->implode(', ') ?: null,
                 filled($fields['experience_years'] ?? null) ? 'Стаж '.$fields['experience_years'].' лет' : null,
                 filled($fields['licence_type'] ?? null) ? LicenceType::from($fields['licence_type'])->label() : null,
                 $fields['location'] ?? null,
@@ -1926,6 +2164,11 @@ class SupplierListingCollector
             'button_answers' => [],
             'awaiting_document' => false,
             'exit_confirm' => false,
+            'unlisted_prompts' => 0,
+            'machinery_skipped' => false,
+            'unlisted_machinery' => null,
+            'stalled_missing' => null,
+            'stalled_turns' => 0,
         ], $session->state ?? []);
     }
 

@@ -298,6 +298,32 @@ describe('виды объявлений в каталоге', function () {
             ->assertSee('Документ проверен');
     });
 
+    test('техника словами видна заказчику в карточке и на странице водителя', function () {
+        // Пока оператор не завёл категорию, заказчик всё равно должен видеть,
+        // на чём работает водитель, — одной строкой с техникой из справочника.
+        $contact = Contact::factory()->create();
+        $onlyUnlisted = Listing::factory()->driver()->published()->create([
+            'person_name' => 'Марат', 'unlisted_machinery' => 'Водовоз',
+        ]);
+        $both = Listing::factory()->driver()->published()->create([
+            'person_name' => 'Ерлан', 'unlisted_machinery' => 'Автобус',
+        ]);
+        $both->machineCategories()->attach(categoryNamed('Экскаватор')->id);
+
+        $this->get(catalogLinks()->catalogUrl($contact).'&kind=driver')
+            ->assertOk()
+            ->assertSee('<p class="listing-line muted">Водовоз</p>', false)
+            ->assertSee('<p class="listing-line muted">Экскаватор, Автобус</p>', false);
+
+        $this->get(catalogLinks()->listingUrl($contact, $onlyUnlisted))
+            ->assertOk()
+            ->assertSee('<p class="listing-line muted">Водовоз</p>', false);
+
+        $this->get(catalogLinks()->listingUrl($contact, $both))
+            ->assertOk()
+            ->assertSee('<p class="listing-line muted">Экскаватор, Автобус</p>', false);
+    });
+
     test('фото документа не попадает ни в галерею, ни в карточку', function () {
         $contact = Contact::factory()->create();
         $driver = Listing::factory()->driver()->published()->create();
@@ -424,7 +450,7 @@ describe('виды объявлений в каталоге', function () {
         $contact = Contact::factory()->create();
         Listing::factory()->repair()->published()->create(['title' => 'Ремонт двигателей']);
 
-        $this->get(catalogLinks()->catalogUrl($contact)."&kind=repair&category_id=".categoryNamed('Автокран')->id)
+        $this->get(catalogLinks()->catalogUrl($contact).'&kind=repair&category_id='.categoryNamed('Автокран')->id)
             ->assertOk()
             ->assertSee('Ремонт двигателей');
     });

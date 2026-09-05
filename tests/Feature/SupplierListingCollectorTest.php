@@ -169,6 +169,7 @@ function driverExtraction(array $overrides = []): array
         'title' => 'Машинист экскаватора',
         'person_name' => 'Ерлан',
         'machine_categories' => ['Экскаватор'],
+        'unlisted_machinery' => null,
         'licence_type' => 'tractor_operator',
         'experience_years' => 8,
         'travels_to_other_cities' => false,
@@ -1493,6 +1494,325 @@ test('вопрос про сервис на кнопочном шаге повт
     ListingExtractionAgent::assertPrompted(
         fn ($prompt): bool => $prompt->contains('задал вопрос с кнопками: «Где вы выполняете ремонт?»'),
     );
+});
+
+/**
+ * Поля анкеты водителя, у которого техника названа словами и не нашлась в
+ * справочнике: место уже разрешено, чтобы кроме техники ничего не
+ * недоставало. По образцу состояний кнопочных тестов.
+ *
+ * @param  array<string, mixed>  $overrides
+ * @return array<string, mixed>
+ */
+function unlistedDriverFields(array $overrides = []): array
+{
+    return driverExtraction(array_merge([
+        'machine_categories' => null,
+        'unlisted_machinery' => 'автобус',
+        'location_id' => locationNamed('г.Шымкент')->id,
+        'summary' => null,
+    ], $overrides));
+}
+
+test('техника вне справочника получает честный промпт с кнопкой «Нет в списке», не тратя попытку', function () {
+    // Инцидент контакта 225: «Автобус» невыразим в enum-схеме, и бот четыре
+    // раза дословно спрашивал «На какой технике вы работаете». Теперь
+    // модель отдаёт технику словами отдельным полем, а бот честно говорит,
+    // что в списке её нет, и даёт кнопку — бесплатно, как кнопочный вопрос.
+    ListingExtractionAgent::fake([driverExtraction(['machine_categories' => null, 'unlisted_machinery' => 'автобус'])]);
+    $session = collectorSession(['kind' => 'driver']);
+
+    fakeCollectorMessenger()->shouldReceive('sendButtons')->once()
+        ->withArgs(fn (Contact $to, string $text, array $buttons) => $text === '«Автобус» в нашем списке техники пока нет. Если работаете ещё на чём-то из списка — например, экскаватор, самосвал, кран — напишите. Если нет — нажмите «Нет в списке», и категорию подберёт оператор.'
+            && $buttons === [
+                ['id' => SupplierListingCollector::BUTTON_MACHINERY_UNLISTED, 'title' => SupplierListingCollector::BUTTON_MACHINERY_UNLISTED_TITLE],
+                ['id' => SupplierListingCollector::BUTTON_MENU, 'title' => SupplierListingCollector::BUTTON_MENU_TITLE],
+            ]
+            && mb_strlen($buttons[0]['title']) <= 20);
+
+    $outcome = app(SupplierListingCollector::class)
+        ->resume($session, driverAiNode(), new InboundMessage(text: 'Ерлан, водитель автобуса, 8 лет, Шымкент, не выезжаю'));
+
+    expect($outcome)->toBe(AiOutcome::InProgress)
+        ->and($session->fresh()->state)->toMatchArray([
+            'phase' => 'collecting',
+            'attempts' => 0,
+            'unlisted_prompts' => 1,
+            'unlisted_machinery' => 'Автобус',
+            // Промпт «Нет в списке» — не текстовое уточнение: детектор
+            // холостого хода его не считает.
+            'stalled_turns' => 0,
+            'stalled_missing' => null,
+        ])
+        ->and(Listing::count())->toBe(0);
+});
+
+test('кнопка «Нет в списке» закрывает поле техники без вызова модели и ведёт к сводке с пометкой оператору', function (InboundMessage $press) {
+    // Нажатие узнаётся по replyId или по точному совпадению набранного с
+    // подписью кнопки — сценарная конвенция, как у остальных кнопок. Слова
+    // поставщика в транскрипт не попадают, модель не вызывается.
+    ListingExtractionAgent::fake()->preventStrayPrompts();
+    $session = collectorSession(['kind' => 'driver', 'fields' => unlistedDriverFields(),
+        'unlisted_machinery' => 'автобус', 'unlisted_prompts' => 1, 'transcript' => ['Ерлан, водитель автобуса']]);
+
+    fakeCollectorMessenger()->shouldReceive('sendButtons')->once()
+        ->withArgs(fn ($to, string $text) => str_contains($text, 'Техника «Автобус» — не из нашего списка: категорию подберёт оператор при проверке.')
+            && str_contains($text, 'фото удостоверения'));
+
+    $outcome = app(SupplierListingCollector::class)->resume($session, driverAiNode(), $press);
+
+    expect($outcome)->toBe(AiOutcome::InProgress)
+        ->and($session->fresh()->state)->toMatchArray([
+            'phase' => 'confirming',
+            'awaiting_document' => true,
+            'machinery_skipped' => true,
+            'attempts' => 0,
+            'transcript' => ['Ерлан, водитель автобуса'],
+        ])
+        ->and(Listing::sole())->unlisted_machinery->toBe('Автобус')
+        ->and(Listing::sole()->machineCategories()->count())->toBe(0);
+    ListingExtractionAgent::assertNeverPrompted();
+})->with([
+    'кнопка' => [new InboundMessage(replyId: SupplierListingCollector::BUTTON_MACHINERY_UNLISTED, text: 'Нет в списке')],
+    'набранное «нет в списке»' => [new InboundMessage(text: 'нет в списке')],
+]);
+
+test('«Нет в списке» без запомненной техники — обычное сообщение, а не нажатие', function () {
+    // Кнопки не было — набранное совпадение с её подписью нечего закрывать:
+    // текст уходит модели как любые другие слова.
+    ListingExtractionAgent::fake([driverExtraction(['person_name' => null])]);
+    $session = collectorSession(['kind' => 'driver']);
+    fakeCollectorMessenger()->shouldReceive('sendButtons')->once();   // вопрос про имя
+
+    app(SupplierListingCollector::class)->resume($session, driverAiNode(), new InboundMessage(text: 'нет в списке'));
+
+    expect($session->fresh()->state['machinery_skipped'])->toBeFalse()
+        ->and($session->fresh()->state['transcript'])->toBe(['нет в списке']);
+    ListingExtractionAgent::assertPrompted(fn ($prompt): bool => $prompt->contains('нет в списке'));
+});
+
+test('промпт «Нет в списке» уходит максимум дважды, потом поле техники закрывается само', function () {
+    ListingExtractionAgent::fake([driverExtraction(['machine_categories' => null, 'unlisted_machinery' => 'автобус'])]);
+    $session = collectorSession(['kind' => 'driver', 'unlisted_prompts' => 2, 'unlisted_machinery' => 'автобус']);
+
+    fakeCollectorMessenger()->shouldReceive('sendButtons')->once()
+        ->withArgs(fn ($to, string $text) => str_contains($text, 'фото удостоверения')
+            && ! str_contains($text, 'в нашем списке техники пока нет'));
+
+    app(SupplierListingCollector::class)
+        ->resume($session, driverAiNode(), new InboundMessage(text: 'только автобус'));
+
+    expect($session->fresh()->state)->toMatchArray([
+        'phase' => 'confirming',
+        'machinery_skipped' => true,
+        'unlisted_prompts' => 2,
+        'attempts' => 0,
+    ])->and(Listing::sole())->unlisted_machinery->toBe('Автобус');
+});
+
+test('техника словами переживает ход, на котором модель не вернула ни её, ни категорий', function () {
+    // Поля пересобираются с нуля каждый ход, как и кнопочные ответы:
+    // запомненная техника подставляется под извлечение, когда модель на
+    // этом ходу про технику вообще ничего не сказала (ход про стаж).
+    ListingExtractionAgent::fake([driverExtraction(['machine_categories' => null, 'unlisted_machinery' => null])]);
+    $session = collectorSession(['kind' => 'driver', 'unlisted_machinery' => 'Автобус', 'transcript' => ['автобус']]);
+    fakeCollectorMessenger()->shouldReceive('sendButtons')->once()
+        ->withArgs(fn ($to, string $text) => str_contains($text, '«Автобус» в нашем списке техники пока нет'));
+
+    app(SupplierListingCollector::class)
+        ->resume($session, driverAiNode(), new InboundMessage(text: 'Ерлан, 8 лет, Шымкент, не выезжаю'));
+
+    expect($session->fresh()->state['fields']['unlisted_machinery'])->toBe('Автобус')
+        ->and($session->fresh()->state['unlisted_machinery'])->toBe('Автобус');
+});
+
+test('техника из списка без прежнего слова снимает технику словами: водитель поправился', function () {
+    // «Не автобус — экскаватор»: модель читает всю переписку и, назвав
+    // категорию из списка, слово опустила намеренно. Запомненное не
+    // подставляется и забывается — иначе поправку было бы не сделать.
+    ListingExtractionAgent::fake([driverExtraction(['unlisted_machinery' => null])]);
+    $session = collectorSession(['kind' => 'driver', 'unlisted_machinery' => 'Автобус', 'transcript' => ['автобус']]);
+    fakeCollectorMessenger()->shouldReceive('sendButtons')->once();   // сводка: категория «Экскаватор» есть
+
+    app(SupplierListingCollector::class)
+        ->resume($session, driverAiNode(), new InboundMessage(text: 'Ерлан, не автобус — экскаватор, 8 лет, Шымкент, не выезжаю'));
+
+    expect($session->fresh()->state['fields']['unlisted_machinery'])->toBeNull()
+        ->and($session->fresh()->state['unlisted_machinery'])->toBeNull()
+        ->and($session->fresh()->state['phase'])->toBe('confirming')
+        ->and(Listing::sole())->unlisted_machinery->toBeNull()
+        ->and(Listing::sole()->machineCategories()->pluck('name')->all())->toBe(['Экскаватор']);
+});
+
+test('техника словами, совпавшая с категорией справочника, переносится в категории', function () {
+    // Страховка: категорию завели, а модель этого не заметила и отдала её
+    // словами. Промпт «Нет в списке» в таком случае не нужен.
+    ListingExtractionAgent::fake([driverExtraction(['machine_categories' => null, 'unlisted_machinery' => ' экскаватор '])]);
+    $session = collectorSession(['kind' => 'driver']);
+
+    fakeCollectorMessenger()->shouldReceive('sendButtons')->once()
+        ->withArgs(fn ($to, string $text) => str_contains($text, 'фото удостоверения')
+            && ! str_contains($text, 'в нашем списке техники пока нет'));
+
+    app(SupplierListingCollector::class)
+        ->resume($session, driverAiNode(), new InboundMessage(text: 'Ерлан, экскаватор, 8 лет, Шымкент, не выезжаю'));
+
+    $state = $session->fresh()->state;
+    expect($state['fields']['machine_categories'])->toBe(['Экскаватор'])
+        ->and($state['fields']['unlisted_machinery'])->toBeNull()
+        ->and($state['unlisted_prompts'])->toBe(0)
+        ->and(Listing::sole())->unlisted_machinery->toBeNull()
+        ->and(Listing::sole()->machineCategories()->pluck('name')->all())->toBe(['Экскаватор']);
+});
+
+test('третий подряд текстовый вопрос без продвижения не задаётся — уходит веб-форма', function () {
+    // Детектор холостого хода: набор недостающих полей не изменился после
+    // двух вопросов подряд — третий такой же вопрос сожжёт лимит, не
+    // продвинув анкету (инцидент 225: четыре дословных повтора).
+    ListingExtractionAgent::fake([fullExtraction(['price' => null])]);
+    $session = collectorSession(['attempts' => 1, 'stalled_missing' => ['price'], 'stalled_turns' => 1,
+        'transcript' => ['Сдаю трактор в Шымкенте']]);
+
+    fakeCollectorMessenger()->shouldReceive('sendCtaUrl')->once()
+        ->withArgs(fn (Contact $to, string $text) => str_contains($text, 'Часть данных из переписки собрать не вышло'));
+
+    $outcome = app(SupplierListingCollector::class)
+        ->resume($session, supplierAiNode(), new InboundMessage(text: 'не знаю'));
+
+    expect($outcome)->toBe(AiOutcome::Completed)
+        ->and(Listing::sole())->status->toBe(ListingStatus::Draft)->price->toBeNull();
+});
+
+test('второй подряд текстовый вопрос без продвижения ещё задаётся и считается', function () {
+    ListingExtractionAgent::fake([fullExtraction(['price' => null])]);
+    $session = collectorSession(['attempts' => 1, 'stalled_missing' => ['price'], 'stalled_turns' => 0]);
+    fakeCollectorMessenger()->shouldReceive('sendButtons')->once();
+
+    app(SupplierListingCollector::class)
+        ->resume($session, supplierAiNode(), new InboundMessage(text: 'не знаю'));
+
+    expect($session->fresh()->state)->toMatchArray(['attempts' => 2, 'stalled_missing' => ['price'], 'stalled_turns' => 1]);
+});
+
+test('ход, заполнивший поле, сбрасывает счётчик холостого хода', function () {
+    ListingExtractionAgent::fake([fullExtraction(['price' => null])]);
+    $session = collectorSession(['attempts' => 1, 'stalled_missing' => ['description', 'price'], 'stalled_turns' => 1]);
+    fakeCollectorMessenger()->shouldReceive('sendButtons')->once();
+
+    app(SupplierListingCollector::class)
+        ->resume($session, supplierAiNode(), new InboundMessage(text: 'трактор с водителем'));
+
+    expect($session->fresh()->state)->toMatchArray(['stalled_missing' => ['price'], 'stalled_turns' => 0]);
+});
+
+test('кнопочный вопрос не трогает счётчик холостого хода', function () {
+    ListingExtractionAgent::fake([repairExtraction(['repair_place' => null])]);
+    $session = collectorSession(['kind' => 'repair', 'stalled_missing' => ['repair_place'], 'stalled_turns' => 1]);
+    fakeCollectorMessenger()->shouldReceive('sendButtons')->once()
+        ->withArgs(fn ($to, string $text) => str_contains($text, 'Где вы выполняете ремонт'));
+
+    app(SupplierListingCollector::class)->resume($session, repairAiNode(), new InboundMessage(text: 'чиню гидравлику, Алматы, я Иван'));
+
+    expect($session->fresh()->state)->toMatchArray(['phase' => 'choosing', 'stalled_missing' => ['repair_place'], 'stalled_turns' => 1]);
+});
+
+test('выход в меню и веб-форма сохраняют технику словами в черновик', function () {
+    // «Да, в меню» при открытом подтверждении выхода: модель не вызывается,
+    // черновик собирается из полей состояния.
+    ListingExtractionAgent::fake()->preventStrayPrompts();
+    $session = collectorSession(['kind' => 'driver', 'exit_confirm' => true, 'fields' => unlistedDriverFields()]);
+    fakeCollectorMessenger()->shouldReceive('sendText')->once();
+
+    app(SupplierListingCollector::class)->resume($session, driverAiNode(),
+        new InboundMessage(replyId: SupplierListingCollector::BUTTON_EXIT_CONFIRM, text: 'Да, в меню'));
+
+    expect(Listing::sole())->unlisted_machinery->toBe('Автобус');
+    ListingExtractionAgent::assertNeverPrompted();
+});
+
+test('исчерпанный лимит уточнений уносит технику словами в черновик для веб-формы', function () {
+    // Имя не названо — промпт «Нет в списке» уступает вопросу об имени, а
+    // лимит уже исчерпан: уходит веб-форма, и техника словами едет с ней.
+    ListingExtractionAgent::fake([driverExtraction(['person_name' => null, 'machine_categories' => null, 'unlisted_machinery' => 'автобус'])]);
+    $session = collectorSession(['kind' => 'driver', 'attempts' => 6]);
+    fakeCollectorMessenger()->shouldReceive('sendCtaUrl')->once();
+
+    $outcome = app(SupplierListingCollector::class)
+        ->resume($session, driverAiNode(), new InboundMessage(text: 'автобус'));
+
+    expect($outcome)->toBe(AiOutcome::Completed)
+        ->and(Listing::sole())->unlisted_machinery->toBe('Автобус');
+});
+
+test('фолбэк-сводка водителя показывает технику словами и пометку оператору', function (array $overrides, string $machinery, bool $operatorNote) {
+    // Повтор сводки после вопроса про сервис дёргает sendConfirmation без
+    // модельной summary. Пометка оператору — только когда техники из
+    // справочника нет вовсе: с категорией объявление модерируется как обычно.
+    $session = collectorSession(['kind' => 'driver', 'phase' => 'confirming', 'awaiting_document' => true,
+        'fields' => unlistedDriverFields($overrides)]);
+
+    $messenger = fakeCollectorMessenger();
+    $messenger->shouldReceive('sendText')->once();   // ответ на вопрос про сервис
+    $messenger->shouldReceive('sendButtons')->once()
+        ->withArgs(fn ($to, string $text) => str_contains($text, 'Ерлан, '.$machinery.', Стаж 8 лет')
+            && str_contains($text, 'Техника «Автобус» — не из нашего списка: категорию подберёт оператор при проверке.') === $operatorNote);
+    ListingExtractionAgent::fake([driverExtraction(['summary' => null, 'user_intent' => 'service_question'])]);
+
+    app(SupplierListingCollector::class)->resume($session, driverAiNode(), new InboundMessage(text: 'это платно?'));
+})->with([
+    'только словами' => [[], 'Автобус', true],
+    'категория и словами' => [['machine_categories' => ['Экскаватор']], 'Экскаватор, Автобус', false],
+]);
+
+test('пометка оператору не показывается, если у черновика уже есть техника из списка', function () {
+    // Модель на очередном ходу вернула null в категориях — привязанная
+    // раньше техника цела (null её не стирает), и сводка не должна врать,
+    // что категории нет.
+    $draft = Listing::factory()->driver()->create();
+    $draft->machineCategories()->attach(categoryNamed('Экскаватор'));
+    $session = collectorSession(['kind' => 'driver', 'phase' => 'confirming', 'awaiting_document' => true,
+        'draft_id' => $draft->id, 'fields' => unlistedDriverFields()]);
+
+    $messenger = fakeCollectorMessenger();
+    $messenger->shouldReceive('sendText')->once();   // ответ на вопрос про сервис
+    $messenger->shouldReceive('sendButtons')->once()
+        ->withArgs(fn ($to, string $text) => str_contains($text, 'Ерлан, Автобус, Стаж 8 лет')
+            && ! str_contains($text, 'не из нашего списка'));
+    ListingExtractionAgent::fake([driverExtraction(['summary' => null, 'user_intent' => 'service_question'])]);
+
+    app(SupplierListingCollector::class)->resume($session, driverAiNode(), new InboundMessage(text: 'это платно?'));
+});
+
+test('вопрос про сервис при открытом промпте «Нет в списке» повторяет его вместе с кнопкой', function () {
+    // Текст промпта зовёт нажать «Нет в списке» — повтор без самой кнопки
+    // обещал бы то, чего на экране нет.
+    $prompt = '«Автобус» в нашем списке техники пока нет. Если работаете ещё на чём-то из списка — например, экскаватор, самосвал, кран — напишите. Если нет — нажмите «Нет в списке», и категорию подберёт оператор.';
+    $session = collectorSession(['kind' => 'driver', 'fields' => unlistedDriverFields(), 'unlisted_machinery' => 'Автобус',
+        'unlisted_prompts' => 1, 'last_question' => $prompt, 'transcript' => ['Ерлан, водитель автобуса']]);
+
+    $messenger = fakeCollectorMessenger();
+    $messenger->shouldReceive('sendText')->once();   // ответ на вопрос про сервис
+    $messenger->shouldReceive('sendButtons')->once()
+        ->withArgs(fn ($to, string $text, array $buttons) => $text === $prompt
+            && array_column($buttons, 'id') === [SupplierListingCollector::BUTTON_MACHINERY_UNLISTED, SupplierListingCollector::BUTTON_MENU]);
+    ListingExtractionAgent::fake([driverExtraction(['user_intent' => 'service_question'])]);
+
+    app(SupplierListingCollector::class)->resume($session, driverAiNode(), new InboundMessage(text: 'это платно?'));
+
+    // Повтор — не новый промпт: счётчик не растёт.
+    expect($session->fresh()->state['unlisted_prompts'])->toBe(1);
+});
+
+test('схема и промпт извлечения водителя знают поле техники вне справочника', function () {
+    $agent = new ListingExtractionAgent(ListingKind::Driver, ['Экскаватор']);
+
+    $schema = $agent->schema(new JsonSchemaTypeFactory);
+
+    expect($schema)->toHaveKey('unlisted_machinery')
+        ->and($schema['unlisted_machinery']->toArray()['type'])->toContain('string')->toContain('null')
+        ->and((string) $agent->instructions())->toContain('- unlisted_machinery:')
+        // Уточняющий вопрос на технику словами не нацеливается: поле не обязательное.
+        ->and($schema['clarifying_field']->toArray()['enum'])->not->toContain('unlisted_machinery');
 });
 
 test('a missing title never blocks confirmation and never spends an attempt', function () {

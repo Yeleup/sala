@@ -251,6 +251,25 @@ test('оператор продлевает объявление после зв
         ->and($listing->renewal_requested_at)->toBeNull();
 });
 
+test('оператор возвращает объявление из архива в поиск', function () {
+    $this->freezeTime();
+    $listing = Listing::factory()->archived()->create([
+        'expires_at' => now()->subDay(),
+        'renewal_requested_at' => now()->subDays(2),
+    ]);
+
+    Livewire::test(ListListings::class)
+        ->callAction(TestAction::make('restore')->table($listing))
+        ->assertNotified('Объявление снова в поиске');
+
+    $listing->refresh();
+    expect($listing->status)->toBe(ListingStatus::Published)
+        ->and($listing->expires_at->toDateTimeString())->toBe(now()->addDays(30)->toDateTimeString())
+        // Отметка прежнего опроса не должна пережить возврат — иначе
+        // следующий цикл промолчит и объявление снова тихо истечёт.
+        ->and($listing->renewal_requested_at)->toBeNull();
+});
+
 test('фильтр «истекает в сутки» собирает объявления, которые пора продлевать', function () {
     $expiringSoon = Listing::factory()->published()->create(['expires_at' => now()->addHours(6)]);
     $freshlyPublished = Listing::factory()->published()->create(['expires_at' => now()->addDays(30)]);
@@ -283,6 +302,63 @@ test('архив и продление недоступны, пока объяв
     Livewire::test(EditListing::class, ['record' => $listing->getRouteKey()])
         ->assertActionHidden('archive')
         ->assertActionHidden('renew');
+});
+
+test('возврат в поиск подтверждается и обещает срок без повторной модерации', function () {
+    $listing = Listing::factory()->archived()->create();
+
+    // Промах по соседнему пункту меню не должен возвращать в поиск
+    // только что проданную технику — действие переспрашивает.
+    expect(ListingResource::restoreAction()->isConfirmationRequired())->toBeTrue();
+
+    Livewire::test(ListListings::class)
+        ->mountAction(TestAction::make('restore')->table($listing))
+        ->assertMountedActionModalSee('30 дней')
+        ->assertMountedActionModalSee('повторную модерацию оно не проходит')
+        ->assertMountedActionModalSee('Уведомление поставщику не отправляется');
+});
+
+test('возврат в поиск предупреждает о поставщике, который не подтвердит опрос актуальности', function () {
+    $silent = Listing::factory()
+        ->for(Contact::factory()->create(['last_inbound_at' => null]), 'supplier')
+        ->archived()
+        ->create();
+    $wrote = Listing::factory()
+        ->for(Contact::factory()->withClosedSessionWindow()->create(), 'supplier')
+        ->archived()
+        ->create();
+
+    Livewire::test(ListListings::class)
+        ->mountAction(TestAction::make('restore')->table($silent))
+        ->assertMountedActionModalSee('ни разу не писал боту');
+
+    Livewire::test(ListListings::class)
+        ->mountAction(TestAction::make('restore')->table($wrote))
+        ->assertMountedActionModalDontSee('ни разу не писал боту');
+});
+
+test('возврат в поиск ничего не отправляет поставщику в WhatsApp', function () {
+    $listing = Listing::factory()->archived()->create();
+
+    $messenger = fakeModerationMessenger();
+    $messenger->shouldNotReceive('sendText');
+    $messenger->shouldNotReceive('sendTemplate');
+    $messenger->shouldNotReceive('sendCtaUrl');
+
+    Livewire::test(ListListings::class)
+        ->callAction(TestAction::make('restore')->table($listing));
+
+    expect($listing->refresh()->status)->toBe(ListingStatus::Published);
+});
+
+test('возврат в поиск доступен только архивному объявлению', function () {
+    $archived = Listing::factory()->archived()->create();
+
+    Livewire::test(EditListing::class, ['record' => $archived->getRouteKey()])
+        ->assertActionVisible('restore');
+
+    Livewire::test(EditListing::class, ['record' => Listing::factory()->published()->create()->getRouteKey()])
+        ->assertActionHidden('restore');
 });
 
 describe('уведомление поставщика о вердикте модерации', function () {

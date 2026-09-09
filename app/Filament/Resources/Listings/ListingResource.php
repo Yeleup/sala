@@ -266,7 +266,7 @@ class ListingResource extends Resource
             ->visible(fn (Listing $record): bool => $record->status === ListingStatus::Published)
             ->requiresConfirmation()
             ->modalHeading('Снять объявление с публикации?')
-            ->modalDescription('Объявление уйдёт из поиска заказчиков. Вернуть его туда поставщик сможет сам — кнопкой «Вернуть в поиск» в веб-кабинете.')
+            ->modalDescription('Объявление уйдёт из поиска заказчиков. Вернуть его туда можно действием «Вернуть в поиск» — здесь же или кнопкой самого поставщика в веб-кабинете.')
             ->action(function (Listing $record): void {
                 $record->archive();
 
@@ -275,6 +275,59 @@ class ListingResource extends Resource
                     ->success()
                     ->send();
             });
+    }
+
+    /**
+     * The way back from the archive, for a supplier who will not press the
+     * web-cabinet button himself: the one who never wrote to the bot has no
+     * CTA link to press, and the one who let the renewal poll expire is
+     * usually the one who calls instead. Without this the operator's only
+     * answer to «верните объявление обратно» was to retype it from scratch.
+     *
+     * The transition is the supplier's own «Вернуть в поиск», not a second
+     * publication: the listing goes back exactly as it already stood in the
+     * search, so neither moderation nor field completeness is re-checked
+     * (see Listing::restoreFromArchive). No WhatsApp notification either —
+     * the operator restores a listing having just agreed it by phone.
+     */
+    public static function restoreAction(): Action
+    {
+        return Action::make('restore')
+            ->label('Вернуть в поиск')
+            ->icon(Heroicon::OutlinedArrowUturnLeft)
+            ->color('success')
+            ->visible(fn (Listing $record): bool => $record->status === ListingStatus::Archived)
+            ->requiresConfirmation()
+            ->modalHeading('Вернуть объявление в поиск?')
+            ->modalDescription(fn (Listing $record): string => self::restorationNotes($record))
+            ->action(function (Listing $record): void {
+                $record->restoreFromArchive();
+
+                Notification::make()
+                    ->title('Объявление снова в поиске')
+                    ->body('Объявление показывается заказчикам ещё '.Listing::LIFETIME_DAYS.' дней.')
+                    ->success()
+                    ->send();
+            });
+    }
+
+    /**
+     * The same warning publicationNotes() gives, and for the same reason:
+     * a supplier who has never written to the bot will not confirm the
+     * renewal poll, so in 30 days the listing archives itself again — by
+     * the very path it took the first time. Without the warning the
+     * operator would answer the same phone call every month, never
+     * learning that the way out is «Продлить» by hand.
+     */
+    private static function restorationNotes(Listing $record): string
+    {
+        $notes = ['Объявление вернётся в поиск на '.Listing::LIFETIME_DAYS.' дней в том же виде, в каком уже было там: повторную модерацию оно не проходит. Уведомление поставщику не отправляется.'];
+
+        if (! $record->supplier?->hasEverWritten()) {
+            $notes[] = 'Поставщик ни разу не писал боту, поэтому опрос актуальности он не подтвердит — через '.Listing::LIFETIME_DAYS.' дней объявление снова уйдёт в архив; продлевайте его вручную или попросите поставщика написать боту.';
+        }
+
+        return implode(' ', $notes);
     }
 
     /**

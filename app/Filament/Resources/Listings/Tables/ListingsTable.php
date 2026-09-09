@@ -153,7 +153,7 @@ class ListingsTable
             // horizontal scroll — the operator had to drag the scrollbar to
             // reach the very controls the row exists for. Nothing is dropped,
             // and clicking the row still opens the form. The three sections
-            // keep a nine-item menu readable: what can be done to any listing,
+            // keep a ten-item menu readable: what can be done to any listing,
             // the lifecycle verdicts, then deletion.
             ->recordActions([
                 ActionGroup::make([
@@ -168,6 +168,7 @@ class ListingsTable
                         ListingResource::rejectAction(),
                         ListingResource::renewAction(),
                         ListingResource::archiveAction(),
+                        ListingResource::restoreAction(),
                     ])->dropdown(false),
                     ActionGroup::make([
                         DeleteAction::make()

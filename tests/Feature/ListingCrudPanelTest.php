@@ -493,6 +493,7 @@ test('все действия строки собраны в одно меню �
             'reject',
             'renew',
             'archive',
+            'restore',
             'delete',
         ]);
 });

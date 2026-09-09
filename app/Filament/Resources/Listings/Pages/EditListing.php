@@ -28,6 +28,7 @@ class EditListing extends EditRecord
             ListingResource::rejectAction(),
             ListingResource::renewAction(),
             ListingResource::archiveAction(),
+            ListingResource::restoreAction(),
             DeleteAction::make()
                 ->label('Удалить')
                 ->modalHeading('Удалить объявление?')

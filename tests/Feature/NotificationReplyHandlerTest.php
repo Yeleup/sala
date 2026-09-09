@@ -173,7 +173,10 @@ describe('ответы на 30-дневный опрос', function () {
 
     test('«Нет, в архив» снимает объявление с публикации', function () {
         $supplier = Contact::factory()->withOpenSessionWindow()->create();
-        $listing = Listing::factory()->published()->for($supplier, 'supplier')->create();
+        // Отметка опроса — то, что суточный цикл ставит, задав вопрос:
+        // без неё кнопка считается кнопкой прошлого цикла.
+        $listing = Listing::factory()->published()->for($supplier, 'supplier')
+            ->create(['renewal_requested_at' => now()]);
 
         $messenger = fakeReplyMessenger();
         $messenger->shouldReceive('sendText')->once()->withArgs(
@@ -203,6 +206,67 @@ describe('ответы на 30-дневный опрос', function () {
         );
 
         expect($listing->refresh()->status)->toBe(ListingStatus::Archived);
+    });
+
+    test('кнопка «Нет, в архив» прежнего цикла не уносит вернувшееся объявление обратно в архив', function () {
+        $supplier = Contact::factory()->withOpenSessionWindow()->create();
+        $listing = Listing::factory()->published()->for($supplier, 'supplier')
+            ->create(['expires_at' => now()->subDay(), 'renewal_requested_at' => now()->subDays(2)]);
+        // Срок вышел без ответа — автоархив; поставщик передумал, объявление
+        // вернули в поиск, а кнопки того опроса остались в переписке.
+        $listing->archive();
+        $listing->restoreFromArchive();
+
+        fakeReplyMessenger()->shouldReceive('sendText')->once()->withArgs(
+            fn (Contact $contact, string $text): bool => str_contains($text, 'вопрос уже закрыт'),
+        );
+
+        app(NotificationReplyHandler::class)->handle(
+            $supplier,
+            new InboundMessage(replyId: NotificationReplyHandler::renewalNoId($listing)),
+        );
+
+        expect($listing->refresh()->status)->toBe(ListingStatus::Published);
+    });
+
+    test('после продления кнопка того же опроса уже не уносит объявление в архив', function () {
+        $supplier = Contact::factory()->withOpenSessionWindow()->create();
+        $listing = Listing::factory()->published()->for($supplier, 'supplier')
+            ->create(['expires_at' => now()->addHours(10), 'renewal_requested_at' => now()]);
+        // Поставщик подтвердил актуальность по телефону, оператор продлил
+        // объявление — вопрос закрыт, но кнопки его остались в переписке.
+        $listing->renew();
+
+        fakeReplyMessenger()->shouldReceive('sendText')->once()->withArgs(
+            fn (Contact $contact, string $text): bool => str_contains($text, 'вопрос уже закрыт'),
+        );
+
+        app(NotificationReplyHandler::class)->handle(
+            $supplier,
+            new InboundMessage(replyId: NotificationReplyHandler::renewalNoId($listing)),
+        );
+
+        expect($listing->refresh()->status)->toBe(ListingStatus::Published);
+    });
+
+    test('кнопка «Да, актуально» прежнего цикла не сдвигает согласованный срок', function () {
+        $supplier = Contact::factory()->withOpenSessionWindow()->create();
+        $listing = Listing::factory()->published()->for($supplier, 'supplier')
+            ->create(['expires_at' => now()->subDay(), 'renewal_requested_at' => now()->subDays(2)]);
+        $listing->archive();
+        $listing->restoreFromArchive();
+        $expiresAt = $listing->refresh()->expires_at;
+
+        fakeReplyMessenger()->shouldReceive('sendText')->once()->withArgs(
+            fn (Contact $contact, string $text): bool => str_contains($text, 'вопрос уже закрыт'),
+        );
+
+        app(NotificationReplyHandler::class)->handle(
+            $supplier,
+            new InboundMessage(replyId: NotificationReplyHandler::renewalYesId($listing)),
+        );
+
+        expect($listing->refresh()->expires_at->equalTo($expiresAt))->toBeTrue();
     });
 
     test('чужой контакт не может ответить на опрос', function () {

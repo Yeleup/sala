@@ -334,7 +334,7 @@ describe('ответы по токену flow:{token}:{option}', function () {
         installFlowScenarios();
         $supplier = Contact::factory()->withOpenSessionWindow()->create();
         $listing = Listing::factory()->published()->for($supplier, 'supplier')
-            ->create(['category_id' => categoryNamed('Экскаватор')->id, 'expires_at' => now()->addHours(12)]);
+            ->create(['category_id' => categoryNamed('Экскаватор')->id, 'expires_at' => now()->addHours(12), 'renewal_requested_at' => now()]);
 
         $messenger = runnerMessenger();
         $messenger->shouldReceive('sendButtons')->once();
@@ -428,7 +428,7 @@ describe('сценарий «Продление объявления»', functio
         installFlowScenarios();
         $supplier = Contact::factory()->withOpenSessionWindow()->create();
         $listing = Listing::factory()->published()->for($supplier, 'supplier')
-            ->create(['category_id' => categoryNamed('Экскаватор')->id, 'expires_at' => now()->addHours(12)]);
+            ->create(['category_id' => categoryNamed('Экскаватор')->id, 'expires_at' => now()->addHours(12), 'renewal_requested_at' => now()]);
 
         $messenger = runnerMessenger();
         $messenger->shouldReceive('sendButtons')->once();
@@ -455,7 +455,7 @@ describe('сценарий «Продление объявления»', functio
         installFlowScenarios();
         $supplier = Contact::factory()->withOpenSessionWindow()->create();
         $listing = Listing::factory()->published()->for($supplier, 'supplier')
-            ->create(['expires_at' => now()->addHours(12)]);
+            ->create(['expires_at' => now()->addHours(12), 'renewal_requested_at' => now()]);
 
         $messenger = runnerMessenger();
         $messenger->shouldReceive('sendButtons')->once();
@@ -468,7 +468,7 @@ describe('сценарий «Продление объявления»', functio
         $listing->archive();
 
         $messenger->shouldReceive('sendText')->once()->withArgs(
-            fn (Contact $contact, string $text): bool => str_contains($text, 'уже в архиве'),
+            fn (Contact $contact, string $text): bool => str_contains($text, 'вопрос уже закрыт'),
         );
 
         app(ScenarioRunReplyHandler::class)->handle(
@@ -480,11 +480,75 @@ describe('сценарий «Продление объявления»', functio
             ->and($run->refresh()->status)->toBe(ScenarioRunStatus::Completed);
     });
 
+    test('возвращённое из архива объявление кнопке прежнего опроса больше не подчиняется', function () {
+        installFlowScenarios();
+        $supplier = Contact::factory()->withOpenSessionWindow()->create();
+        $listing = Listing::factory()->published()->for($supplier, 'supplier')
+            ->create(['expires_at' => now()->addHours(12), 'renewal_requested_at' => now()]);
+
+        $messenger = runnerMessenger();
+        $messenger->shouldReceive('sendButtons')->once();
+
+        $scenario = BotScenario::publishedForTrigger(BotScenarioTrigger::ListingExpiring);
+        $run = app(ScenarioRunner::class)->launch($scenario, $supplier, $listing);
+
+        // Срок вышел без ответа — автоархив; объявление вернули в поиск,
+        // и начался новый 30-дневный цикл. Кнопка прежнего цикла в него
+        // дотянуться не должна — ни продлением, ни архивом.
+        $listing->archive();
+        $listing->restoreFromArchive();
+        $expiresAt = $listing->refresh()->expires_at;
+
+        $messenger->shouldReceive('sendText')->once()->withArgs(
+            fn (Contact $contact, string $text): bool => str_contains($text, 'вопрос уже закрыт'),
+        );
+
+        app(ScenarioRunReplyHandler::class)->handle(
+            $supplier,
+            new InboundMessage(replyId: "flow:{$run->token}:no"),
+        );
+
+        $listing->refresh();
+        expect($listing->status)->toBe(ListingStatus::Published)
+            ->and($listing->expires_at->equalTo($expiresAt))->toBeTrue()
+            ->and($run->refresh()->status)->toBe(ScenarioRunStatus::Completed);
+    });
+
+    test('после продления кнопка «Да, актуально» прежнего опроса не сдвигает срок ещё раз', function () {
+        installFlowScenarios();
+        $supplier = Contact::factory()->withOpenSessionWindow()->create();
+        $listing = Listing::factory()->published()->for($supplier, 'supplier')
+            ->create(['expires_at' => now()->addHours(12), 'renewal_requested_at' => now()]);
+
+        $messenger = runnerMessenger();
+        $messenger->shouldReceive('sendButtons')->once();
+
+        $scenario = BotScenario::publishedForTrigger(BotScenarioTrigger::ListingExpiring);
+        $run = app(ScenarioRunner::class)->launch($scenario, $supplier, $listing);
+
+        // Поставщик подтвердил актуальность по телефону, оператор продлил
+        // объявление в админке — вопрос закрыт, а кнопки остались в чате.
+        $listing->renew();
+        $expiresAt = $listing->refresh()->expires_at;
+
+        $messenger->shouldReceive('sendText')->once()->withArgs(
+            fn (Contact $contact, string $text): bool => str_contains($text, 'вопрос уже закрыт'),
+        );
+
+        app(ScenarioRunReplyHandler::class)->handle(
+            $supplier,
+            new InboundMessage(replyId: "flow:{$run->token}:yes"),
+        );
+
+        expect($listing->refresh()->expires_at->equalTo($expiresAt))->toBeTrue()
+            ->and($run->refresh()->status)->toBe(ScenarioRunStatus::Completed);
+    });
+
     test('запуск закреплён за версией публикации: правка сценария не перекраивает отправленные кнопки', function () {
         installFlowScenarios();
         $supplier = Contact::factory()->withOpenSessionWindow()->create();
         $listing = Listing::factory()->published()->for($supplier, 'supplier')
-            ->create(['category_id' => categoryNamed('Кран')->id, 'expires_at' => now()->addHours(12)]);
+            ->create(['category_id' => categoryNamed('Кран')->id, 'expires_at' => now()->addHours(12), 'renewal_requested_at' => now()]);
 
         $messenger = runnerMessenger();
         $messenger->shouldReceive('sendButtons')->once();

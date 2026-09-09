@@ -23,8 +23,12 @@ use LogicException;
  * precondition no longer holds (the request is already decided, the
  * listing is not published) reports Skipped, and the runner follows the
  * block's «skipped» output — a race between two replies must not crash
- * the run. Best-effort actions (CTA link, customer notification) never
- * report Skipped: «did less than intended» keeps the continue branch.
+ * the run. The renewal actions read that precondition the same way for
+ * one listing and for a batch: the question must still be open, so a
+ * button of a superseded 30-day cycle decides nothing (see
+ * Listing::isAwaitingRenewalAnswer and ListingRenewalBatch::pending).
+ * Best-effort actions (CTA link, customer notification) never report
+ * Skipped: «did less than intended» keeps the continue branch.
  */
 class ScenarioActionExecutor
 {
@@ -49,8 +53,14 @@ class ScenarioActionExecutor
                 ScenarioAction::AcceptRequest => $this->attempt($subject instanceof CustomerRequest, fn () => $subject->accept()),
                 ScenarioAction::DeclineRequest => $this->attempt($subject instanceof CustomerRequest, fn () => $subject->decline()),
                 ScenarioAction::ExpireRequest => $this->attempt($subject instanceof CustomerRequest, fn () => $subject->expire()),
-                ScenarioAction::RenewListing => $this->attempt($subject instanceof Listing, fn () => $subject->renew()),
-                ScenarioAction::ArchiveListing => $this->attempt($subject instanceof Listing, fn () => $subject->archive()),
+                ScenarioAction::RenewListing => $this->attempt(
+                    $subject instanceof Listing && $subject->isAwaitingRenewalAnswer(),
+                    fn () => $subject->renew(),
+                ),
+                ScenarioAction::ArchiveListing => $this->attempt(
+                    $subject instanceof Listing && $subject->isAwaitingRenewalAnswer(),
+                    fn () => $subject->archive(),
+                ),
                 ScenarioAction::RenewBatchListings => $this->attempt(
                     $subject instanceof ListingRenewalBatch && $subject->hasPendingListings(),
                     fn () => $subject->renewAll(),

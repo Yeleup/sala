@@ -212,6 +212,11 @@ class NotificationReplyHandler
      * poll. A late answer after the auto-archive does not revive the
      * listing on its own — the return to the search is a deliberate act
      * in the cabinet, not a side effect of a stale button.
+     *
+     * Nor does a stale button decide for a cycle it was not asked about:
+     * once the publication was renewed or returned from the archive, the
+     * question it answers is gone (see Listing::isAwaitingRenewalAnswer),
+     * and the supplier gets the same truthful reply the batch poll gives.
      */
     protected function handleRenewalReply(Contact $contact, string $replyId, bool $stillRelevant): bool
     {
@@ -225,6 +230,15 @@ class NotificationReplyHandler
             $this->messenger->sendText(
                 $contact,
                 'Это объявление уже в архиве. Вернуть его в поиск можно в кабинете — кнопка «Вернуть в поиск» в «Моих объявлениях».',
+            );
+
+            return true;
+        }
+
+        if (! $listing->isAwaitingRenewalAnswer()) {
+            $this->messenger->sendText(
+                $contact,
+                'По этому объявлению вопрос уже закрыт — актуальный статус и срок показа видны в кабинете.',
             );
 
             return true;

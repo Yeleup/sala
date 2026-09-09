@@ -253,6 +253,32 @@ describe('опрос пачкой: одно сообщение на постав
             ->and($listings->every(fn (Listing $listing): bool => $listing->refresh()->renewal_requested_at !== null))->toBeTrue();
     });
 
+    test('объявление помечается опрошенным сразу после своей отправки, а не в конце очереди', function () {
+        // Поставщик отвечает мгновенно, а очередь отправок идёт секунды:
+        // ответ на реально заданный вопрос не должен попасть в окно, где
+        // отметки ещё нет, — иначе он получит «вопрос уже закрыт».
+        $supplier = Contact::factory()->withClosedSessionWindow()->create();
+        $listings = expiringListingsOf($supplier, 3);
+        WhatsappTemplate::factory()->approved()->create([
+            'name' => WhatsappTemplateLibrary::LISTING_RENEWAL,
+            'language' => 'ru',
+        ]);
+
+        $askedAndMarked = [];
+        fakeCycleMessenger()->shouldReceive('sendTemplate')->times(3)->andReturnUsing(
+            function () use ($listings, &$askedAndMarked): void {
+                $askedAndMarked[] = $listings->filter(
+                    fn (Listing $listing): bool => $listing->fresh()->isAwaitingRenewalAnswer(),
+                )->count();
+            },
+        );
+
+        $this->artisan('listings:run-renewal-cycle')->assertSuccessful();
+
+        // К моменту каждой следующей отправки помечены все предыдущие.
+        expect($askedAndMarked)->toBe([0, 1, 2]);
+    });
+
     test('единственное истекающее объявление спрашивается по названию, без пачки', function () {
         $supplier = Contact::factory()->withOpenSessionWindow()->create();
         $listing = expiringListingsOf($supplier, 1)->first();

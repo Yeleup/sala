@@ -416,6 +416,21 @@ class Listing extends Model
     }
 
     /**
+     * The listing still awaits an answer to the renewal poll it was
+     * actually asked. The poll mark is what ties a question to its
+     * 30-day cycle: renew() and restoreFromArchive() clear it, so a
+     * button left over from a superseded cycle must no longer decide
+     * anything — the same invariant ListingRenewalBatch::pending()
+     * enforces for the batch poll. Archiving deliberately keeps the
+     * mark: an expired publication was asked and did not answer.
+     */
+    public function isAwaitingRenewalAnswer(): bool
+    {
+        return $this->status === ListingStatus::Published
+            && $this->renewal_requested_at !== null;
+    }
+
+    /**
      * The supplier confirmed the listing is still relevant: prolong it
      * without leaving the published status. The renewal poll flag resets
      * so the next 30-day cycle asks again.

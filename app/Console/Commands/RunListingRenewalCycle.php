@@ -90,10 +90,9 @@ class RunListingRenewalCycle extends Command
             return $listings->count();
         }
 
-        $polled = $listings->filter(fn (Listing $listing): bool => $this->pollSingle($listing, $runner, $notifier));
-        $polled->each($this->markPolled(...));
-
-        return $polled->count();
+        return $listings
+            ->filter(fn (Listing $listing): bool => $this->pollSingle($listing, $runner, $notifier))
+            ->count();
     }
 
     protected function markPolled(Listing $listing): void
@@ -101,13 +100,27 @@ class RunListingRenewalCycle extends Command
         $listing->update(['renewal_requested_at' => now()]);
     }
 
+    /**
+     * The mark goes on right after this listing's own send, not after the
+     * whole supplier's queue: a question already on the supplier's phone
+     * must count as asked while the remaining sends are still going out.
+     * Otherwise an instant answer lands in a window where the question
+     * does not yet exist and is turned away as belonging to a closed
+     * cycle (see Listing::isAwaitingRenewalAnswer).
+     */
     protected function pollSingle(Listing $listing, ScenarioRunner $runner, ListingRenewalNotifier $notifier): bool
     {
         $scenario = BotScenario::publishedForTrigger(BotScenarioTrigger::ListingExpiring);
 
-        return $scenario !== null
+        $sent = $scenario !== null
             ? $runner->launch($scenario, $listing->supplier, $listing) !== null
             : $notifier->sendPoll($listing);
+
+        if ($sent) {
+            $this->markPolled($listing);
+        }
+
+        return $sent;
     }
 
     /**

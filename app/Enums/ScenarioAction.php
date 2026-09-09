@@ -94,7 +94,7 @@ enum ScenarioAction: string
             self::DeclineRequest,
             self::ExpireRequest => 'Заявка уже решена',
             self::RenewListing,
-            self::ArchiveListing => 'Объявление уже в архиве',
+            self::ArchiveListing => 'Вопрос по объявлению уже закрыт',
             self::RenewBatchListings,
             self::ArchiveBatchListings => 'Вопрос по пачке уже закрыт',
             self::SendCabinetCta,

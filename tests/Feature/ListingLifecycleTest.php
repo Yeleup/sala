@@ -238,6 +238,19 @@ test('an archived listing returns even without a publication field', function ()
     expect($listing->refresh()->status)->toBe(ListingStatus::Published);
 });
 
+test('вопрос опроса считается открытым только у публикации, которую ещё показывают', function () {
+    $listing = Listing::factory()->published()->create(['renewal_requested_at' => now()]);
+
+    expect($listing->isAwaitingRenewalAnswer())->toBeTrue();
+
+    // Автоархив отметку намеренно сохраняет — по ней видно, что спросили
+    // и ответа не дождались; открытым вопрос от этого не становится.
+    $listing->archive();
+
+    expect($listing->refresh()->renewal_requested_at)->not->toBeNull()
+        ->and($listing->isAwaitingRenewalAnswer())->toBeFalse();
+});
+
 test('only published and unexpired listings are searchable', function () {
     $published = Listing::factory()->published()->create();
     Listing::factory()->expired()->create();

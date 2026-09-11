@@ -7,6 +7,7 @@ use App\Exceptions\OutboundRequestBlocked;
 use App\Models\BotReplyText;
 use App\Models\BotScenario;
 use App\Models\BotSession;
+use App\Models\ChannelMessage;
 use App\Models\Contact;
 use App\Models\Listing;
 use App\Services\Ai\VoiceTranscriber;
@@ -205,7 +206,7 @@ describe('роутер не спрашивают, пока движок спра
 });
 
 describe('высокая уверенность — переход без вопросов', function () {
-    test('в ветку с анкетой: блок здоровается и сразу получает написанное', function () {
+    test('в ветку с анкетой: блок не здоровается, а сразу отвечает по написанному', function () {
         $scenario = navScenario();
         $contact = Contact::factory()->create();
         $session = navSessionAt($scenario, $contact, 'menu');
@@ -215,12 +216,12 @@ describe('высокая уверенность — переход без воп
             ->andReturn(MenuRoute::toOption(['node_id' => 'menu', 'option_id' => 'supplier'], RouteConfidence::High));
 
         $assistant = navAssistant();
+        // Один вход вместо пары «приглашение блока + уточняющий вопрос»:
+        // написанное приезжает вместе со входом, и блок отвечает по нему.
         $assistant->shouldReceive('start')->once()
-            ->withArgs(fn (BotSession $s, array $node): bool => $node['id'] === 'collect')
+            ->withArgs(fn (BotSession $s, array $node, ?InboundMessage $m): bool => $node['id'] === 'collect' && $m?->text === 'сдаю кран 25 тонн')
             ->andReturn(AiOutcome::InProgress);
-        $assistant->shouldReceive('resume')->once()
-            ->withArgs(fn (BotSession $s, array $node, InboundMessage $m): bool => $node['id'] === 'collect' && $m->text === 'сдаю кран 25 тонн')
-            ->andReturn(AiOutcome::InProgress);
+        $assistant->shouldNotReceive('resume');
 
         navMessenger();
 
@@ -338,12 +339,12 @@ describe('высокая уверенность — переход без воп
             ->andReturn(MenuRoute::toOption(['node_id' => 'menu', 'option_id' => 'supplier'], RouteConfidence::High));
 
         $assistant = navAssistant();
-        $assistant->shouldReceive('start')->once()->andReturn(AiOutcome::InProgress);
-        $assistant->shouldReceive('resume')->once()
-            ->withArgs(fn (BotSession $s, array $node, InboundMessage $m): bool => $m->text === 'сдаю кран 25 тонн'
+        $assistant->shouldReceive('start')->once()
+            ->withArgs(fn (BotSession $s, array $node, ?InboundMessage $m): bool => $m?->text === 'сдаю кран 25 тонн'
                 && $m->mediaId === 'IMG-1'
                 && $m->mediaType === ListingMediaType::Photo)
             ->andReturn(AiOutcome::InProgress);
+        $assistant->shouldNotReceive('resume');
 
         navMessenger();
 
@@ -495,10 +496,10 @@ describe('подтверждение предложения', function () {
         navRouter()->shouldNotReceive('route');
 
         $assistant = navAssistant();
-        $assistant->shouldReceive('start')->once()->andReturn(AiOutcome::InProgress);
-        $assistant->shouldReceive('resume')->once()
-            ->withArgs(fn (BotSession $s, array $node, InboundMessage $m): bool => $m->text === 'сдаю кран' && $m->replyId === null)
+        $assistant->shouldReceive('start')->once()
+            ->withArgs(fn (BotSession $s, array $node, ?InboundMessage $m): bool => $m?->text === 'сдаю кран' && $m->replyId === null)
             ->andReturn(AiOutcome::InProgress);
+        $assistant->shouldNotReceive('resume');
 
         navMessenger();
 
@@ -783,14 +784,14 @@ describe('голосовое на шаге меню', function () {
             ->andReturn(MenuRoute::toOption(['node_id' => 'menu', 'option_id' => 'supplier'], RouteConfidence::High));
 
         $assistant = navAssistant();
-        $assistant->shouldReceive('start')->once()->andReturn(AiOutcome::InProgress);
         // Медиа в анкету не переносится: аудио уже скачано и расшифровано,
         // второй заход стоил бы второй транскрипции.
-        $assistant->shouldReceive('resume')->once()
-            ->withArgs(fn (BotSession $s, array $node, InboundMessage $m): bool => $m->text === 'нужен автокран на неделю'
+        $assistant->shouldReceive('start')->once()
+            ->withArgs(fn (BotSession $s, array $node, ?InboundMessage $m): bool => $m?->text === 'нужен автокран на неделю'
                 && $m->mediaId === null
                 && $m->mediaType === null)
             ->andReturn(AiOutcome::InProgress);
+        $assistant->shouldNotReceive('resume');
 
         navMessenger();
 
@@ -812,8 +813,14 @@ describe('голосовое на шаге меню', function () {
             ->shouldReceive('transcribe')->times(5)->andReturn('нужен автокран на неделю');
 
         navRouter()->shouldReceive('route')->times(5)->andReturnNull();
-        navMessenger()->shouldReceive('sendButtons')->times(6)
-            ->withArgs(fn (Contact $to, string $text): bool => $text === 'Кто вы?');
+
+        // Предмет этого теста — счёт скачиваний и расшифровок, а не число
+        // меню: сколько раз бот повторит шаг, решает потолок повторов
+        // (см. «шаг, который не удаётся пройти»), и шестое голосовое туда
+        // попадает наравне с пятью первыми.
+        $messenger = navMessenger();
+        $messenger->shouldReceive('sendButtons')->times(2);
+        $messenger->shouldReceive('sendText')->once();
 
         foreach (range(1, 6) as $number) {
             app(BotEngine::class)->handle($contact, new InboundMessage(mediaType: ListingMediaType::Audio, mediaId: 'AUDIO-'.$number));
@@ -836,8 +843,298 @@ describe('голосовое на шаге меню', function () {
     });
 });
 
+describe('исходы, которые никуда не ведут', function () {
+    test('подтверждение: бот молчит и закрывает диалог', function () {
+        // Кейс 169: на «👍» после продления объявления бот присылал полное
+        // приветствие «Это сервис спецтехники…» человеку, который у нас с
+        // августа. Модель отвечала верно — неверно обрабатывался ответ.
+        $scenario = navScenario();
+        $contact = Contact::factory()->create();
+        $session = navSessionAt($scenario, $contact, 'menu');
+
+        navRouter()->shouldReceive('route')->once()
+            ->andReturn(MenuRoute::toAcknowledgement(RouteConfidence::High));
+
+        $messenger = navMessenger();
+        $messenger->shouldNotReceive('sendText');
+        $messenger->shouldNotReceive('sendButtons');
+
+        app(BotEngine::class)->handle($contact, new InboundMessage(text: '👍'));
+
+        expect($session->fresh())
+            ->current_node_id->toBeNull()
+            ->last_dialog_ended_at->not->toBeNull();
+    });
+
+    test('отказ: одно прощание, без меню, диалог закрыт', function () {
+        $scenario = navScenario();
+        $contact = Contact::factory()->create();
+        $session = navSessionAt($scenario, $contact, 'menu');
+
+        navRouter()->shouldReceive('route')->once()
+            ->andReturn(MenuRoute::toDecline(RouteConfidence::High));
+
+        $messenger = navMessenger();
+        $messenger->shouldReceive('sendText')->once()
+            ->withArgs(fn (Contact $to, string $text): bool => $text === 'Хорошо. Понадобится техника, мастер или водитель — просто напишите нам.');
+        $messenger->shouldNotReceive('sendButtons');
+
+        app(BotEngine::class)->handle($contact, new InboundMessage(text: 'ничего не нужно'));
+
+        expect($session->fresh()->current_node_id)->toBeNull();
+    });
+
+    test('просьба о человеке: реплика есть, повтора шага нет, шаг сохранён', function () {
+        // Кейс 316: человек голосом жаловался, что бот водит его по кругу,
+        // и получал в ответ ровно тот круг, на который жаловался.
+        $scenario = navScenario();
+        $contact = Contact::factory()->create();
+        $session = navSessionAt($scenario, $contact, 'menu');
+
+        navRouter()->shouldReceive('route')->once()
+            ->andReturn(MenuRoute::toHumanHandoff(RouteConfidence::Medium));
+
+        $messenger = navMessenger();
+        $messenger->shouldReceive('sendText')->once()
+            ->withArgs(fn (Contact $to, string $text): bool => $text === 'Хорошо, больше не буду переспрашивать. Эту переписку читает наш оператор — он ответит вам здесь.');
+        $messenger->shouldNotReceive('sendButtons');
+
+        app(BotEngine::class)->handle($contact, new InboundMessage(text: 'пусть оператор напишет'));
+
+        expect($session->fresh()->current_node_id)->toBe('menu');
+    });
+
+    test('приветствие: бот показывает, что умеет, и ничего не дописывает', function () {
+        $scenario = navScenario();
+        $contact = Contact::factory()->create();
+        $session = navSessionAt($scenario, $contact, 'menu');
+
+        navRouter()->shouldReceive('route')->once()
+            ->andReturn(MenuRoute::toGreeting(RouteConfidence::High));
+
+        $messenger = navMessenger();
+        $messenger->shouldNotReceive('sendText');
+        $messenger->shouldReceive('sendButtons')->once()
+            ->withArgs(fn (Contact $to, string $text): bool => $text === 'Кто вы?');
+
+        app(BotEngine::class)->handle($contact, new InboundMessage(text: 'салеметсызбе'));
+
+        expect($session->fresh()->current_node_id)->toBe('menu');
+    });
+
+    test('неуверенное прочтение любого исхода — ровно прежнее поведение', function (MenuRoute $route) {
+        $scenario = navScenario();
+        $contact = Contact::factory()->create();
+        $session = navSessionAt($scenario, $contact, 'menu');
+
+        navRouter()->shouldReceive('route')->once()->andReturn($route);
+
+        $messenger = navMessenger();
+        $messenger->shouldNotReceive('sendText');
+        $messenger->shouldReceive('sendButtons')->once()
+            ->withArgs(fn (Contact $to, string $text): bool => $text === 'Кто вы?');
+
+        app(BotEngine::class)->handle($contact, new InboundMessage(text: 'ок'));
+
+        expect($session->fresh()->current_node_id)->toBe('menu');
+    })->with([
+        'подтверждение' => fn () => MenuRoute::toAcknowledgement(RouteConfidence::Low),
+        'отказ' => fn () => MenuRoute::toDecline(RouteConfidence::Low),
+        'просьба о человеке' => fn () => MenuRoute::toHumanHandoff(RouteConfidence::Low),
+        'приветствие' => fn () => MenuRoute::toGreeting(RouteConfidence::Low),
+    ]);
+
+    test('подтверждение первым сообщением диалога не даёт ни приветствия, ни меню', function () {
+        // Связка с приветствием: контакт, которому бот уже писал, на «👍»
+        // после продления не получает вообще ничего.
+        $definition = navMenuDefinition();
+        $definition['edges'][] = ['from' => 'start', 'output' => 'returning', 'to' => 'menu'];
+        navScenario($definition);
+
+        $contact = Contact::factory()->create();
+        ChannelMessage::factory()->outbound()->delivered()->create(['contact_id' => $contact->id]);
+
+        navRouter()->shouldReceive('route')->once()
+            ->andReturn(MenuRoute::toAcknowledgement(RouteConfidence::High));
+
+        $messenger = navMessenger();
+        $messenger->shouldNotReceive('sendText');
+        $messenger->shouldNotReceive('sendButtons');
+
+        app(BotEngine::class)->handle($contact, new InboundMessage(text: '👍'));
+
+        expect(BotSession::sole()->current_node_id)->toBeNull();
+    });
+});
+
+describe('шаг, который не удаётся пройти', function () {
+    test('меню, меню, подсказка, тишина — и любое понятое сообщение начинает счёт заново', function () {
+        // Кейс 337: человек перечислял, что чинит, по одному слову, и на
+        // каждое получал «Что вас интересует?». Всего за диалог таких
+        // повторов было пять подряд; у контакта 10 — 29 за переписку.
+        $scenario = navScenario();
+        $contact = Contact::factory()->create();
+        $session = navSessionAt($scenario, $contact, 'menu');
+
+        navRouter()->shouldReceive('route')->times(4)->andReturnNull();
+
+        $messenger = navMessenger();
+        $messenger->shouldReceive('sendButtons')->times(2)
+            ->withArgs(fn (Contact $to, string $text): bool => $text === 'Кто вы?');
+        $messenger->shouldReceive('sendText')->once()
+            ->withArgs(fn (Contact $to, string $text): bool => str_starts_with($text, 'Кажется, я не понимаю.'));
+
+        foreach (['Мотор', 'Воздушные', 'Ходовка', 'Я написал уде'] as $word) {
+            app(BotEngine::class)->handle($contact, new InboundMessage(text: $word));
+        }
+
+        expect($session->fresh()->menu_streak['count'])->toBe(4);
+
+        // Нажатие кнопки — понятый ход: счёт обнуляется.
+        navAssistant()->shouldReceive('start')->once()->andReturn(AiOutcome::InProgress);
+
+        app(BotEngine::class)->handle($contact, new InboundMessage(text: 'Я поставщик', replyId: 'supplier'));
+
+        expect($session->fresh()->menu_streak)->toBeNull();
+    });
+
+    test('уход на другой шаг обнуляет счёт', function () {
+        $scenario = navScenario();
+        $contact = Contact::factory()->create();
+        $session = navSessionAt($scenario, $contact, 'menu', [
+            'menu_streak' => ['node_id' => 'menu', 'count' => 2, 'texts' => ['Мотор', 'Воздушные']],
+        ]);
+
+        navRouter()->shouldReceive('route')->once()
+            ->andReturn(MenuRoute::toOption(['node_id' => 'menu', 'option_id' => 'customer'], RouteConfidence::High));
+
+        navMessenger()->shouldReceive('sendText')->once()
+            ->withArgs(fn (Contact $to, string $text): bool => $text === 'Ветка заказчика');
+
+        app(BotEngine::class)->handle($contact, new InboundMessage(text: 'ищу технику'));
+
+        expect($session->fresh()->menu_streak)->toBeNull();
+    });
+
+    test('ответ про устаревшую кнопку счёт не трогает', function () {
+        // Это не пинг-понг, а осмысленный ответ на осмысленное действие.
+        $scenario = navScenario();
+        $contact = Contact::factory()->create();
+        $session = navSessionAt($scenario, $contact, 'menu');
+
+        $messenger = navMessenger();
+        $messenger->shouldReceive('sendText')->once();
+        $messenger->shouldReceive('sendButtons')->once();
+
+        app(BotEngine::class)->handle($contact, new InboundMessage(text: 'Что-то', replyId: 'кнопка-из-прошлой-версии'));
+
+        expect($session->fresh()->menu_streak)->toBeNull();
+    });
+
+    test('накопленное на шаге читается классификатором вместе с последним сообщением', function () {
+        $scenario = navScenario();
+        $contact = Contact::factory()->create();
+        navSessionAt($scenario, $contact, 'menu', [
+            'menu_streak' => ['node_id' => 'menu', 'count' => 2, 'texts' => ['Мотор', 'Воздушные']],
+        ]);
+
+        navRouter()->shouldReceive('route')->once()
+            ->withArgs(fn (BotSession $s, ScenarioDefinition $d, array $node, InboundMessage $m): bool => $s->menuStreak('menu')['texts'] === ['Мотор', 'Воздушные'] && $m->text === 'Ходовка')
+            ->andReturnNull();
+
+        navMessenger()->shouldReceive('sendText')->once();
+
+        app(BotEngine::class)->handle($contact, new InboundMessage(text: 'Ходовка'));
+    });
+
+    test('в ветку едет всё написанное на шаге, а не только последнее слово', function () {
+        $scenario = navScenario();
+        $contact = Contact::factory()->create();
+        navSessionAt($scenario, $contact, 'menu', [
+            'menu_streak' => ['node_id' => 'menu', 'count' => 2, 'texts' => ['Мотор', 'Воздушные']],
+        ]);
+
+        navRouter()->shouldReceive('route')->once()
+            ->andReturn(MenuRoute::toOption(['node_id' => 'menu', 'option_id' => 'supplier'], RouteConfidence::High));
+
+        navAssistant()->shouldReceive('start')->once()
+            ->withArgs(fn (BotSession $s, array $node, ?InboundMessage $m): bool => $m?->text === "Мотор\nВоздушные\nХодовка")
+            ->andReturn(AiOutcome::InProgress);
+
+        navMessenger();
+
+        app(BotEngine::class)->handle($contact, new InboundMessage(text: 'Ходовка'));
+    });
+
+    test('фото с подписью уносит на шаг и накопленное, и саму фотографию', function () {
+        // Иначе выбор был бы «либо слова, либо картинки»: объявление ушло
+        // бы на модерацию без фото, а бот попросил бы их заново.
+        $scenario = navScenario();
+        $contact = Contact::factory()->create();
+        navSessionAt($scenario, $contact, 'menu', [
+            'menu_streak' => ['node_id' => 'menu', 'count' => 2, 'texts' => ['Мотор', 'Воздушные']],
+        ]);
+
+        navRouter()->shouldReceive('route')->once()
+            ->andReturn(MenuRoute::toOption(['node_id' => 'menu', 'option_id' => 'supplier'], RouteConfidence::High));
+
+        navAssistant()->shouldReceive('start')->once()
+            ->withArgs(fn (BotSession $s, array $node, ?InboundMessage $m): bool => $m?->text === "Мотор\nВоздушные\nХодовка"
+                && $m->mediaId === 'media-1'
+                && $m->mediaType === ListingMediaType::Photo)
+            ->andReturn(AiOutcome::InProgress);
+
+        navMessenger();
+
+        app(BotEngine::class)->handle($contact, new InboundMessage(text: 'Ходовка', mediaType: ListingMediaType::Photo, mediaId: 'media-1'));
+    });
+
+    test('концевой пробел в сообщении накопленное не теряет', function () {
+        $scenario = navScenario();
+        $contact = Contact::factory()->create();
+        navSessionAt($scenario, $contact, 'menu', [
+            'menu_streak' => ['node_id' => 'menu', 'count' => 2, 'texts' => ['Мотор', 'Воздушные']],
+        ]);
+
+        navRouter()->shouldReceive('route')->once()
+            ->andReturn(MenuRoute::toOption(['node_id' => 'menu', 'option_id' => 'supplier'], RouteConfidence::High));
+
+        navAssistant()->shouldReceive('start')->once()
+            ->withArgs(fn (BotSession $s, array $node, ?InboundMessage $m): bool => $m?->text === "Мотор\nВоздушные\nХодовка")
+            ->andReturn(AiOutcome::InProgress);
+
+        navMessenger();
+
+        app(BotEngine::class)->handle($contact, new InboundMessage(text: 'Ходовка '));
+    });
+
+    test('приветствие считается повтором, но в накопленное не идёт', function () {
+        // Автоприветствие чужого бизнеса иначе здоровалось бы с ботом вечно.
+        $scenario = navScenario();
+        $contact = Contact::factory()->create();
+        $session = navSessionAt($scenario, $contact, 'menu');
+
+        navRouter()->shouldReceive('route')->times(3)
+            ->andReturn(MenuRoute::toGreeting(RouteConfidence::High));
+
+        $messenger = navMessenger();
+        $messenger->shouldReceive('sendButtons')->times(2);
+        $messenger->shouldReceive('sendText')->once();
+
+        foreach (range(1, 3) as $ignored) {
+            app(BotEngine::class)->handle($contact, new InboundMessage(text: 'Здравствуйте'));
+        }
+
+        expect($session->fresh()->menu_streak)
+            ->toMatchArray(['node_id' => 'menu', 'count' => 3, 'texts' => []]);
+    });
+});
+
 describe('первое сообщение диалога', function () {
-    test('текстовый старт: после приветствия и меню роутер получает тот же текст', function () {
+    test('текстовый старт: приветствие есть, меню нет — роутер спрошен до него', function () {
+        // Кейс 352: одно входящее давало четыре исходящих за пять секунд,
+        // потому что меню уходило раньше классификации. Теперь бот не задаёт
+        // вопрос, ответ на который уже знает.
         navScenario();
         $contact = Contact::factory()->create();
 
@@ -846,22 +1143,22 @@ describe('первое сообщение диалога', function () {
             ->andReturn(MenuRoute::toOption(['node_id' => 'menu', 'option_id' => 'supplier'], RouteConfidence::High));
 
         $assistant = navAssistant();
-        $assistant->shouldReceive('start')->once()->andReturn(AiOutcome::InProgress);
-        $assistant->shouldReceive('resume')->once()
-            ->withArgs(fn (BotSession $s, array $node, InboundMessage $m): bool => $m->text === 'сдаю кран 25 тонн')
+        $assistant->shouldReceive('start')->once()
+            ->withArgs(fn (BotSession $s, array $node, ?InboundMessage $m): bool => $node['id'] === 'collect' && $m?->text === 'сдаю кран 25 тонн')
             ->andReturn(AiOutcome::InProgress);
+        $assistant->shouldNotReceive('resume');
 
         $messenger = navMessenger();
         $messenger->shouldReceive('sendText')->once()
             ->withArgs(fn (Contact $to, string $text): bool => $text === 'Привет!');
-        $messenger->shouldReceive('sendButtons')->once();
+        $messenger->shouldNotReceive('sendButtons'); // меню не показывается вовсе
 
         app(BotEngine::class)->handle($contact, new InboundMessage(text: 'сдаю кран 25 тонн'));
 
         expect(BotSession::sole()->current_node_id)->toBe('collect');
     });
 
-    test('возврат через сутки: приветствие, меню и подъём прерванной анкеты', function () {
+    test('возврат через сутки: приветствие и подъём прерванной анкеты, без меню', function () {
         // Флагманский сценарий снапшота: TTL в 48 часов выбран так, чтобы
         // пережить 24-часовое окно, поэтому вернувшийся назавтра поставщик
         // приходит именно этим путём — новым диалогом, а не ответом на меню.
@@ -885,8 +1182,7 @@ describe('первое сообщение диалога', function () {
         $messenger = navMessenger();
         $messenger->shouldReceive('sendText')->once()
             ->withArgs(fn (Contact $to, string $text): bool => $text === 'Привет!');
-        $messenger->shouldReceive('sendButtons')->once()
-            ->withArgs(fn (Contact $to, string $text): bool => $text === 'Кто вы?');
+        $messenger->shouldNotReceive('sendButtons'); // меню не нужно: анкета уже названа
         $messenger->shouldReceive('sendText')->once()
             ->withArgs(fn (Contact $to, string $text): bool => $text === 'Возвращаемся к анкете — всё написанное на месте.');
 
@@ -899,7 +1195,7 @@ describe('первое сообщение диалога', function () {
             ->state->toBe(navPausedSnapshot()['state']);
     });
 
-    test('возврат через сутки при средней уверенности: меню и предложение продолжить', function () {
+    test('возврат через сутки при средней уверенности: одно предложение продолжить', function () {
         $scenario = navScenario();
         $contact = Contact::factory()->create();
         $session = navSessionAt($scenario, $contact, 'menu', [
@@ -913,8 +1209,8 @@ describe('первое сообщение диалога', function () {
         $messenger = navMessenger();
         $messenger->shouldReceive('sendText')->once()
             ->withArgs(fn (Contact $to, string $text): bool => $text === 'Привет!');
-        $messenger->shouldReceive('sendButtons')->once()
-            ->withArgs(fn (Contact $to, string $text): bool => $text === 'Кто вы?');
+        // Меню не показывается: предложение само называет, куда бот хочет
+        // увести, а не сработает оно — меню придёт следующим ходом.
         $messenger->shouldReceive('sendButtons')->once()
             ->withArgs(fn (Contact $to, string $text, array $buttons): bool => $text === 'Похоже, вы хотите вернуться к прерванной анкете. Продолжить её?'
                 && $buttons === [['id' => 'nav_confirm', 'title' => 'Продолжить']]);

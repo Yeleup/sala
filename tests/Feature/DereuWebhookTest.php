@@ -1,9 +1,11 @@
 <?php
 
 use App\Jobs\ApplyDereuWabaDisconnect;
+use App\Jobs\JournalDereuOperatorEcho;
 use App\Jobs\ProcessDereuWebhookEvent;
 use App\Models\DereuWebhookEvent;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Str;
 use Illuminate\Testing\TestResponse;
@@ -169,4 +171,51 @@ test('a duplicate waba_disconnected delivery does not dispatch a second job', fu
 
     expect(DereuWebhookEvent::count())->toBe(1);
     Queue::assertPushed(ApplyDereuWabaDisconnect::class, 1);
+});
+
+test('сообщение оператора из приложения ставится в свою обработку и дедуплицируется по своему id', function () {
+    Queue::fake();
+
+    $echo = [
+        'id' => 'wamid.ЭХО-ОДНО-И-ТО-ЖЕ',
+        'to' => '77774258186',
+        'from' => '77779555858',
+        'type' => 'text',
+        'text' => ['body' => 'Ваше объявление загружено! Спасибо'],
+        'timestamp' => '1788866846',
+    ];
+
+    $envelope = fn (): array => [
+        'event' => 'business_app_message_echo',
+        'event_id' => (string) Str::ulid(),
+        'company_id' => 'co_abc123',
+        'phone_number_id' => '631370540065072',
+        'payload' => [
+            'messaging_product' => 'whatsapp',
+            'contacts' => [['wa_id' => '77774258186']],
+            'message_echoes' => [$echo],
+        ],
+    ];
+
+    postSignedDereuWebhook($envelope())->assertNoContent();
+    // Идентификатор эха лежит внутри конверта, а не наверху: без этого
+    // повторная доставка приходила бы с новым event_id и заводила второе
+    // событие — и второй пузырь в переписке.
+    postSignedDereuWebhook($envelope())->assertNoContent();
+
+    expect(DereuWebhookEvent::count())->toBe(1)
+        ->and(DereuWebhookEvent::sole()->dedupe_key)->toBe('wamid:wamid.ЭХО-ОДНО-И-ТО-ЖЕ');
+
+    Queue::assertPushed(JournalDereuOperatorEcho::class, 1);
+});
+
+test('событие, которое некому обработать, больше не хранится молча', function () {
+    Queue::fake();
+    Log::spy();
+
+    postSignedDereuWebhook(dereuWebhookEventPayload([
+        'event' => 'что_то_новое_от_dereu',
+    ]))->assertNoContent();
+
+    Log::shouldHaveReceived('warning')->once();
 });

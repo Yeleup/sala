@@ -6,6 +6,7 @@ use App\Ai\Agents\MenuRouteAgent;
 use App\Enums\AiOperationType;
 use App\Enums\BotNodeType;
 use App\Enums\ListingKind;
+use App\Enums\MenuIntent;
 use App\Enums\RouteConfidence;
 use App\Models\BotSession;
 use App\Services\Ai\Audit\AiAudit;
@@ -56,7 +57,7 @@ class AiMenuRouter implements MenuRouter
             $result = $this->audit->run(
                 AiOperationType::MenuRouting,
                 fn (): array => (new MenuRouteAgent($targets, $this->resumeLabel($resumeCandidate)))
-                    ->prompt($this->prompt($text, $node))
+                    ->prompt($this->prompt($text, $node, $session->menuStreak($node['id'] ?? null)['texts'] ?? []))
                     ->toArray(),
                 [
                     'contact_id' => $session->contact_id,
@@ -134,64 +135,116 @@ class AiMenuRouter implements MenuRouter
     }
 
     /**
-     * The node's own text is context the operator wrote; the message is
-     * data the contact wrote. They go in as two separate sections, and the
-     * message is fenced so a multi-line text cannot pass itself off as one
+     * The node's own text is context the operator wrote; the message and
+     * whatever came before it on this same step are data the contact
+     * wrote. Each goes in as its own section, and every piece of contact
+     * text is fenced so a multi-line message cannot pass itself off as one
      * more instruction — the agent's own rules say the same in words.
      *
-     * The message is also cut to a sane length: a menu step can receive a
-     * minutes-long voice transcription, and classifying «which section is
-     * this» needs the beginning of it, not all of it.
+     * The earlier messages matter because people write one thought across
+     * several messages: «Мотор», «Воздушные», «Ходовка» name no section
+     * one at a time and name one unmistakably read together.
+     *
+     * Text is cut to a sane length: a menu step can receive a minutes-long
+     * voice transcription, and classifying «which section is this» needs
+     * the beginning of it, not all of it.
      *
      * @param  array<string, mixed>  $node
+     * @param  list<string>  $earlier
      */
-    private function prompt(string $text, array $node): string
+    private function prompt(string $text, array $node, array $earlier = []): string
     {
-        if (mb_strlen($text) > self::MAX_MESSAGE_CHARS) {
-            $text = mb_substr($text, 0, self::MAX_MESSAGE_CHARS).'…';
-        }
-
-        $message = "Сообщение человека:\n---\n{$text}\n---";
+        $sections = [];
         $menuText = trim((string) ($node['text'] ?? ''));
 
-        return $menuText === '' ? $message : "Текст текущего меню: «{$menuText}»\n\n{$message}";
+        if ($menuText !== '') {
+            $sections[] = "Текст текущего меню: «{$menuText}»";
+        }
+
+        if ($earlier !== []) {
+            $previous = implode("\n", array_map($this->clip(...), $earlier));
+            $sections[] = "Предыдущие сообщения человека на этом же шаге (читай их вместе с последним):\n---\n{$previous}\n---";
+        }
+
+        $sections[] = "Сообщение человека:\n---\n{$this->clip($text)}\n---";
+
+        return implode("\n\n", $sections);
+    }
+
+    private function clip(string $text): string
+    {
+        return mb_strlen($text) > self::MAX_MESSAGE_CHARS
+            ? mb_substr($text, 0, self::MAX_MESSAGE_CHARS).'…'
+            : $text;
     }
 
     /**
      * Turn the model's raw answer into a MenuRoute, or null wherever the
-     * answer cannot be trusted or acted on: no reading at all ("none"), too
-     * unsure (low confidence), or a "resume" the model produced without a
-     * real candidate behind it — the schema already excludes "resume" from
-     * the enum whenever there is no candidate, but a misbehaving or faked
-     * provider is not bound by the schema, so the check is repeated here in
-     * code.
+     * answer cannot be trusted or acted on.
+     *
+     * One rule runs across every intent and is the reason new intents can
+     * be added without risk: **low confidence means exactly today's
+     * behaviour**. Whatever the model thought it read, an unsure reading
+     * repeats the step, which is what the step did before the navigator
+     * existed.
+     *
+     * Above that floor each intent carries its own bar, set by how much a
+     * mistake costs the person:
+     *
+     * - Acknowledgement, Decline and Greeting need High. Silence and
+     *   goodbyes are the answers a person cannot argue with — nothing on
+     *   screen tells them what to do next — so a guess is not enough.
+     * - HumanHandoff accepts Medium. It is the one intent where repeating
+     *   the step is the very thing being complained about, and promising
+     *   an operator to someone who did not ask costs little: the operator
+     *   really does see the conversation.
      *
      * @param  array<string, mixed>  $result
      * @param  array{node_id: string, fingerprint: string, state: array<string, mixed>, saved_at: string}|null  $resumeCandidate
      */
     private function toRoute(array $result, ScenarioDefinition $definition, ?array $resumeCandidate): ?MenuRoute
     {
-        $route = (string) ($result['route'] ?? 'none');
-
-        if ($route === 'none') {
-            return null;
-        }
-
+        $intent = MenuIntent::fromExtraction($result['intent'] ?? null);
         $confidence = RouteConfidence::fromExtraction($result['confidence'] ?? null);
 
         if ($confidence === RouteConfidence::Low) {
             return null;
         }
 
-        if ($route === 'service_question') {
-            return MenuRoute::toServiceQuestion($confidence);
+        $sure = $confidence === RouteConfidence::High;
+
+        return match ($intent) {
+            MenuIntent::Navigate => $this->toOption($result, $definition, $resumeCandidate, $confidence),
+            // The schema drops «resume» from the enum when there is no
+            // candidate, but a misbehaving or faked provider is not bound
+            // by the schema — so the check is repeated here in code.
+            MenuIntent::Resume => $resumeCandidate === null ? null : MenuRoute::toResume($confidence),
+            MenuIntent::ServiceQuestion => MenuRoute::toServiceQuestion($confidence),
+            MenuIntent::Acknowledgement => $sure ? MenuRoute::toAcknowledgement($confidence) : null,
+            MenuIntent::Decline => $sure ? MenuRoute::toDecline($confidence) : null,
+            MenuIntent::HumanHandoff => MenuRoute::toHumanHandoff($confidence),
+            MenuIntent::Greeting => $sure ? MenuRoute::toGreeting($confidence) : null,
+            MenuIntent::Unclear => null,
+        };
+    }
+
+    /**
+     * The section a «navigate» answer named, or null when it named none —
+     * a model that says «navigate» and then «none» has contradicted
+     * itself, and a contradiction is not something to act on.
+     *
+     * @param  array<string, mixed>  $result
+     * @param  array{node_id: string, fingerprint: string, state: array<string, mixed>, saved_at: string}|null  $resumeCandidate
+     */
+    private function toOption(array $result, ScenarioDefinition $definition, ?array $resumeCandidate, RouteConfidence $confidence): ?MenuRoute
+    {
+        $option = (string) ($result['option'] ?? 'none');
+
+        if ($option === 'none') {
+            return null;
         }
 
-        if ($route === 'resume') {
-            return $resumeCandidate === null ? null : MenuRoute::toResume($confidence);
-        }
-
-        $owner = $definition->optionOwner(Str::after($route, 'option:'));
+        $owner = $definition->optionOwner(Str::after($option, 'option:'));
 
         if ($owner === null) {
             return null;

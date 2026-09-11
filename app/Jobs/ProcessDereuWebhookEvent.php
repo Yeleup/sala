@@ -14,6 +14,7 @@ use App\Services\Bot\BotEngine;
 use App\Services\Bot\InboundMessage;
 use App\Services\DereuMessenger;
 use App\Services\DereuPlatformClient;
+use App\Services\OperatorHandoff;
 use App\Support\PhoneNumber;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
@@ -73,7 +74,7 @@ class ProcessDereuWebhookEvent implements ShouldQueue
         ];
     }
 
-    public function handle(BotEngine $engine, DereuPlatformClient $platform): void
+    public function handle(BotEngine $engine, DereuPlatformClient $platform, OperatorHandoff $handoff): void
     {
         $event = $this->event->fresh();
 
@@ -81,9 +82,7 @@ class ProcessDereuWebhookEvent implements ShouldQueue
             return;
         }
 
-        $expectedCompanyId = DereuCompany::current()?->dereu_company_id;
-
-        if (filled($expectedCompanyId) && filled($event->company_id) && $event->company_id !== $expectedCompanyId) {
+        if (! $event->belongsToCurrentCompany()) {
             Log::warning('Dereu webhook event belongs to an unknown company, skipping.', [
                 'event_id' => $event->event_id,
                 'company_id' => $event->company_id,
@@ -122,7 +121,9 @@ class ProcessDereuWebhookEvent implements ShouldQueue
         // audit (scoped state — resets between jobs).
         app(AiAuditState::class)->channelMessageId = $entry->id;
 
-        $this->showTypingIndicator($platform, $event);
+        if ($this->shouldShowTyping($handoff, $contact)) {
+            $this->showTypingIndicator($platform, $event);
+        }
 
         try {
             $engine->handle($contact, InboundMessage::fromWebhookEvent($event));
@@ -138,6 +139,18 @@ class ProcessDereuWebhookEvent implements ShouldQueue
         }
 
         $event->update(['processed_at' => now()]);
+    }
+
+    /**
+     * «Печатает…» (и пометка прочитанным вместе с ним) обещает ответ через
+     * несколько секунд. Пока разговор ведёт живой оператор, ответа от нас
+     * не будет — обещать его нельзя. Что именно бот сделает с сообщением в
+     * паузе, решает движок: нажатие на кнопку его собственного уведомления
+     * он отвечает и в паузе.
+     */
+    private function shouldShowTyping(OperatorHandoff $handoff, Contact $contact): bool
+    {
+        return ! $handoff->isActive($contact);
     }
 
     /**

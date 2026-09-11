@@ -19,7 +19,7 @@ use Throwable;
  * silence the dialog is considered finished (mirrors the WhatsApp
  * session window).
  */
-#[Fillable(['contact_id', 'bot_scenario_id', 'scenario_version', 'current_node_id', 'current_node_fingerprint', 'state', 'last_dialog_ended_at', 'paused_state'])]
+#[Fillable(['contact_id', 'bot_scenario_id', 'scenario_version', 'current_node_id', 'current_node_fingerprint', 'state', 'last_dialog_ended_at', 'paused_state', 'menu_streak'])]
 class BotSession extends Model
 {
     /** @use HasFactory<BotSessionFactory> */
@@ -28,6 +28,9 @@ class BotSession extends Model
     /** How long a paused-questionnaire snapshot stays resumable before pausedState() treats it as gone. */
     public const int PAUSED_STATE_TTL_HOURS = 48;
 
+    /** How many of the run's messages are kept to be read together by the navigator. */
+    public const int MENU_STREAK_TEXTS = 3;
+
     /** @return BelongsTo<Contact, $this> */
     public function contact(): BelongsTo
     {
@@ -35,7 +38,7 @@ class BotSession extends Model
     }
 
     /**
-     * @return array{state: 'array', last_dialog_ended_at: 'datetime', paused_state: 'array'}
+     * @return array{state: 'array', last_dialog_ended_at: 'datetime', paused_state: 'array', menu_streak: 'array'}
      */
     protected function casts(): array
     {
@@ -43,6 +46,39 @@ class BotSession extends Model
             'state' => 'array',
             'last_dialog_ended_at' => 'datetime',
             'paused_state' => 'array',
+            'menu_streak' => 'array',
+        ];
+    }
+
+    /**
+     * The run of misunderstood messages on the given menu step, validated
+     * and scoped to that step — never the raw column. A run recorded on a
+     * different node reads as no run at all: moving on is progress, and
+     * the count starts over wherever the contact now stands.
+     *
+     * Read-only, like pausedState(): clearing a malformed value is the
+     * engine's business, not the model's.
+     *
+     * @return array{count: int, texts: list<string>}|null
+     */
+    public function menuStreak(?string $nodeId): ?array
+    {
+        $streak = $this->menu_streak;
+
+        if (! is_array($streak) || $nodeId === null || ($streak['node_id'] ?? null) !== $nodeId) {
+            return null;
+        }
+
+        $count = $streak['count'] ?? null;
+        $texts = $streak['texts'] ?? null;
+
+        if (! is_int($count) || $count < 1 || ! is_array($texts)) {
+            return null;
+        }
+
+        return [
+            'count' => $count,
+            'texts' => array_values(array_filter($texts, is_string(...))),
         ];
     }
 

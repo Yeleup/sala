@@ -3,10 +3,12 @@
 use App\Models\Brand;
 use App\Models\Category;
 use App\Models\DereuCompany;
+use App\Models\DereuWebhookEvent;
 use App\Models\Location;
 use Filament\Schemas\Components\Component;
 use Filament\Schemas\Components\Text;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Str;
 use Tests\TestCase;
 
 /*
@@ -107,5 +109,44 @@ function locationNamed(string $name, ?Location $parent = null): Location
     return Location::query()->firstOrCreate([
         'name' => $name,
         'parent_id' => $parent?->id,
+    ]);
+}
+
+/**
+ * Конверт эха ровно той формы, в какой его присылает Dereu: ни `from`, ни
+ * `wamid`, ни `type` наверху нет — всё внутри message_echoes.
+ */
+function operatorEchoEvent(array $echo = [], array $overrides = []): DereuWebhookEvent
+{
+    $echo = array_merge([
+        'id' => 'wamid.'.Str::random(24),
+        'to' => '77774258186',
+        'from' => '77779555858',
+        'type' => 'text',
+        'text' => ['body' => 'Ваше объявление загружено! Спасибо'],
+        'timestamp' => '1788866846',
+    ], $echo);
+
+    $payload = array_merge([
+        'event' => 'business_app_message_echo',
+        'event_id' => (string) Str::ulid(),
+        'company_id' => 'co_abc123',
+        'phone_number_id' => '631370540065072',
+        'payload' => [
+            'messaging_product' => 'whatsapp',
+            'contacts' => [['wa_id' => $echo['to']]],
+            'metadata' => ['display_phone_number' => '77779555858', 'phone_number_id' => '631370540065072'],
+            'message_echoes' => [$echo],
+        ],
+    ], $overrides);
+
+    return DereuWebhookEvent::query()->create([
+        'event' => $payload['event'],
+        'event_id' => $payload['event_id'],
+        'dedupe_key' => 'wamid:'.$echo['id'],
+        'company_id' => $payload['company_id'],
+        'phone_number_id' => $payload['phone_number_id'],
+        'wamid' => null,
+        'payload' => $payload,
     ]);
 }

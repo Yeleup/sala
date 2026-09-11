@@ -20,8 +20,15 @@ interface AiAssistant
 {
     /**
      * @param  array<string, mixed>  $node
+     * @param  InboundMessage|null  $carried  What the contact already said before the
+     *                                        engine brought them here — the navigator
+     *                                        moves a message into the block it names.
+     *                                        The block then answers by it instead of
+     *                                        introducing itself: its invitation lists
+     *                                        what the bot wants to hear, and it has
+     *                                        just heard it.
      */
-    public function start(BotSession $session, array $node): AiOutcome;
+    public function start(BotSession $session, array $node, ?InboundMessage $carried = null): AiOutcome;
 
     /**
      * @param  array<string, mixed>  $node

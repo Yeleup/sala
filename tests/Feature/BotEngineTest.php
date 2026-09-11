@@ -1,8 +1,10 @@
 <?php
 
 use App\Enums\AiOutcome;
+use App\Enums\ChannelMessageStatus;
 use App\Models\BotScenario;
 use App\Models\BotSession;
+use App\Models\ChannelMessage;
 use App\Models\Contact;
 use App\Services\Bot\AiAssistant;
 use App\Services\Bot\BotEngine;
@@ -699,6 +701,86 @@ test('without a returning output even a known contact gets the greeting', functi
     app(BotEngine::class)->handle($contact, new InboundMessage(text: 'Привет снова'));
 
     expect(BotSession::sole()->current_node_id)->toBe('menu');
+});
+
+test('a contact the bot already wrote to skips the greeting even without a session', function () {
+    // Кейс 169: объявление с августа, продления и вердикты модерации идут
+    // изолированными запусками сценариев и строки сессии не создают, так что
+    // бот здоровался с давним поставщиком как с незнакомцем.
+    BotScenario::factory()->published(botReturningStartDefinition())->create();
+    $contact = Contact::factory()->create();
+    ChannelMessage::factory()->outbound()->delivered()->create(['contact_id' => $contact->id]);
+
+    $messenger = fakeBotMessenger();
+    $messenger->shouldNotReceive('sendText'); // без приветствия
+    $messenger->shouldReceive('sendButtons')->once()
+        ->withArgs(fn (Contact $to, string $text) => $text === 'Что вы хотите?');
+
+    app(BotEngine::class)->handle($contact, new InboundMessage(text: 'Привет снова'));
+
+    expect(BotSession::sole()->current_node_id)->toBe('menu');
+});
+
+test('an outbound that never reached the contact does not count as history', function () {
+    // Единственное исходящее упало — контакт бота так и не услышал.
+    BotScenario::factory()->published(botReturningStartDefinition())->create();
+    $contact = Contact::factory()->create();
+    ChannelMessage::factory()->outbound()->create([
+        'contact_id' => $contact->id,
+        'status' => ChannelMessageStatus::Failed,
+    ]);
+
+    $messenger = fakeBotMessenger();
+    $messenger->shouldReceive('sendText')->once()
+        ->withArgs(fn (Contact $to, string $text) => $text === 'Здравствуйте, это сервис!');
+    $messenger->shouldReceive('sendButtons')->once();
+
+    app(BotEngine::class)->handle($contact, new InboundMessage(text: 'Привет'));
+});
+
+test('a message the operator sent by hand is not the bot writing', function () {
+    // Эхо оператора — исходящее, но бота человек не слышал. Холодная
+    // рассылка идёт ровно тем, кому бот никогда не писал, и заканчивается
+    // просьбой написать боту: без приветствия такой человек не поймёт,
+    // куда попал.
+    BotScenario::factory()->published(botReturningStartDefinition())->create();
+    $contact = Contact::factory()->create();
+    ChannelMessage::factory()->operator()->create(['contact_id' => $contact->id]);
+
+    $messenger = fakeBotMessenger();
+    $messenger->shouldReceive('sendText')->once()
+        ->withArgs(fn (Contact $to, string $text) => $text === 'Здравствуйте, это сервис!');
+    $messenger->shouldReceive('sendButtons')->once();
+
+    app(BotEngine::class)->handle($contact, new InboundMessage(text: 'Привет'));
+});
+
+test('the contact own inbound message does not make them a returning one', function () {
+    // Входящее журналируется до движка, поэтому признаком «нас уже знают»
+    // оно быть не может — иначе приветствие не увидел бы никто и никогда.
+    BotScenario::factory()->published(botReturningStartDefinition())->create();
+    $contact = Contact::factory()->create(['last_inbound_at' => now()]);
+    ChannelMessage::factory()->create(['contact_id' => $contact->id]); // inbound
+
+    $messenger = fakeBotMessenger();
+    $messenger->shouldReceive('sendText')->once()
+        ->withArgs(fn (Contact $to, string $text) => $text === 'Здравствуйте, это сервис!');
+    $messenger->shouldReceive('sendButtons')->once();
+
+    app(BotEngine::class)->handle($contact, new InboundMessage(text: 'Привет'));
+});
+
+test('without a returning output the contact history changes nothing', function () {
+    BotScenario::factory()->published(botReturningStartDefinition(connectReturning: false))->create();
+    $contact = Contact::factory()->create();
+    ChannelMessage::factory()->outbound()->delivered()->create(['contact_id' => $contact->id]);
+
+    $messenger = fakeBotMessenger();
+    $messenger->shouldReceive('sendText')->once()
+        ->withArgs(fn (Contact $to, string $text) => $text === 'Здравствуйте, это сервис!');
+    $messenger->shouldReceive('sendButtons')->once();
+
+    app(BotEngine::class)->handle($contact, new InboundMessage(text: 'Привет'));
 });
 
 test('finishing a dialog marks the contact as having completed one', function () {

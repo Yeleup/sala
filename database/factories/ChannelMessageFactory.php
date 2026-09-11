@@ -3,6 +3,7 @@
 namespace Database\Factories;
 
 use App\Enums\ChannelDirection;
+use App\Enums\ChannelMessageAuthor;
 use App\Enums\ChannelMessageStatus;
 use App\Models\ChannelMessage;
 use App\Models\Contact;
@@ -41,6 +42,22 @@ class ChannelMessageFactory extends Factory
             'wamid' => null,
             'dereu_message_id' => (string) Str::uuid(),
             'status' => ChannelMessageStatus::Queued,
+        ]);
+    }
+
+    /**
+     * A message the operator sent from the WhatsApp Business app: outbound
+     * on the same number, but none of it ours — no send id of ours, no
+     * delivery statuses of ours, no cost of ours.
+     */
+    public function operator(): static
+    {
+        return $this->state(fn (): array => [
+            'direction' => ChannelDirection::Outbound,
+            'author' => ChannelMessageAuthor::Operator,
+            'wamid' => 'wamid.'.Str::random(24),
+            'dereu_message_id' => null,
+            'status' => ChannelMessageStatus::Sent,
         ]);
     }
 

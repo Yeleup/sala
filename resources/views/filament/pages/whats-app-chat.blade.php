@@ -3,8 +3,8 @@
          кастомных страниц, поэтому раскладка чата описана локальными стилями.
          Палитра и пропорции повторяют WhatsApp Web (светлая и тёмная темы). --}}
     <style>
-        .wa { --wa-bg: #efeae2; --wa-panel: #f0f2f5; --wa-out: #d9fdd3; --wa-in: #ffffff; --wa-text: #111b21; --wa-muted: #667781; --wa-border: #e9edef; --wa-read: #53bdeb; }
-        .dark .wa { --wa-bg: #0b141a; --wa-panel: #202c33; --wa-out: #005c4b; --wa-in: #111b21; --wa-text: #e9edef; --wa-muted: #8696a0; --wa-border: #2a3942; }
+        .wa { --wa-bg: #efeae2; --wa-panel: #f0f2f5; --wa-out: #d9fdd3; --wa-op: #fff3cd; --wa-in: #ffffff; --wa-text: #111b21; --wa-muted: #667781; --wa-border: #e9edef; --wa-read: #53bdeb; }
+        .dark .wa { --wa-bg: #0b141a; --wa-panel: #202c33; --wa-out: #005c4b; --wa-op: #4a3f18; --wa-in: #111b21; --wa-text: #e9edef; --wa-muted: #8696a0; --wa-border: #2a3942; }
 
         .wa { display: flex; height: calc(100vh - 13rem); min-height: 28rem; border: 1px solid var(--wa-border); border-radius: .75rem; overflow: hidden; background: var(--wa-in); color: var(--wa-text); font-size: .875rem; }
 
@@ -44,6 +44,10 @@
              пузыри до нечитаемых полосок. --}}
         .wa-bubble { position: relative; align-self: flex-start; flex-shrink: 0; max-width: 65%; min-width: 6.5rem; background: var(--wa-in); border-radius: 7.5px; border-top-left-radius: 0; padding: .375rem .55rem .45rem .6rem; margin-top: .4rem; box-shadow: 0 1px .5px rgb(11 20 26 / .13); overflow-wrap: anywhere; overflow: hidden; }
         .wa-bubble.is-out { align-self: flex-end; background: var(--wa-out); border-top-left-radius: 7.5px; border-top-right-radius: 0; }
+        .wa-bubble.is-op { background: var(--wa-op); }
+        .wa-author { font-size: .6875rem; font-weight: 600; color: var(--wa-muted); margin-bottom: .1rem; }
+        .wa-handoff { display: flex; align-items: center; gap: .75rem; padding: .5rem 1rem; background: var(--wa-op); color: var(--wa-text); font-size: .8125rem; border-bottom: 1px solid var(--wa-border); }
+        .wa-handoff-text { flex: 1; }
         .wa-text { white-space: pre-wrap; line-height: 1.35; }
         .wa-kind { font-size: .75rem; color: var(--wa-muted); margin-bottom: .1rem; }
         .wa-meta { display: flex; justify-content: flex-end; align-items: center; gap: .3rem; margin-top: .15rem; font-size: .6875rem; color: var(--wa-muted); }
@@ -148,9 +152,16 @@
                             AI: ${{ $totals['ai_cost'] }}@if ($totals['ai_unknown'] > 0) <span class="wa-warn">(без тарифа: {{ $totals['ai_unknown'] }})</span>@endif
                             · Шаблоны: ${{ $totals['template_cost'] }}@if ($totals['template_unknown'] > 0) <span class="wa-warn">(без тарифа: {{ $totals['template_unknown'] }})</span>@endif
                         </div>
-                        <div>вх: {{ $totals['inbound'] }} · исх: {{ $totals['outbound'] }} · шаблонов: {{ $totals['templates'] }} · ошибок: {{ $totals['failed'] }}</div>
+                        <div>вх: {{ $totals['inbound'] }} · бот: {{ $totals['bot'] }} · оператор: {{ $totals['operator'] }} · шаблонов: {{ $totals['templates'] }} · ошибок: {{ $totals['failed'] }}</div>
                     </div>
                 </div>
+
+                @if ($this->handoffUntil() !== null)
+                    <div class="wa-handoff">
+                        <span class="wa-handoff-text">👤 Оператор ведёт диалог — бот молчит до {{ \App\Support\DisplayTime::local($this->handoffUntil())->format('H:i') }}</span>
+                        <x-filament::button size="xs" color="gray" wire:click="returnToBot" wire:loading.attr="disabled">Вернуть бота</x-filament::button>
+                    </div>
+                @endif
 
                 {{-- wire:key пересоздаёт контейнер при смене диалога, чтобы x-init
                      снова прокрутил тред к свежим сообщениям. --}}
@@ -168,10 +179,15 @@
                             @php $previousDay = $day; @endphp
                         @endif
 
+                        @php $operatorWrote = $message->author === \App\Enums\ChannelMessageAuthor::Operator; @endphp
+
                         <div
                             wire:key="msg-{{ $message->id }}"
-                            class="wa-bubble {{ $message->direction === \App\Enums\ChannelDirection::Outbound ? 'is-out' : '' }}"
+                            class="wa-bubble {{ $message->direction === \App\Enums\ChannelDirection::Outbound ? 'is-out' : '' }} {{ $operatorWrote ? 'is-op' : '' }}"
                         >
+                            @if ($operatorWrote)
+                                <div class="wa-author">👤 Оператор · 📱 с телефона</div>
+                            @endif
                             @php
                                 $extras = $this->messageExtras($message);
                                 $chip = $extras['chip'] ?? match ($message->type) {
@@ -227,7 +243,11 @@
 
                                 <span>{{ \App\Support\DisplayTime::local($message->created_at)->format('H:i') }}</span>
 
-                                @if ($message->direction === \App\Enums\ChannelDirection::Outbound)
+                                {{-- У сообщения из приложения статусов доставки нет:
+                                     они приходят по идентификатору нашей отправки,
+                                     которого у него не было. Одинокая галочка читалась
+                                     бы как «доставки не случилось». --}}
+                                @if ($message->direction === \App\Enums\ChannelDirection::Outbound && ! $operatorWrote)
                                     <span class="wa-ticks {{ $message->status === \App\Enums\ChannelMessageStatus::Read ? 'is-read' : '' }}" title="{{ $message->status->value }}">
                                         @switch($message->status)
                                             @case(\App\Enums\ChannelMessageStatus::Queued) 🕓 @break
@@ -298,6 +318,10 @@
                                                         @if ($attempt->latency_ms !== null) · {{ $attempt->latency_ms }} мс @endif
                                                         · @if ($attempt->cost_status === \App\Enums\AiCostStatus::Estimated) ${{ number_format((float) $attempt->estimated_cost_usd, 4) }} @else <span class="wa-warn">без тарифа</span> @endif
                                                         @if (filled($attempt->error)) <span class="wa-danger">{{ $attempt->error }}</span> @endif
+                                                        @php $verdict = $this->routingVerdict($attempt); @endphp
+                                                        @if ($verdict !== null)
+                                                            <div style="font-weight: 500">{{ $verdict }}</div>
+                                                        @endif
                                                     </div>
                                                     <details x-data="{ open: false }" :open="open" @toggle="open = $event.target.open">
                                                         <summary>Промпт и ответ</summary>

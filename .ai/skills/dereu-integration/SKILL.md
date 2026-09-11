@@ -230,10 +230,44 @@ if (! hash_equals($expected, (string) $signature)) {
 - Дедуп: входящие сообщения — по `wamid` (одно сообщение может дать несколько статусных событий);
   доставки статусов — по `event_id`.
 - `event`: `message_received`, `message_sent`, `message_delivered`, `message_read`, `message_failed`,
-  `template_status_update`, `waba_disconnected`.
+  `business_app_message_echo`, `template_status_update`, `waba_disconnected`.
 - `type` известные значения: `text`, `image`, `video`, `audio`, `document`, `sticker`, `location`,
   `interactive`, `button`, `order`, `contacts`, `reaction`, `system`, `unsupported` — список не закрыт,
   не падайте на неизвестном `type`.
+- `business_app_message_echo` — сообщение, отправленное живым человеком из мобильного приложения
+  WhatsApp Business с того же номера. Форма другая: наверху нет `from`/`wamid`/`type`, всё внутри
+  `payload.message_echoes[]`, а адресат — в `payload.contacts[0].wa_id`:
+
+  ```json
+  {
+    "event": "business_app_message_echo",
+    "event_id": "01J8Z...",
+    "company_id": "co_abc123",
+    "phone_number_id": "631370540065072",
+    "payload": {
+      "messaging_product": "whatsapp",
+      "contacts": [{"wa_id": "77774258186"}],
+      "metadata": {"display_phone_number": "77779555858", "phone_number_id": "631370540065072"},
+      "message_echoes": [
+        {
+          "id": "wamid.HBg...",
+          "from": "77779555858",
+          "to": "77774258186",
+          "type": "text",
+          "text": {"body": "Ваше объявление загружено! Спасибо"},
+          "timestamp": "1788866846"
+        }
+      ]
+    }
+  }
+  ```
+
+  Это ИСХОДЯЩЕЕ: 24-часовое окно оно не открывает. Статусных событий на него не приходит (они
+  коррелируются по идентификатору вашей отправки, которого здесь не было), и Meta тарифицирует его у
+  себя — стоимость на своей стороне не считайте. Дедуп — по `message_echoes[].id`. Приходят и
+  `revoked` (оператор удалил своё сообщение), и `interactive` — последний без содержимого, Meta его не
+  передаёт. Событие без обработчика хранится молча: этот тип полтора месяца копился в базе и стоил
+  проекту половины видимой переписки.
 - `template_status_update` — статус шаблона в Meta изменился (модерация). У этого события нет `from`/
   `wamid`/`type`, форма другая:
 

@@ -3,21 +3,35 @@
 namespace App\Filament\Pages;
 
 use App\Enums\AiCostStatus;
+use App\Enums\AiOperationType;
 use App\Enums\ChannelDirection;
+use App\Enums\ChannelMessageAuthor;
 use App\Enums\ChannelMessageStatus;
+use App\Enums\MenuIntent;
+use App\Enums\RouteConfidence;
 use App\Filament\Clusters\WhatsApp\WhatsAppCluster;
 use App\Models\AiAttempt;
 use App\Models\ChannelMessage;
 use App\Models\Contact;
+use App\Services\OperatorHandoff;
 use BackedEnum;
+use Carbon\CarbonInterface;
+use Filament\Notifications\Notification;
 use Filament\Pages\Page;
 use Filament\Support\Icons\Heroicon;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Str;
 use Livewire\Attributes\Url;
 
 /**
- * Read-only operator view over the WhatsApp channel journal: dialogs by
- * last activity on the left, the message thread on the right. Inbound
+ * The operator's view over the WhatsApp channel journal: dialogs by last
+ * activity on the left, the message thread on the right. Three sides show
+ * there — the contact, the bot, and the operator writing from the
+ * WhatsApp Business app on the same number.
+ *
+ * Read-only as far as the conversation goes: nothing is sent from here.
+ * The single action is handing the conversation back to the bot after the
+ * operator has taken it over. Inbound
  * messages expose the AI operations they triggered (prompt, response,
  * tokens, money); the thread header shows what the contact has cost so
  * far. Money follows the delivered-based rule: template spend counts only
@@ -29,6 +43,12 @@ class WhatsAppChat extends Page
 
     /** Statuses Meta actually bills a template message for. */
     private const BILLABLE_STATUSES = [ChannelMessageStatus::Delivered, ChannelMessageStatus::Read];
+
+    private const CONFIDENCE_VERDICTS = [
+        'high' => 'уверенно',
+        'medium' => 'предположительно',
+        'low' => 'догадка — поведение прежнее',
+    ];
 
     protected static ?string $slug = 'chat';
 
@@ -102,6 +122,14 @@ class WhatsAppChat extends Page
      * The last $visible messages of the selected dialog, oldest first,
      * with a flag telling whether older ones exist beyond the window.
      *
+     * Ordered by created_at, not by id: a message can reach the journal
+     * long after it was sent — the operator's own messages from the
+     * WhatsApp Business app arrive as echoes that may lag, and a backfill
+     * writes months-old messages with brand-new ids. Ordering by id would
+     * pile those at the bottom of the thread under someone else's day
+     * separator, which is drawn from created_at. Id breaks the tie so
+     * messages sharing a second keep a stable order.
+     *
      * @return array{messages: Collection<int, ChannelMessage>, has_older: bool}
      */
     public function thread(): array
@@ -113,6 +141,7 @@ class WhatsAppChat extends Page
         $messages = ChannelMessage::query()
             ->where('contact_id', $this->contactId)
             ->with(['aiOperations.attempts', 'template'])
+            ->orderByDesc('created_at')
             ->orderByDesc('id')
             ->limit($this->visible + 1)
             ->get();
@@ -328,10 +357,80 @@ class WhatsAppChat extends Page
     }
 
     /**
+     * What the navigator decided about this message, in words — «не понял,
+     * уверенно», «подтверждение, бот промолчал». Null for any other kind
+     * of AI call, and for an answer that cannot be read.
+     *
+     * The raw JSON is right below it and stays there; this line exists
+     * because the raw answer alone did not explain the behaviour it caused.
+     * The 👍 that got a full introduction back was classified perfectly —
+     * «none», high confidence — and nothing on the page said that «none»
+     * meant «show the menu again».
+     */
+    public function routingVerdict(AiAttempt $attempt): ?string
+    {
+        if ($attempt->operation?->operation !== AiOperationType::MenuRouting) {
+            return null;
+        }
+
+        $answer = json_decode((string) $attempt->response, true);
+
+        if (! is_array($answer)) {
+            return null;
+        }
+
+        $intent = MenuIntent::tryFrom((string) ($answer['intent'] ?? ''));
+        $confidence = RouteConfidence::tryFrom((string) ($answer['confidence'] ?? ''));
+
+        if ($intent === null || $confidence === null) {
+            return null;
+        }
+
+        $option = (string) ($answer['option'] ?? 'none');
+        $target = $intent === MenuIntent::Navigate && $option !== 'none' ? ' → '.Str::after($option, 'option:') : '';
+
+        return sprintf('Навигатор: %s%s, %s', $intent->label(), $target, self::CONFIDENCE_VERDICTS[$confidence->value]);
+    }
+
+    /**
+     * Until when the bot is staying out of this conversation, or null when
+     * it is not — what the banner above the thread is built from.
+     */
+    public function handoffUntil(): ?CarbonInterface
+    {
+        $contact = $this->selectedContact();
+
+        return $contact !== null && app(OperatorHandoff::class)->isActive($contact)
+            ? $contact->operator_handoff_until
+            : null;
+    }
+
+    /**
+     * Hand the conversation back to the bot. The one thing this page can
+     * change: it sends no messages — the operator writes from their own
+     * phone — it only says who is answering from now on.
+     */
+    public function returnToBot(): void
+    {
+        $contact = $this->selectedContact();
+
+        if ($contact === null) {
+            return;
+        }
+
+        app(OperatorHandoff::class)->end($contact);
+
+        Notification::make()
+            ->title('Бот снова отвечает этому контакту')
+            ->success()
+            ->send();
+    }
+
+    /**
      * What the selected contact has cost so far — AI calls plus delivered
      * template messages — and the dialog's message counters.
      *
-     * @return array{ai_cost: string, ai_unknown: int, template_cost: string, template_unknown: int, inbound: int, outbound: int, templates: int, failed: int}
+     * @return array{ai_cost: string, ai_unknown: int, template_cost: string, template_unknown: int, inbound: int, bot: int, operator: int, templates: int, failed: int}
      */
     public function contactTotals(): array
     {
@@ -347,7 +446,10 @@ class WhatsAppChat extends Page
         $messages = ChannelMessage::query()
             ->where('contact_id', $this->contactId)
             ->selectRaw('count(*) filter (where direction = ?) as inbound', [ChannelDirection::Inbound->value])
-            ->selectRaw('count(*) filter (where direction = ?) as outbound', [ChannelDirection::Outbound->value])
+            // Исходящие разделены по автору: «исх» перестало означать «бот»
+            // с тех пор, как в журнал попали сообщения оператора с телефона.
+            ->selectRaw('count(*) filter (where author = ?) as bot', [ChannelMessageAuthor::Bot->value])
+            ->selectRaw('count(*) filter (where author = ?) as operator', [ChannelMessageAuthor::Operator->value])
             ->selectRaw("count(*) filter (where type = 'template') as templates")
             ->selectRaw('count(*) filter (where status = ?) as failed', [ChannelMessageStatus::Failed->value])
             ->selectRaw("coalesce(sum(estimated_cost_usd) filter (where type = 'template' and status in (?, ?)), 0) as template_cost", $billable)
@@ -360,7 +462,8 @@ class WhatsAppChat extends Page
             'template_cost' => number_format((float) $messages->template_cost, 4),
             'template_unknown' => (int) $messages->template_unknown,
             'inbound' => (int) $messages->inbound,
-            'outbound' => (int) $messages->outbound,
+            'bot' => (int) $messages->bot,
+            'operator' => (int) $messages->operator,
             'templates' => (int) $messages->templates,
             'failed' => (int) $messages->failed,
         ];

@@ -5,6 +5,7 @@ namespace App\Models;
 use App\Jobs\ApplyDereuDeliveryStatus;
 use App\Jobs\ApplyDereuTemplateStatus;
 use App\Jobs\ApplyDereuWabaDisconnect;
+use App\Jobs\JournalDereuOperatorEcho;
 use App\Jobs\ProcessDereuWebhookEvent;
 use Database\Factories\DereuWebhookEventFactory;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
@@ -34,6 +35,22 @@ class DereuWebhookEvent extends Model
     }
 
     /**
+     * Whether this event is about the WhatsApp number this installation
+     * owns. The test number is shared between projects, so an event of a
+     * neighbour's company must never end up in our journal — a stranger's
+     * contact and a stranger's conversation would appear in the chat.
+     *
+     * An event that names no company is ours by default: Dereu omits the
+     * field on some forwards, and refusing those would drop real messages.
+     */
+    public function belongsToCurrentCompany(): bool
+    {
+        $expected = DereuCompany::current()?->dereu_company_id;
+
+        return blank($expected) || blank($this->company_id) || $this->company_id === $expected;
+    }
+
+    /**
      * The queue job that processes this event type; null for event types
      * stored for observability only. The single source of truth shared by
      * the webhook controller (first dispatch) and the redispatch sweeper —
@@ -46,6 +63,7 @@ class DereuWebhookEvent extends Model
     {
         return match (true) {
             $this->event === 'message_received' => ProcessDereuWebhookEvent::class,
+            $this->event === 'business_app_message_echo' => JournalDereuOperatorEcho::class,
             $this->event === 'template_status_update' => ApplyDereuTemplateStatus::class,
             in_array($this->event, ['message_sent', 'message_delivered', 'message_read', 'message_failed'], true) => ApplyDereuDeliveryStatus::class,
             $this->event === 'waba_disconnected' => ApplyDereuWabaDisconnect::class,

@@ -179,9 +179,16 @@ class SupplierListingCollector
     ) {}
 
     /**
+     * Enter the questionnaire. With a carried message — one the navigator
+     * moved here from the menu — the block does not introduce itself: its
+     * invitation lists what the bot wants to hear, and the contact has
+     * already said it. Answering with the invitation and then instantly
+     * with a clarifying question left them two open questions and no way
+     * to tell which one the bot was waiting on.
+     *
      * @param  array<string, mixed>  $node
      */
-    public function start(BotSession $session, array $node): AiOutcome
+    public function start(BotSession $session, array $node, ?InboundMessage $carried = null): AiOutcome
     {
         $kind = ListingKind::fromNode($node['kind'] ?? null);
         $known = $this->knownName($session, $kind);
@@ -215,6 +222,14 @@ class SupplierListingCollector
         // to resume — restoring it is not this method's job (see task 4).
         $session->paused_state = null;
         $session->save();
+
+        if ($carried !== null) {
+            // Straight into the ordinary turn. resume()'s own guards are
+            // moot on a state this fresh: there is no draft to have moved
+            // on, no exit confirmation open, and «В меню» was not what
+            // brought the contact here.
+            return $this->dispatchPhase($session, $this->normalizeState($session), $carried, $node);
+        }
 
         $this->messenger->sendButtons(
             $session->contact,

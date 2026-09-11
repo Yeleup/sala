@@ -112,14 +112,23 @@ class CustomerSearchAssistant
     ) {}
 
     /**
+     * Enter the search. With a carried message — one the navigator moved
+     * here from the menu — the block skips its invitation and answers by
+     * what was already written: the invitation asks what the contact is
+     * looking for, and they have just said it.
+     *
      * @param  array<string, mixed>  $node
      */
-    public function start(BotSession $session, array $node): AiOutcome
+    public function start(BotSession $session, array $node, ?InboundMessage $carried = null): AiOutcome
     {
         $kind = ListingKind::fromNode($node['kind'] ?? null);
 
         $session->state = ['kind' => $kind->value] + $this->defaultState();
         $session->save();
+
+        if ($carried !== null) {
+            return $this->resume($session, $node, $carried);
+        }
 
         $this->messenger->sendButtons(
             $session->contact,

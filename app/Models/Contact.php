@@ -2,6 +2,9 @@
 
 namespace App\Models;
 
+use App\Enums\ChannelDirection;
+use App\Enums\ChannelMessageAuthor;
+use App\Enums\ChannelMessageStatus;
 use Database\Factories\ContactFactory;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
@@ -61,6 +64,36 @@ class Contact extends Model
         return $this->last_inbound_at !== null;
     }
 
+    /**
+     * Whether the bot has ever reached this contact — the mark of someone
+     * who already knows what this service is, and so should not be greeted
+     * as a stranger again.
+     *
+     * Deliberately not hasEverWritten(): the inbound journal is updated
+     * before the engine runs, so that predicate is always true by the time
+     * the greeting is decided. And deliberately not the session's own
+     * hasCompletedDialog(): the renewal poll, the moderation verdict and
+     * the customer request all live in isolated scenario runs and never
+     * create a session row, so a supplier who has been getting messages
+     * for a month still looked brand new.
+     *
+     * A failed send does not count — nothing reached the contact. Neither
+     * does a message the operator wrote from their own phone: it is
+     * outbound too, but the person on the other side has never heard from
+     * the bot and still needs telling what this service is. The cold
+     * outreach the operator sends by hand is exactly a list of people the
+     * bot has never written to — and it ends by asking them to write to
+     * the bot.
+     */
+    public function hasBotHistory(): bool
+    {
+        return $this->channelMessages()
+            ->where('direction', ChannelDirection::Outbound)
+            ->where('author', ChannelMessageAuthor::Bot)
+            ->where('status', '!=', ChannelMessageStatus::Failed)
+            ->exists();
+    }
+
     /** @return HasMany<Listing, $this> */
     public function listings(): HasMany
     {
@@ -80,12 +113,13 @@ class Contact extends Model
     }
 
     /**
-     * @return array{last_inbound_at: 'datetime'}
+     * @return array{last_inbound_at: 'datetime', operator_handoff_until: 'datetime'}
      */
     protected function casts(): array
     {
         return [
             'last_inbound_at' => 'datetime',
+            'operator_handoff_until' => 'datetime',
         ];
     }
 }

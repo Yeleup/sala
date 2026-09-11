@@ -4,6 +4,7 @@ namespace App\Models;
 
 use App\Enums\AiCostStatus;
 use App\Enums\ChannelDirection;
+use App\Enums\ChannelMessageAuthor;
 use App\Enums\ChannelMessageStatus;
 use Database\Factories\ChannelMessageFactory;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
@@ -14,14 +15,15 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Support\Collection;
 
 /**
- * One WhatsApp message in the channel journal — inbound or outbound, with
- * the raw payload and the delivery lifecycle. Outbound rows are matched
+ * One WhatsApp message in the channel journal — from the contact, from the
+ * bot or from the operator's own phone, with the raw payload and the
+ * delivery lifecycle. Outbound rows are matched
  * to Dereu delivery webhooks by dereu_message_id. Template messages carry
  * a tariff snapshot fixed at send time (cost_status = null means the row
  * predates cost accounting); session messages have no cost columns filled.
  */
 #[Fillable([
-    'contact_id', 'direction', 'type', 'text', 'payload', 'wamid',
+    'contact_id', 'direction', 'author', 'type', 'text', 'payload', 'wamid',
     'dereu_message_id', 'status', 'failure_reason', 'sent_at', 'delivered_at', 'read_at',
     'whatsapp_template_id', 'estimated_cost_usd', 'cost_status', 'pricing_snapshot',
     'template_fallback', 'template_fallback_resent_at',
@@ -30,6 +32,21 @@ class ChannelMessage extends Model
 {
     /** @use HasFactory<ChannelMessageFactory> */
     use HasFactory;
+
+    /**
+     * A row written without naming its author gets the one its direction
+     * implies — every existing journalling call site says only whether the
+     * message came in or went out, and for all of them that reading is
+     * true. Only the operator's echo names itself explicitly.
+     */
+    protected static function booted(): void
+    {
+        static::creating(function (ChannelMessage $message): void {
+            $message->author ??= $message->direction === ChannelDirection::Inbound
+                ? ChannelMessageAuthor::Contact
+                : ChannelMessageAuthor::Bot;
+        });
+    }
 
     /** @return BelongsTo<Contact, $this> */
     public function contact(): BelongsTo
@@ -107,12 +124,13 @@ class ChannelMessage extends Model
     }
 
     /**
-     * @return array{direction: class-string<ChannelDirection>, status: class-string<ChannelMessageStatus>, payload: 'array', sent_at: 'datetime', delivered_at: 'datetime', read_at: 'datetime', estimated_cost_usd: 'decimal:6', cost_status: class-string<AiCostStatus>, pricing_snapshot: 'array'}
+     * @return array{direction: class-string<ChannelDirection>, author: class-string<ChannelMessageAuthor>, status: class-string<ChannelMessageStatus>, payload: 'array', sent_at: 'datetime', delivered_at: 'datetime', read_at: 'datetime', estimated_cost_usd: 'decimal:6', cost_status: class-string<AiCostStatus>, pricing_snapshot: 'array'}
      */
     protected function casts(): array
     {
         return [
             'direction' => ChannelDirection::class,
+            'author' => ChannelMessageAuthor::class,
             'status' => ChannelMessageStatus::class,
             'payload' => 'array',
             'sent_at' => 'datetime',

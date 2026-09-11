@@ -3,6 +3,7 @@
 namespace App\Console\Commands;
 
 use App\Enums\ChannelDirection;
+use App\Enums\ChannelMessageAuthor;
 use App\Enums\ChannelMessageStatus;
 use App\Models\ChannelMessage;
 use App\Models\User;
@@ -44,11 +45,17 @@ class MonitorWhatsappDeliveryFailures extends Command
      * the numerator and denominator describe the same sends. min_failed
      * keeps the quiet hours honest: at one message per hour a single
      * random failure is a 100% share, not an incident.
+     *
+     * Only the bot's own sends count. The operator's messages from the
+     * WhatsApp Business app are outbound too and go out in bursts of
+     * dozens — one round of outreach would swell the denominator enough to
+     * push a real incident under the threshold.
      */
     private function alertOnFailureSpike(\DateTimeInterface $windowStart, int $windowMinutes): void
     {
         $counts = ChannelMessage::query()
             ->where('direction', ChannelDirection::Outbound)
+            ->where('author', ChannelMessageAuthor::Bot)
             ->where('created_at', '>=', $windowStart)
             ->selectRaw('count(*) as total')
             ->selectRaw('sum(case when status = ? then 1 else 0 end) as failed', [ChannelMessageStatus::Failed->value])
@@ -103,6 +110,7 @@ class MonitorWhatsappDeliveryFailures extends Command
     {
         $reasonsByCode = ChannelMessage::query()
             ->where('direction', ChannelDirection::Outbound)
+            ->where('author', ChannelMessageAuthor::Bot)
             ->where('status', ChannelMessageStatus::Failed)
             ->where('updated_at', '>=', $windowStart)
             ->whereNotNull('failure_reason')

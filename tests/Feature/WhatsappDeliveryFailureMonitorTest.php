@@ -181,3 +181,19 @@ test('повторная проверка в период охлаждения �
     // Оба сигнала (всплеск и аккаунт-код) отправлены по одному разу.
     expect($this->admins->first()->refresh()->notifications)->toHaveCount(2);
 });
+
+test('рассылка оператора не разбавляет долю отказов и не прячет инцидент', function () {
+    // Рассылка уходит десяткам номеров разом. Если бы её сообщения попали в
+    // знаменатель, реальный всплеск ушёл бы под порог и админы не узнали бы
+    // о нём — ровно тот сценарий, ради которого монитор и написан.
+    ChannelMessage::factory()->outbound()->count(3)->create([
+        'status' => ChannelMessageStatus::Failed,
+        'failure_reason' => 'meta error 131026: Message undeliverable — Message Undeliverable.',
+    ]);
+    ChannelMessage::factory()->outbound()->delivered()->create();
+    ChannelMessage::factory()->operator()->count(40)->create();
+
+    $this->artisan('whatsapp:monitor-delivery-failures')->assertSuccessful();
+
+    expect($this->admins->first()->refresh()->notifications->first()->data['body'])->toContain('3 из 4');
+});

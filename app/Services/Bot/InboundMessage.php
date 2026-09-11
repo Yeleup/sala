@@ -56,6 +56,26 @@ class InboundMessage
     }
 
     /**
+     * The same message with different words — what the navigator carries
+     * into a branch when the person wrote their thought across several
+     * messages on one step. Everything else is kept: a photo with a
+     * caption has to arrive with its photo, or the listing goes to
+     * moderation without pictures and the bot asks for them again.
+     */
+    public function withText(string $text): self
+    {
+        return new self(
+            text: $text,
+            replyId: $this->replyId,
+            mediaType: $this->mediaType,
+            mediaId: $this->mediaId,
+            unrecognizedPress: $this->unrecognizedPress,
+            voiceContents: $this->voiceContents,
+            transcription: $this->transcription,
+        );
+    }
+
+    /**
      * A plain text message the engine composes itself rather than receives:
      * the AI navigator carries text it already holds — a voice transcription,
      * or the text saved with a navigation proposal — into the block it routes

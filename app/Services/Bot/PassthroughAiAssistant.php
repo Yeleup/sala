@@ -12,7 +12,7 @@ use App\Models\BotSession;
  */
 class PassthroughAiAssistant implements AiAssistant
 {
-    public function start(BotSession $session, array $node): AiOutcome
+    public function start(BotSession $session, array $node, ?InboundMessage $carried = null): AiOutcome
     {
         return AiOutcome::Completed;
     }

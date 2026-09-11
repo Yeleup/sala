@@ -6,9 +6,10 @@ use App\Enums\MenuRouteKind;
 use App\Enums\RouteConfidence;
 
 /**
- * A typed destination MenuRouter resolved an unmatched menu message into.
- * $option carries where an Option route leads and is null for the other
- * two kinds, which need no target beyond their kind.
+ * A typed outcome MenuRouter resolved an unmatched menu message into.
+ * $option carries where an Option route leads and is null for every other
+ * kind, which needs no target beyond the kind itself — several of them
+ * move the contact nowhere at all.
  */
 final readonly class MenuRoute
 {
@@ -37,5 +38,25 @@ final readonly class MenuRoute
     public static function toServiceQuestion(RouteConfidence $confidence): self
     {
         return new self(MenuRouteKind::ServiceQuestion, null, $confidence);
+    }
+
+    public static function toAcknowledgement(RouteConfidence $confidence): self
+    {
+        return new self(MenuRouteKind::Acknowledgement, null, $confidence);
+    }
+
+    public static function toDecline(RouteConfidence $confidence): self
+    {
+        return new self(MenuRouteKind::Decline, null, $confidence);
+    }
+
+    public static function toHumanHandoff(RouteConfidence $confidence): self
+    {
+        return new self(MenuRouteKind::HumanHandoff, null, $confidence);
+    }
+
+    public static function toGreeting(RouteConfidence $confidence): self
+    {
+        return new self(MenuRouteKind::Greeting, null, $confidence);
     }
 }

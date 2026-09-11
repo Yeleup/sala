@@ -1,6 +1,7 @@
 <?php
 
 use App\Enums\AiCostStatus;
+use App\Enums\AiOperationType;
 use App\Enums\ChannelMessageStatus;
 use App\Filament\Pages\WhatsAppChat;
 use App\Models\AiAttempt;
@@ -9,6 +10,7 @@ use App\Models\ChannelMessage;
 use App\Models\Contact;
 use App\Models\User;
 use App\Models\WhatsappTemplate;
+use App\Services\OperatorHandoff;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Livewire\Livewire;
 
@@ -350,6 +352,95 @@ test('шапка треда показывает расходы AI и шабло
         ->assertSee('Шаблоны: $0.0450')
         ->assertSee('без тарифа: 1')
         ->assertSee('вх: 1')
-        ->assertSee('исх: 3')
+        ->assertSee('бот: 3')
         ->assertSee('шаблонов: 3');
 });
+
+test('в ленте видны три стороны, и у сообщения оператора нет галочек доставки', function () {
+    // Инцидент 27 августа: оператор голосом вытаскивал человека из
+    // диалога, а в админке была видна только половина переписки — бот.
+    $contact = Contact::factory()->create();
+    ChannelMessage::factory()->for($contact)->create(['text' => 'Так отправилось или нет мой объявление', 'created_at' => now()->subMinutes(3)]);
+    ChannelMessage::factory()->for($contact)->outbound()->create(['text' => 'Что вас интересует?', 'created_at' => now()->subMinutes(2)]);
+    ChannelMessage::factory()->for($contact)->operator()->create(['text' => 'Ваше объявление загружено! Спасибо', 'created_at' => now()->subMinute()]);
+
+    $page = Livewire::test(WhatsAppChat::class)
+        ->call('selectContact', $contact->id)
+        ->assertSee('Так отправилось или нет мой объявление')
+        ->assertSee('Что вас интересует?')
+        ->assertSee('Ваше объявление загружено! Спасибо')
+        ->assertSee('Оператор')
+        ->assertSee('оператор: 1')
+        // Своя заливка — иначе пузырь оператора неотличим от пузыря бота.
+        ->assertSeeHtml('wa-bubble is-out is-op');
+
+    // Галочек у сообщения из приложения быть не должно: статусов доставки
+    // на него не приходит, и одинокая ✓ читалась бы как «не доставлено».
+    $ticks = substr_count($page->html(), 'class="wa-ticks');
+
+    expect($ticks)->toBe(1);
+});
+
+test('плашка о паузе и возврат бота', function () {
+    $contact = Contact::factory()->create();
+    ChannelMessage::factory()->for($contact)->create();
+    app(OperatorHandoff::class)->start($contact);
+
+    Livewire::test(WhatsAppChat::class)
+        ->call('selectContact', $contact->id)
+        ->assertSee('Оператор ведёт диалог')
+        ->call('returnToBot');
+
+    expect($contact->fresh()->operator_handoff_until)->toBeNull();
+});
+
+test('без паузы плашки нет', function () {
+    $contact = Contact::factory()->create();
+    ChannelMessage::factory()->for($contact)->create();
+
+    Livewire::test(WhatsAppChat::class)
+        ->call('selectContact', $contact->id)
+        ->assertDontSee('Оператор ведёт диалог');
+});
+
+test('панель ИИ объясняет решение навигатора словами, а не только сырым JSON', function () {
+    // Кейс 169: на «👍» модель ответила верно — «не понял», уверенно, — но
+    // по сырому ответу нельзя было понять, почему за этим последовало
+    // полное приветствие. Теперь решение подписано.
+    $contact = Contact::factory()->create();
+    $inbound = ChannelMessage::factory()->for($contact)->create(['text' => '👍']);
+
+    $operation = AiOperation::factory()->create([
+        'contact_id' => $contact->id,
+        'channel_message_id' => $inbound->id,
+        'operation' => AiOperationType::MenuRouting,
+    ]);
+    AiAttempt::factory()->for($operation, 'operation')->create([
+        'response' => json_encode(['intent' => 'acknowledgement', 'option' => 'none', 'confidence' => 'high']),
+    ]);
+
+    Livewire::test(WhatsAppChat::class)
+        ->call('selectContact', $contact->id)
+        ->assertSee('Навигатор: подтверждение, бот промолчал, уверенно');
+});
+
+test('нечитаемый ответ модели панель не ломает', function (?string $response) {
+    $contact = Contact::factory()->create();
+    $inbound = ChannelMessage::factory()->for($contact)->create();
+
+    $operation = AiOperation::factory()->create([
+        'contact_id' => $contact->id,
+        'channel_message_id' => $inbound->id,
+        'operation' => AiOperationType::MenuRouting,
+    ]);
+    AiAttempt::factory()->for($operation, 'operation')->create(['response' => $response]);
+
+    Livewire::test(WhatsAppChat::class)
+        ->call('selectContact', $contact->id)
+        ->assertOk()
+        ->assertDontSee('Навигатор:');
+})->with([
+    'ответа нет' => [null],
+    'не JSON' => ['провайдер вернул текст'],
+    'незнакомое намерение' => ['{"intent":"что-то новое","option":"none","confidence":"high"}'],
+]);

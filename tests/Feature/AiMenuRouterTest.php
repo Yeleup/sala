@@ -136,7 +136,7 @@ describe('гварды без обращения к модели', function () {
 describe('маппинг ответа модели', function () {
     test('выбранная опция маршрутизирует к ней с уверенностью модели', function (string $confidenceValue, RouteConfidence $expected) {
         $session = menuRouterSession();
-        MenuRouteAgent::fake([['route' => 'option:customer', 'confidence' => $confidenceValue]]);
+        MenuRouteAgent::fake([['intent' => 'navigate', 'option' => 'option:customer', 'confidence' => $confidenceValue]]);
 
         $route = app(AiMenuRouter::class)->route(
             $session,
@@ -156,7 +156,7 @@ describe('маппинг ответа модели', function () {
 
     test('низкая уверенность всегда даёт null, независимо от выбранного маршрута', function () {
         $session = menuRouterSession();
-        MenuRouteAgent::fake([['route' => 'option:customer', 'confidence' => 'low']]);
+        MenuRouteAgent::fake([['intent' => 'navigate', 'option' => 'option:customer', 'confidence' => 'low']]);
 
         $route = app(AiMenuRouter::class)->route(
             $session,
@@ -168,9 +168,9 @@ describe('маппинг ответа модели', function () {
         expect($route)->toBeNull();
     });
 
-    test('route=none всегда даёт null, при любой уверенности', function (string $confidenceValue) {
+    test('intent=unclear всегда даёт null, при любой уверенности', function (string $confidenceValue) {
         $session = menuRouterSession();
-        MenuRouteAgent::fake([['route' => 'none', 'confidence' => $confidenceValue]]);
+        MenuRouteAgent::fake([['intent' => 'unclear', 'option' => 'none', 'confidence' => $confidenceValue]]);
 
         $route = app(AiMenuRouter::class)->route(
             $session,
@@ -184,7 +184,7 @@ describe('маппинг ответа модели', function () {
 
     test('вопрос о сервисе маршрутизирует в ServiceQuestion', function () {
         $session = menuRouterSession();
-        MenuRouteAgent::fake([['route' => 'service_question', 'confidence' => 'high']]);
+        MenuRouteAgent::fake([['intent' => 'service_question', 'option' => 'none', 'confidence' => 'high']]);
 
         $route = app(AiMenuRouter::class)->route(
             $session,
@@ -197,6 +197,70 @@ describe('маппинг ответа модели', function () {
             ->and($route->kind)->toBe(MenuRouteKind::ServiceQuestion)
             ->and($route->option)->toBeNull()
             ->and($route->confidence)->toBe(RouteConfidence::High);
+    });
+});
+
+describe('намерения, которые никуда не ведут', function () {
+    test('каждое намерение отображается в свой исход по своему порогу уверенности', function (string $intent, string $confidenceValue, ?MenuRouteKind $expected) {
+        $session = menuRouterSession();
+        MenuRouteAgent::fake([['intent' => $intent, 'option' => 'none', 'confidence' => $confidenceValue]]);
+
+        $route = app(AiMenuRouter::class)->route(
+            $session,
+            new ScenarioDefinition(menuRouterDefinition()),
+            menuRouterMenuNode(),
+            new InboundMessage(text: 'ок'),
+        );
+
+        expect($route?->kind)->toBe($expected);
+    })->with([
+        // Молчание и прощание — ответы, с которыми человеку нечего делать,
+        // если бот ошибся: догадки на них не хватает.
+        'подтверждение уверенно — молчание' => ['acknowledgement', 'high', MenuRouteKind::Acknowledgement],
+        'подтверждение предположительно — как раньше' => ['acknowledgement', 'medium', null],
+        'отказ уверенно — прощание' => ['decline', 'high', MenuRouteKind::Decline],
+        'отказ предположительно — как раньше' => ['decline', 'medium', null],
+        'приветствие уверенно — шаг' => ['greeting', 'high', MenuRouteKind::Greeting],
+        'приветствие предположительно — как раньше' => ['greeting', 'medium', null],
+        // Единственное намерение, где повтор шага и есть то, на что жалуются.
+        'просьба о человеке уверенно' => ['human_handoff', 'high', MenuRouteKind::HumanHandoff],
+        'просьба о человеке предположительно — тоже' => ['human_handoff', 'medium', MenuRouteKind::HumanHandoff],
+        // Общий пол: неуверенное прочтение — прежнее поведение.
+        'подтверждение неуверенно' => ['acknowledgement', 'low', null],
+        'отказ неуверенно' => ['decline', 'low', null],
+        'просьба о человеке неуверенно' => ['human_handoff', 'low', null],
+        'приветствие неуверенно' => ['greeting', 'low', null],
+    ]);
+
+    test('навигация без названного раздела — противоречие, а не маршрут', function () {
+        $session = menuRouterSession();
+        MenuRouteAgent::fake([['intent' => 'navigate', 'option' => 'none', 'confidence' => 'high']]);
+
+        $route = app(AiMenuRouter::class)->route(
+            $session,
+            new ScenarioDefinition(menuRouterDefinition()),
+            menuRouterMenuNode(),
+            new InboundMessage(text: 'что-то про технику'),
+        );
+
+        expect($route)->toBeNull();
+    });
+
+    test('раздел, названный не при навигации, никуда не уводит', function () {
+        // Модель нарушила контракт: намерение закрывает разговор, а раздел
+        // всё равно назван. Действуем по намерению.
+        $session = menuRouterSession();
+        MenuRouteAgent::fake([['intent' => 'acknowledgement', 'option' => 'option:customer', 'confidence' => 'high']]);
+
+        $route = app(AiMenuRouter::class)->route(
+            $session,
+            new ScenarioDefinition(menuRouterDefinition()),
+            menuRouterMenuNode(),
+            new InboundMessage(text: 'спасибо'),
+        );
+
+        expect($route?->kind)->toBe(MenuRouteKind::Acknowledgement)
+            ->and($route->option)->toBeNull();
     });
 });
 
@@ -220,7 +284,7 @@ describe('аудит вызова', function () {
 
     test('успешный вызов оставляет завершённую строку ai_operations с контактом и сессией', function () {
         $session = menuRouterSession();
-        MenuRouteAgent::fake([['route' => 'service_question', 'confidence' => 'high']]);
+        MenuRouteAgent::fake([['intent' => 'service_question', 'option' => 'none', 'confidence' => 'high']]);
 
         app(AiMenuRouter::class)->route(
             $session,
@@ -240,7 +304,7 @@ describe('аудит вызова', function () {
 describe('резюме прерванной анкеты', function () {
     test('resume не предлагается без свежего совпадающего снапшота — route=resume от фейка маппится в null', function (?array $pausedState) {
         $session = menuRouterSession($pausedState);
-        MenuRouteAgent::fake([['route' => 'resume', 'confidence' => 'high']]);
+        MenuRouteAgent::fake([['intent' => 'resume', 'option' => 'none', 'confidence' => 'high']]);
 
         $route = app(AiMenuRouter::class)->route(
             $session,
@@ -263,7 +327,7 @@ describe('резюме прерванной анкеты', function () {
 
     test('валидный снапшот плюс route=resume даёт маршрут Resume', function () {
         $session = menuRouterSession(pausedListingSnapshot());
-        MenuRouteAgent::fake([['route' => 'resume', 'confidence' => 'medium']]);
+        MenuRouteAgent::fake([['intent' => 'resume', 'option' => 'none', 'confidence' => 'medium']]);
 
         $route = app(AiMenuRouter::class)->route(
             $session,
@@ -280,7 +344,7 @@ describe('резюме прерванной анкеты', function () {
 
     test('валидный снапшот плюс опция, ведущая ровно в узел снапшота, тоже даёт Resume — постобработка кодом', function () {
         $session = menuRouterSession(pausedListingSnapshot());
-        MenuRouteAgent::fake([['route' => 'option:rent_out', 'confidence' => 'high']]);
+        MenuRouteAgent::fake([['intent' => 'navigate', 'option' => 'option:rent_out', 'confidence' => 'high']]);
 
         $route = app(AiMenuRouter::class)->route(
             $session,
@@ -297,7 +361,7 @@ describe('резюме прерванной анкеты', function () {
 
     test('опция ведёт в узел снапшота через промежуточный блок — это тоже Resume', function () {
         $session = menuRouterSession(pausedListingSnapshot());
-        MenuRouteAgent::fake([['route' => 'option:rent_out', 'confidence' => 'high']]);
+        MenuRouteAgent::fake([['intent' => 'navigate', 'option' => 'option:rent_out', 'confidence' => 'high']]);
 
         $route = app(AiMenuRouter::class)->route(
             $session,
@@ -313,7 +377,7 @@ describe('резюме прерванной анкеты', function () {
 
     test('валидный снапшот не трогает опцию, ведущую не в узел снапшота — остаётся Option', function () {
         $session = menuRouterSession(pausedListingSnapshot());
-        MenuRouteAgent::fake([['route' => 'option:customer', 'confidence' => 'high']]);
+        MenuRouteAgent::fake([['intent' => 'navigate', 'option' => 'option:customer', 'confidence' => 'high']]);
 
         $route = app(AiMenuRouter::class)->route(
             $session,
@@ -331,7 +395,7 @@ describe('резюме прерванной анкеты', function () {
 describe('что доезжает до модели', function () {
     test('в промпт уходит текст текущего меню и сообщение человека, а в инструкции — разделы графа', function () {
         $session = menuRouterSession();
-        MenuRouteAgent::fake([['route' => 'none', 'confidence' => 'high']]);
+        MenuRouteAgent::fake([['intent' => 'unclear', 'option' => 'none', 'confidence' => 'high']]);
 
         app(AiMenuRouter::class)->route(
             $session,
@@ -350,7 +414,7 @@ describe('что доезжает до модели', function () {
 
     test('длинное сообщение доезжает обрезанным', function () {
         $session = menuRouterSession();
-        MenuRouteAgent::fake([['route' => 'none', 'confidence' => 'high']]);
+        MenuRouteAgent::fake([['intent' => 'unclear', 'option' => 'none', 'confidence' => 'high']]);
         $long = trim(str_repeat('нужен кран ', 100));
 
         app(AiMenuRouter::class)->route(
@@ -364,9 +428,9 @@ describe('что доезжает до модели', function () {
             && $prompt->contains(mb_substr($long, 0, 500)));
     });
 
-    test('схема ограничивает ответ разделами графа, а resume даёт только при валидном снапшоте', function (?array $pausedState, array $expected) {
+    test('схема ограничивает разделы графом, а resume даёт только при валидном снапшоте', function (?array $pausedState, array $expectedIntents) {
         $session = menuRouterSession($pausedState);
-        MenuRouteAgent::fake([['route' => 'none', 'confidence' => 'high']]);
+        MenuRouteAgent::fake([['intent' => 'unclear', 'option' => 'none', 'confidence' => 'high']]);
 
         app(AiMenuRouter::class)->route(
             $session,
@@ -375,23 +439,26 @@ describe('что доезжает до модели', function () {
             new InboundMessage(text: 'сдаю кран 25 тонн'),
         );
 
-        MenuRouteAgent::assertPrompted(
-            fn ($prompt): bool => $prompt->agent->schema(new JsonSchemaTypeFactory)['route']->toArray()['enum'] === $expected,
-        );
+        MenuRouteAgent::assertPrompted(function ($prompt) use ($expectedIntents): bool {
+            $schema = $prompt->agent->schema(new JsonSchemaTypeFactory);
+
+            return $schema['intent']->toArray()['enum'] === $expectedIntents
+                && $schema['option']->toArray()['enum'] === ['option:supplier', 'option:customer', 'option:rent_out', 'option:repair', 'none'];
+        });
     })->with([
         'нечего продолжать — resume в enum нет' => [
             null,
-            ['option:supplier', 'option:customer', 'option:rent_out', 'option:repair', 'service_question', 'none'],
+            ['navigate', 'service_question', 'acknowledgement', 'decline', 'human_handoff', 'greeting', 'unclear'],
         ],
         'валидный снапшот — resume в enum есть' => [
             pausedListingSnapshot(),
-            ['option:supplier', 'option:customer', 'option:rent_out', 'option:repair', 'resume', 'service_question', 'none'],
+            ['navigate', 'resume', 'service_question', 'acknowledgement', 'decline', 'human_handoff', 'greeting', 'unclear'],
         ],
     ]);
 
     test('название прерванной анкеты в инструкциях названо видом объявления', function () {
         $session = menuRouterSession(pausedListingSnapshot());
-        MenuRouteAgent::fake([['route' => 'none', 'confidence' => 'high']]);
+        MenuRouteAgent::fake([['intent' => 'unclear', 'option' => 'none', 'confidence' => 'high']]);
 
         app(AiMenuRouter::class)->route(
             $session,
@@ -402,7 +469,7 @@ describe('что доезжает до модели', function () {
 
         MenuRouteAgent::assertPrompted(fn ($prompt): bool => str_contains(
             (string) $prompt->agent->instructions(),
-            '- resume: вернуться к прерванной анкете (Аренда спецтехники)',
+            '- resume: вернуться к прерванной анкете (Аренда спецтехники) — человек продолжает её,',
         ));
     });
 });

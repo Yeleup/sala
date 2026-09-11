@@ -30,9 +30,14 @@ class ScenarioAiAssistant implements AiAssistant
         private readonly VoiceTranscriber $transcriber,
     ) {}
 
-    public function start(BotSession $session, array $node): AiOutcome
+    public function start(BotSession $session, array $node, ?InboundMessage $carried = null): AiOutcome
     {
-        return $this->settle($session, $this->handlerFor($node)->start($session, $node));
+        // The carried message goes through the same voice resolution as an
+        // ordinary turn: the navigator hands over what the contact typed,
+        // but the contract must not depend on who calls it.
+        $carried = $carried === null ? null : $this->resolveVoice($session, $carried);
+
+        return $this->settle($session, $this->handlerFor($node)->start($session, $node, $carried));
     }
 
     public function resume(BotSession $session, array $node, InboundMessage $message): AiOutcome

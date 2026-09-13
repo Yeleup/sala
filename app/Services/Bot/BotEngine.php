@@ -109,16 +109,22 @@ class BotEngine
             return;
         }
 
-        // Дальше бот молчит, пока разговор ведёт живой человек: двое,
-        // отвечающих одному, — это ровно то, ради чего пауза и заведена.
-        if ($this->handoff->isActive($contact)) {
+        // Нажатие любой кнопки бота — тоже ответ ему самому, и пауза им
+        // снимается: кнопки в переписку кладёт только он, оператор с
+        // телефона их не отправляет. Диалог при этом остаётся на месте —
+        // нажатие и есть ответ на тот шаг, где человек стоит.
+        if ($message->isPress()) {
+            $this->handoff->releaseForPress($contact);
+        } elseif ($this->handoff->isActive($contact)) {
+            // Дальше бот молчит, пока разговор ведёт живой человек: двое,
+            // отвечающих одному, — это ровно то, ради чего пауза и заведена.
             return;
+        } else {
+            // Пауза кончилась сама. Диалог закрывается так же, как по кнопке
+            // «Вернуть бота»: иначе бот очнулся бы на «Что вас интересует?» —
+            // вопросе, на который человек час назад ответил человеку.
+            $this->handoff->releaseExpired($contact);
         }
-
-        // Пауза кончилась сама. Диалог закрывается так же, как по кнопке
-        // «Вернуть бота»: иначе бот очнулся бы на «Что вас интересует?» —
-        // вопросе, на который человек час назад ответил человеку.
-        $this->handoff->releaseExpired($contact);
 
         $scenario = BotScenario::main();
         $definition = $scenario?->publishedDefinition();
@@ -439,13 +445,15 @@ class BotEngine
 
         // Ничего из графа не подошло, «Любая другая фраза» не подключена —
         // последний шанс понять сказанное есть у ИИ-навигатора.
-        if ($this->routeFreeText($session, $contact, $definition, $node, $message)) {
+        $read = $this->readableMessage($session, $message);
+
+        if ($read !== null && $this->routeFreeText($session, $contact, $definition, $node, $read)) {
             return;
         }
 
         // Не понял и он — бот повторяет текущий шаг, пока повтор ещё
         // остаётся ответом.
-        $this->repeatStep($session, $contact, $definition, $node, $message->text);
+        $this->repeatStep($session, $contact, $definition, $node, $read?->text);
     }
 
     /**
@@ -491,6 +499,8 @@ class BotEngine
             return;
         }
 
+        // Расшифровывать здесь нечего: routableEntry пропускает сюда
+        // только сообщение со словами, голосовое уходит обычным ходом меню.
         if ($this->routeFreeText($session, $contact, $definition, $entry, $message)) {
             return;
         }
@@ -538,6 +548,32 @@ class BotEngine
     }
 
     /**
+     * Сообщение в том виде, в каком бот умеет его прочесть: у голосового
+     * это расшифровка, у всего остального — оно само целиком, вместе с
+     * фотографией и подписью. null — читать нечего: голосовое не
+     * расшифровалось, упёрлось в часовой потолок или в сообщении нет слов.
+     *
+     * Расшифровка достаётся здесь, а не внутри навигатора, потому что она
+     * нужна обоим: и ему, и серии непонятых сообщений шага. Пока она жила
+     * внутри, в серию уходила подпись аудио — то есть ничего, — и
+     * накопление, заведённое ровно для мысли, сказанной в несколько
+     * приёмов, у говорящего голосом не работало вовсе (контакт 369).
+     *
+     * Вызывается один раз за ход: транскрипция скачивается и оплачивается,
+     * второй заход стоил бы второй (docs/modules/ai-assistant.md).
+     */
+    private function readableMessage(BotSession $session, InboundMessage $message): ?InboundMessage
+    {
+        if (trim((string) $message->text) !== '') {
+            return $message;
+        }
+
+        $transcription = (string) $this->transcribeVoice($session, $message);
+
+        return $transcription === '' ? null : InboundMessage::fromText($transcription);
+    }
+
+    /**
      * Hand a message that matched none of the menu's own options to the AI
      * navigator. Returns true when the navigator answered for this turn;
      * false means «nothing was understood» — the caller falls back to
@@ -556,19 +592,6 @@ class BotEngine
         // должно доехать вместе с фотографией, иначе объявление уходит на
         // модерацию без картинок, а бот просит их заново.
         $carried = $message;
-
-        if ($text === '') {
-            $text = (string) $this->transcribeVoice($session, $message);
-
-            if ($text === '') {
-                return false;
-            }
-
-            // Голосовое — исключение: дальше едет расшифровка, а не аудио.
-            // Оно уже скачано и оплачено, и второй заход стоил бы второй
-            // транскрипции (docs/modules/ai-assistant.md).
-            $carried = InboundMessage::fromText($text);
-        }
 
         $route = $this->menuRouter->route($session, $definition, $node, $carried);
 

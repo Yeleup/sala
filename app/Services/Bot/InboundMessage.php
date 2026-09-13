@@ -42,6 +42,19 @@ class InboundMessage
         return $this->mediaType === ListingMediaType::Audio && $this->hasMedia();
     }
 
+    /**
+     * Нажата кнопка или выбрана строка списка — в том числе такая, чьё
+     * содержимое Meta не доставила. Кнопки в переписку кладёт только бот:
+     * оператор пишет из приложения WhatsApp Business и отправить их не
+     * может. Поэтому нажатие всегда отвечает на вопрос, заданный ботом, а
+     * не открывает разговор — и этим отличается от любого другого
+     * входящего.
+     */
+    public function isPress(): bool
+    {
+        return filled($this->replyId) || $this->unrecognizedPress;
+    }
+
     public function withVoice(string $contents, string $transcription): self
     {
         return new self(

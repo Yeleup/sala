@@ -90,6 +90,35 @@ class OperatorHandoff
     }
 
     /**
+     * Give the conversation back because the contact answered the bot
+     * itself: they pressed a button it had put into the chat. Only the bot
+     * can put buttons there — the operator writes from the WhatsApp app
+     * and has none — so a press is never the start of a conversation with
+     * a person, and silence in reply is the one answer that cannot be
+     * right. The contact 369 incident: three presses of «Ремонт
+     * спецтехники» in eight minutes, all swallowed, with live buttons
+     * still on screen.
+     *
+     * The pause ends rather than merely letting this one press through:
+     * the very next step may ask for words, and a bot that answers the
+     * buttons and goes silent on the answer is the same dead end one step
+     * later. The operator takes the conversation back by writing again —
+     * their next message re-arms the pause at once.
+     *
+     * The dialog is deliberately kept: the press is an answer to the step
+     * the contact is standing on, and closing it would answer «Что вас
+     * интересует?» with «Что вас интересует?» — the contact 247 incident.
+     */
+    public function releaseForPress(Contact $contact): void
+    {
+        if ($contact->operator_handoff_until === null) {
+            return;
+        }
+
+        $this->release($contact, keepDialog: true);
+    }
+
+    /**
      * Give the conversation back because the hour ran out. Called on the
      * contact's next message rather than by a clock: nothing needs to
      * happen until they write again, and that is the moment the bot has
@@ -108,19 +137,25 @@ class OperatorHandoff
      * The dialog is closed along with the pause, however it ended: the bot
      * would otherwise come back standing on «Что вас интересует?», a
      * question the person answered to a human long ago.
+     *
+     * $keepDialog is the one exception — the pause is being lifted by an
+     * answer to that very question (see releaseForPress), so the step is
+     * still live and closing it would throw the answer away.
      */
-    private function release(Contact $contact): void
+    private function release(Contact $contact, bool $keepDialog = false): void
     {
         $contact->forceFill(['operator_handoff_until' => null])->save();
 
-        BotSession::query()
-            ->where('contact_id', $contact->id)
-            ->update([
-                'current_node_id' => null,
-                'current_node_fingerprint' => null,
-                'menu_streak' => null,
-                'last_dialog_ended_at' => now(),
-            ]);
+        if (! $keepDialog) {
+            BotSession::query()
+                ->where('contact_id', $contact->id)
+                ->update([
+                    'current_node_id' => null,
+                    'current_node_fingerprint' => null,
+                    'menu_streak' => null,
+                    'last_dialog_ended_at' => now(),
+                ]);
+        }
 
         Log::info('The bot is answering this conversation again.', ['contact_id' => $contact->id]);
     }

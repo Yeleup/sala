@@ -998,6 +998,45 @@ describe('шаг, который не удаётся пройти', function () 
         expect($session->fresh()->menu_streak)->toBeNull();
     });
 
+    test('расшифровка непонятого голосового читается вместе со следующим сообщением', function () {
+        // Контакт 369: три голосовых подряд, каждое расшифровано и ни одно
+        // не понято, — а в серию уходила подпись аудио, то есть ничего.
+        // Накопление, заведённое ровно для мысли, сказанной в несколько
+        // приёмов, у говорящего голосом не работало вовсе.
+        $scenario = navScenario();
+        $contact = Contact::factory()->create();
+        navSessionAt($scenario, $contact, 'menu');
+
+        test()->mock(DereuMediaDownloader::class)
+            ->shouldReceive('download')->once()->with('AUDIO-1')
+            ->andReturn(['contents' => 'ogg-байты', 'mime_type' => 'audio/ogg']);
+
+        test()->mock(VoiceTranscriber::class)
+            ->shouldReceive('transcribe')->once()
+            ->andReturn('только лёгкие работы');
+
+        $seen = null;
+        $turn = 0;
+
+        navRouter()->shouldReceive('route')->twice()
+            ->andReturnUsing(function (BotSession $session, ScenarioDefinition $definition, array $node, InboundMessage $message) use (&$seen, &$turn): ?MenuRoute {
+                $seen = $session->menuStreak('menu')['texts'] ?? [];
+
+                // Первый ход — ровно как в инциденте: раздел прочитан, но
+                // неуверенно, то есть не прочитан.
+                return ++$turn === 1
+                    ? MenuRoute::toOption(['node_id' => 'menu', 'option_id' => 'supplier'], RouteConfidence::Low)
+                    : null;
+            });
+
+        navMessenger()->shouldReceive('sendButtons')->twice();
+
+        app(BotEngine::class)->handle($contact, new InboundMessage(mediaType: ListingMediaType::Audio, mediaId: 'AUDIO-1'));
+        app(BotEngine::class)->handle($contact, new InboundMessage(text: 'беру пневматику'));
+
+        expect($seen)->toBe(['только лёгкие работы']);
+    });
+
     test('уход на другой шаг обнуляет счёт', function () {
         $scenario = navScenario();
         $contact = Contact::factory()->create();

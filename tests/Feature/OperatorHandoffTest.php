@@ -34,9 +34,13 @@ function handoffScenario(): BotScenario
             ['id' => 'menu', 'type' => 'buttons', 'text' => 'Что вас интересует?', 'options' => [
                 ['id' => 'rent', 'title' => 'Аренда'],
             ]],
+            ['id' => 'rent_menu', 'type' => 'buttons', 'text' => 'Аренда. Предлагаете или ищете?', 'options' => [
+                ['id' => 'rent_offer', 'title' => 'Предлагаю'],
+            ]],
         ],
         'edges' => [
             ['from' => 'start', 'output' => 'continue', 'to' => 'menu'],
+            ['from' => 'menu', 'output' => 'option:rent', 'to' => 'rent_menu'],
         ],
     ])->create();
 }
@@ -165,6 +169,55 @@ describe('что бот перестаёт делать', function () {
         app(BotEngine::class)->handle($contact, new InboundMessage(text: 'Да, актуально', replyId: 'flow:tok:yes'));
     });
 
+    test('кнопка уведомления отвечается, но разговор оператору оставляет', function () {
+        // Граница исключения: [Да, актуально] закрывает вопрос про
+        // объявление, а не говорит «хочу дальше с ботом». Отвечаем и
+        // молчим дальше — разговор всё ещё ведёт человек.
+        $contact = Contact::factory()->create(['phone' => '77774258186']);
+        app(OperatorHandoff::class)->start($contact);
+
+        $this->mock(ScenarioRunReplyHandler::class, fn (MockInterface $mock) => $mock->shouldReceive('handle')->once()->andReturnTrue());
+
+        app(BotEngine::class)->handle($contact, new InboundMessage(text: 'Да, актуально', replyId: 'flow:tok:yes'));
+
+        expect(app(OperatorHandoff::class)->isActive($contact->fresh()))->toBeTrue();
+    });
+
+    test('нажатие кнопки собственного меню бот отвечает и в паузе', function () {
+        // Инцидент 12 сентября, контакт 369: оператор прислал голосовое —
+        // и три нажатия «Ремонт спецтехники» подряд ушли в тишину. Человек
+        // видел живые кнопки, жал их и не получал ничего, а потом написал
+        // «Чет шыкпай жатырго» — и это тоже пропало.
+        $scenario = handoffScenario();
+        $contact = Contact::factory()->create(['phone' => '77474630083']);
+        handoffSessionAt($scenario, $contact);
+        app(OperatorHandoff::class)->start($contact);
+
+        $this->mock(DereuMessenger::class)
+            ->shouldReceive('sendButtons')->once()
+            ->withArgs(fn (Contact $to, string $text): bool => $text === 'Аренда. Предлагаете или ищете?');
+
+        app(BotEngine::class)->handle($contact, new InboundMessage(text: 'Аренда', replyId: 'rent'));
+
+        expect(BotSession::sole()->current_node_id)->toBe('rent_menu');
+    });
+
+    test('ответом на свою кнопку пауза снимается — дальше бот ведёт разговор сам', function () {
+        // Иначе починка была бы наполовину: шаг с кнопками бот прошёл бы,
+        // а на первом же вопросе, где ждут слова, человек снова упёрся бы
+        // в ту же тишину.
+        $scenario = handoffScenario();
+        $contact = Contact::factory()->create(['phone' => '77474630083']);
+        handoffSessionAt($scenario, $contact);
+        app(OperatorHandoff::class)->start($contact);
+
+        $this->mock(DereuMessenger::class)->shouldReceive('sendButtons')->once();
+
+        app(BotEngine::class)->handle($contact, new InboundMessage(text: 'Аренда', replyId: 'rent'));
+
+        expect($contact->fresh()->operator_handoff_until)->toBeNull();
+    });
+
     test('срок вышел — бот снова отвечает', function () {
         config()->set('services.dereu.external_id', 'org_наша');
         DereuCompany::factory()->create(['external_id' => 'org_наша', 'dereu_company_id' => 'co_abc123']);
@@ -235,6 +288,27 @@ describe('возврат бота', function () {
 
         expect($contact->fresh()->operator_handoff_until)->not->toBeNull()
             ->and($session->fresh()->current_node_id)->toBe('main_menu');
+    });
+
+    test('первое нажатие после истёкшей паузы идёт по кнопке, а не в начало диалога', function () {
+        // Контакт 247: пауза истекла, он нажал «Аренда спецтехники» — и
+        // снятие паузы обнулило диалог, поэтому в ответ пришло всё то же
+        // главное меню. Правильно нажатие прошло только со второго раза,
+        // через одиннадцать секунд.
+        $scenario = handoffScenario();
+        $contact = Contact::factory()->create(['phone' => '77474258186']);
+        handoffSessionAt($scenario, $contact);
+        app(OperatorHandoff::class)->start($contact);
+
+        $this->travel(OperatorHandoff::HANDOFF_MINUTES + 1)->minutes();
+
+        $this->mock(DereuMessenger::class)
+            ->shouldReceive('sendButtons')->once()
+            ->withArgs(fn (Contact $to, string $text): bool => $text === 'Аренда. Предлагаете или ищете?');
+
+        app(BotEngine::class)->handle($contact, new InboundMessage(text: 'Аренда', replyId: 'rent'));
+
+        expect(BotSession::sole()->current_node_id)->toBe('rent_menu');
     });
 
     test('первое же сообщение после срока снимает паузу', function () {

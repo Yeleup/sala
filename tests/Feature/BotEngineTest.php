@@ -884,3 +884,72 @@ test('a cycle of auto-advancing blocks is capped and the dialog is parked', func
 
     expect(BotSession::sole()->current_node_id)->toBeNull();
 });
+
+test('a Back outcome parks the contact on the menu whose option leads into the AI block', function () {
+    // «Назад» на первом сообщении блока — на один уровень вверх: экран
+    // раздела с его кнопками, а не главное меню по выходу «Продолжить».
+    $scenario = BotScenario::factory()->published(botMenuWithAiDefinition())->create();
+    $contact = Contact::factory()->create();
+    $session = botSessionWaitingAt($scenario, $contact, 'search');
+
+    $assistant = test()->mock(AiAssistant::class);
+    $assistant->shouldReceive('resume')->once()
+        ->withArgs(fn (BotSession $session, array $node, InboundMessage $message) => $message->replyId === 'search_back')
+        ->andReturn(AiOutcome::Back);
+
+    $messenger = fakeBotMessenger();
+    $messenger->shouldReceive('sendText')->never();
+    $messenger->shouldReceive('sendButtons')->once()
+        ->withArgs(fn (Contact $to, string $text, array $buttons) => $text === 'Кто вы?'
+            && array_column($buttons, 'title') === ['Я поставщик', 'Я заказчик']);
+
+    app(BotEngine::class)->handle($contact, new InboundMessage(text: 'Назад', replyId: 'search_back'));
+
+    expect($session->fresh()->current_node_id)->toBe('menu');
+});
+
+test('a Back outcome from an AI block no menu leads into falls through the continue output', function () {
+    BotScenario::factory()->published([
+        'nodes' => [
+            ['id' => 'start', 'type' => 'start'],
+            ['id' => 'collect', 'type' => 'ai'],
+            ['id' => 'done', 'type' => 'text', 'text' => 'Готово'],
+        ],
+        'edges' => [
+            ['from' => 'start', 'output' => 'continue', 'to' => 'collect'],
+            ['from' => 'collect', 'output' => 'continue', 'to' => 'done'],
+        ],
+    ])->create();
+    $contact = Contact::factory()->create();
+
+    $assistant = test()->mock(AiAssistant::class);
+    $assistant->shouldReceive('start')->once()->andReturn(AiOutcome::InProgress);
+    $assistant->shouldReceive('resume')->once()->andReturn(AiOutcome::Back);
+
+    fakeBotMessenger()->shouldReceive('sendText')->once()
+        ->withArgs(fn (Contact $to, string $text) => $text === 'Готово');
+
+    app(BotEngine::class)->handle($contact, new InboundMessage(text: 'Привет'));
+    app(BotEngine::class)->handle($contact, new InboundMessage(text: 'Назад'));
+
+    expect(BotSession::sole()->current_node_id)->toBeNull();
+});
+
+test('a Back outcome on entering the AI block returns to the menu the same turn', function () {
+    // Блок, который ассистент закрыл прямо на входе, не остаётся висеть:
+    // экран раздела приходит тем же ходом, приветствие не повторяется.
+    $scenario = BotScenario::factory()->published(botMenuWithAiDefinition())->create();
+    $contact = Contact::factory()->create();
+    $session = botSessionWaitingAt($scenario, $contact, 'menu');
+
+    test()->mock(AiAssistant::class)->shouldReceive('start')->once()->andReturn(AiOutcome::Back);
+
+    $messenger = fakeBotMessenger();
+    $messenger->shouldReceive('sendText')->never();
+    $messenger->shouldReceive('sendButtons')->once()
+        ->withArgs(fn (Contact $to, string $text) => $text === 'Кто вы?');
+
+    app(BotEngine::class)->handle($contact, new InboundMessage(text: 'Я заказчик', replyId: 'customer'));
+
+    expect($session->fresh()->current_node_id)->toBe('menu');
+});

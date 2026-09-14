@@ -137,6 +137,15 @@ class SupplierListingCollector
     public const string BUTTON_MENU_TITLE = 'В меню';
 
     /**
+     * The exit of an untouched questionnaire — one level up, to the menu
+     * the branch hangs under (AiOutcome::Back). Shown only while nothing
+     * has been written; see exitButton().
+     */
+    public const string BUTTON_BACK = 'collect_back';
+
+    public const string BUTTON_BACK_TITLE = 'Назад';
+
+    /**
      * Confirms leaving a non-empty questionnaire — offered next to
      * BUTTON_EXIT_STAY only while state['exit_confirm'] is set.
      */
@@ -234,7 +243,7 @@ class SupplierListingCollector
         $this->messenger->sendButtons(
             $session->contact,
             trim((string) ($node['text'] ?? '')) ?: $kind->greeting(),
-            [['id' => self::BUTTON_MENU, 'title' => self::BUTTON_MENU_TITLE]],
+            $this->exitButton($session, $session->state),
         );
 
         return AiOutcome::InProgress;
@@ -251,6 +260,22 @@ class SupplierListingCollector
             return $movedOn;
         }
 
+        // «Назад» — the untouched questionnaire's own exit, one level up to
+        // the menu the branch hangs under; nothing to save or confirm. Once
+        // anything is written it can only be an old button from an earlier
+        // message, and then it means what «В меню» means below.
+        if ($this->matchesButton($message, self::BUTTON_BACK, self::BUTTON_BACK_TITLE)) {
+            if ($state['exit_confirm'] === true) {
+                return $this->exitToMenu($session, $state);
+            }
+
+            if (! $this->hasProgress($session, $state)) {
+                return AiOutcome::Back;
+            }
+
+            return $this->askExitConfirmation($session, $state);
+        }
+
         // «В меню» — by button tap or its typed title, the scenario-wide
         // convention that typing a button's name equals pressing it
         // (matchesButton already covers BUTTON_SUBMIT/BUTTON_EDIT the same
@@ -260,7 +285,9 @@ class SupplierListingCollector
         // lost what they had already written. A non-empty questionnaire now
         // asks to confirm first; a second «В меню» while that question is
         // still open is the same intent asked twice, not a fresh request, so
-        // it exits instead of looping the question forever.
+        // it exits instead of looping the question forever. On an untouched
+        // questionnaire the button is no longer shown (see exitButton()) —
+        // this branch then serves a typed title or an older button only.
         if ($this->matchesButton($message, self::BUTTON_MENU, self::BUTTON_MENU_TITLE)) {
             if ($state['exit_confirm'] === true) {
                 return $this->exitToMenu($session, $state);
@@ -487,7 +514,7 @@ class SupplierListingCollector
             $this->messenger->sendButtons(
                 $session->contact,
                 'Сообщение не разобралось. Опишите предложение текстом, голосом или фото с подписью.',
-                [['id' => self::BUTTON_MENU, 'title' => self::BUTTON_MENU_TITLE]],
+                $this->exitButton($session, $state),
             );
 
             return AiOutcome::InProgress;
@@ -508,7 +535,7 @@ class SupplierListingCollector
             $this->messenger->sendButtons(
                 $session->contact,
                 'Что-то сбоит на нашей стороне. Отправьте сообщение, пожалуйста, ещё раз.',
-                [['id' => self::BUTTON_MENU, 'title' => self::BUTTON_MENU_TITLE]],
+                $this->exitButton($session, $state),
             );
 
             return AiOutcome::InProgress;
@@ -873,6 +900,25 @@ class SupplierListingCollector
     }
 
     /**
+     * The exit an ordinary waiting message carries. An untouched
+     * questionnaire offers «Назад» — one level up, to the menu the branch
+     * hangs under: there is nothing to lose there, and «В меню» under the
+     * block's first message read as «Далее» (audit 2026-09-14: 40 of 77
+     * presses landed on the invitation, most followed by the same branch
+     * re-entered). Anything written switches it to «В меню», whose exit
+     * resume() confirms before leaving.
+     *
+     * @param  array<string, mixed>  $state
+     * @return list<array{id: string, title: string}>
+     */
+    private function exitButton(BotSession $session, array $state): array
+    {
+        return $this->hasProgress($session, $state)
+            ? [['id' => self::BUTTON_MENU, 'title' => self::BUTTON_MENU_TITLE]]
+            : [['id' => self::BUTTON_BACK, 'title' => self::BUTTON_BACK_TITLE]];
+    }
+
+    /**
      * An explicit refusal releases the supplier through the block's own
      * «continue» output. Whatever was collected is kept as a draft, but no
      * CTA to the web form goes out: the person just said they do not want
@@ -910,7 +956,9 @@ class SupplierListingCollector
      * something; an empty draft stays silent, because the main menu
      * answers for itself right after — a second «ничего не сохранили»
      * would just repeat what the empty exit already says by saying
-     * nothing.
+     * nothing. An untouched questionnaire reaches this exit only by a
+     * typed «В меню», an older button or the worded intent: its own
+     * button is «Назад», which leaves one level up without coming here.
      *
      * Whenever there is any progress to lose (hasProgress() — a broader
      * check than the draft/field content below, since a bare transcript
@@ -1034,12 +1082,17 @@ class SupplierListingCollector
         // too — a prompt naming a button the screen does not show would
         // read as a broken promise.
         $machinery = (string) ($state['fields']['unlisted_machinery'] ?? $state['unlisted_machinery'] ?? '');
-        $buttons = $machinery !== '' && $question === $this->unlistedMachineryPrompt($machinery)
-            ? [
+        // A re-sent question keeps «В меню»: «Назад» under a question would
+        // promise to undo an answer, which the questionnaire cannot do.
+        // Only the greeting itself carries the untouched block's «Назад».
+        $buttons = match (true) {
+            $machinery !== '' && $question === $this->unlistedMachineryPrompt($machinery) => [
                 ['id' => self::BUTTON_MACHINERY_UNLISTED, 'title' => self::BUTTON_MACHINERY_UNLISTED_TITLE],
                 ['id' => self::BUTTON_MENU, 'title' => self::BUTTON_MENU_TITLE],
-            ]
-            : [['id' => self::BUTTON_MENU, 'title' => self::BUTTON_MENU_TITLE]];
+            ],
+            $question !== '' => [['id' => self::BUTTON_MENU, 'title' => self::BUTTON_MENU_TITLE]],
+            default => $this->exitButton($session, $state),
+        };
 
         $this->messenger->sendButtons(
             $session->contact,
@@ -1389,12 +1442,19 @@ class SupplierListingCollector
         // point (ScenarioAiAssistant); unresolved voice is unreadable — the
         // bot asks to rephrase without spending a clarification attempt.
         if ($message->mediaType === ListingMediaType::Audio) {
-            if ($message->voiceContents === null) {
+            $transcription = (string) $message->transcription;
+
+            // Undownloaded or silent voice is unreadable, and unreadable
+            // audio never reaches the draft (docs/modules/ai-assistant.md):
+            // creating one here would turn an untouched questionnaire into
+            // a «non-empty» one on the strength of a recording nobody could
+            // read — its exit would flip from «Назад» to «В меню» with the
+            // «всё написанное сохранится» confirmation, and nothing was said.
+            if ($message->voiceContents === null || $transcription === '') {
                 return false;
             }
 
             $draft = $this->ensureDraft($session, $state);
-            $transcription = (string) $message->transcription;
 
             $path = "listings/{$draft->id}/audio/".uniqid('', true).'.ogg';
             Storage::disk('public')->put($path, $message->voiceContents);
@@ -1406,13 +1466,9 @@ class SupplierListingCollector
                 'transcription' => $transcription,
             ]);
 
-            if ($transcription !== '') {
-                $state['transcript'][] = $transcription;
+            $state['transcript'][] = $transcription;
 
-                return true;
-            }
-
-            return false;
+            return true;
         }
 
         // A failed download must not kill the dialog (Dereu 403/5xx are a

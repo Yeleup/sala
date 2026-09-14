@@ -238,6 +238,27 @@ class ScenarioDefinition
     }
 
     /**
+     * The menu a block hangs under: the buttons/list node whose option
+     * leads into it — through blocks that wait for nothing on the way,
+     * the same walk the navigator relies on (resolveTarget()). This is
+     * where «Назад» from the block's first message goes: one level up,
+     * not the root its «continue» output points at. Options are unique
+     * graph-wide, but nothing stops an operator from wiring two menus
+     * into one block — the first in graph order wins. Null for a block
+     * no menu option leads into.
+     */
+    public function parentMenuOf(string $nodeId): ?string
+    {
+        foreach ($this->menuOptions() as $option) {
+            if ($this->resolveTarget($option['node_id'], self::optionOutput($option['option_id'])) === $nodeId) {
+                return $option['node_id'];
+            }
+        }
+
+        return null;
+    }
+
+    /**
      * Whether the flow must stop at this block for the contact's reply.
      * A «WhatsApp-сообщение» block without buttons is fire-and-forget.
      *

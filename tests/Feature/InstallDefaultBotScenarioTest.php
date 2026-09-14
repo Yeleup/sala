@@ -264,3 +264,38 @@ test('неизвестный триггер в --only останавливает
 
     expect(BotScenario::query()->count())->toBe(0);
 });
+
+test('у каждого AI-блока типового диалога есть родительский экран раздела — туда ведёт «Назад»', function () {
+    $this->artisan('bot:install-default-scenario')->assertSuccessful();
+    $definition = new ScenarioDefinition(BotScenario::main()->published_definition);
+
+    expect($definition->parentMenuOf('collect_rental'))->toBe('menu_rental')
+        ->and($definition->parentMenuOf('search_rental'))->toBe('menu_rental')
+        ->and($definition->parentMenuOf('collect_repair'))->toBe('menu_repair')
+        ->and($definition->parentMenuOf('search_repair'))->toBe('menu_repair')
+        ->and($definition->parentMenuOf('collect_driver'))->toBe('menu_driver')
+        ->and($definition->parentMenuOf('search_driver'))->toBe('menu_driver');
+});
+
+test('«Назад» из анкеты типового диалога возвращает на экран раздела, а не в главное меню', function () {
+    $this->artisan('bot:install-default-scenario')->assertSuccessful();
+    $scenario = BotScenario::main();
+    $contact = \App\Models\Contact::factory()->create();
+    $session = \App\Models\BotSession::factory()->waitingAt('collect_repair')->create([
+        'contact_id' => $contact->id,
+        'bot_scenario_id' => $scenario->id,
+        'scenario_version' => $scenario->published_version,
+    ]);
+
+    test()->mock(\App\Services\Bot\AiAssistant::class)
+        ->shouldReceive('resume')->once()->andReturn(\App\Enums\AiOutcome::Back);
+    $messenger = test()->mock(\App\Services\DereuMessenger::class);
+    $messenger->shouldReceive('sendText')->never();
+    $messenger->shouldReceive('sendButtons')->once()
+        ->withArgs(fn ($to, string $text, array $buttons) => $text === 'Ремонт спецтехники. Вы мастер или ищете мастера?'
+            && array_column($buttons, 'title') === ['Я мастер', 'Я ищу мастера', 'Мои объявления']);
+
+    app(\App\Services\Bot\BotEngine::class)->handle($contact, new \App\Services\Bot\InboundMessage(text: 'Назад', replyId: 'collect_back'));
+
+    expect($session->fresh()->current_node_id)->toBe('menu_repair');
+});

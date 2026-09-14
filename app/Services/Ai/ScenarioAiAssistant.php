@@ -90,9 +90,14 @@ class ScenarioAiAssistant implements AiAssistant
         };
     }
 
+    /**
+     * Any release of the contact — through «continue» or one level up on
+     * «Назад» — leaves no working memory behind: the next block starts
+     * from nothing, whichever way this one ended.
+     */
     private function settle(BotSession $session, AiOutcome $outcome): AiOutcome
     {
-        if ($outcome === AiOutcome::Completed && $session->state !== null) {
+        if ($outcome !== AiOutcome::InProgress && $session->state !== null) {
             $session->update(['state' => null]);
         }
 

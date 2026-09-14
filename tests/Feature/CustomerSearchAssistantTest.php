@@ -111,12 +111,13 @@ function fullSearchIntake(array $overrides = []): array
     ], $overrides);
 }
 
-test('entering the block asks what the customer needs, with a way back to the menu', function () {
+test('entering the block asks what the customer needs, with «Назад» one level up', function () {
+    // Пока ничего не написано, единственная кнопка — «Назад» на экран
+    // раздела: «В меню» под первым сообщением читалось как «Далее».
     $messenger = fakeSearchMessenger();
     $messenger->shouldReceive('sendButtons')->once()->withArgs(
         fn (Contact $contact, string $text, array $buttons): bool => $text === 'Расскажите, что нужно и в каком городе — можно голосом. Например: «нужен кран 25 тонн, Шымкент».'
-            && $buttons[0]['id'] === CustomerSearchAssistant::BUTTON_MENU
-            && $buttons[0]['title'] === CustomerSearchAssistant::BUTTON_MENU_TITLE,
+            && $buttons === [['id' => CustomerSearchAssistant::BUTTON_BACK, 'title' => CustomerSearchAssistant::BUTTON_BACK_TITLE]],
     );
     $session = BotSession::factory()->waitingAt('search')->create(['state' => null]);
 
@@ -131,7 +132,7 @@ test('the search AI block sends the operator text instead of the built-in prompt
 
     fakeSearchMessenger()->shouldReceive('sendButtons')->once()
         ->withArgs(fn (Contact $to, string $text, array $buttons) => $text === 'Что ищете и где?'
-            && $buttons[0]['id'] === CustomerSearchAssistant::BUTTON_MENU);
+            && $buttons[0]['id'] === CustomerSearchAssistant::BUTTON_BACK);
 
     app(CustomerSearchAssistant::class)->start($session, customerAiNode() + ['text' => 'Что ищете и где?']);
 });
@@ -258,7 +259,7 @@ test('an undownloadable voice message asks to type the query without spending an
     $messenger = fakeSearchMessenger();
     $messenger->shouldReceive('sendButtons')->once()->withArgs(
         fn (Contact $contact, string $text, array $buttons): bool => str_contains($text, 'Голосовое не расшифровалось')
-            && $buttons[0]['id'] === CustomerSearchAssistant::BUTTON_MENU,
+            && $buttons[0]['id'] === CustomerSearchAssistant::BUTTON_BACK,
     );
 
     $session = searchSession();
@@ -280,7 +281,7 @@ test('a silent voice message asks to type the query', function () {
     $messenger = fakeSearchMessenger();
     $messenger->shouldReceive('sendButtons')->once()->withArgs(
         fn (Contact $contact, string $text, array $buttons): bool => str_contains($text, 'Голосовое не расшифровалось')
-            && $buttons[0]['id'] === CustomerSearchAssistant::BUTTON_MENU,
+            && $buttons[0]['id'] === CustomerSearchAssistant::BUTTON_BACK,
     );
 
     $outcome = app(ScenarioAiAssistant::class)
@@ -1693,7 +1694,7 @@ test('вход в ветку поиска водителя пишет вид в 
     $messenger = fakeSearchMessenger();
     $messenger->shouldReceive('sendButtons')->once()->withArgs(
         fn (Contact $contact, string $text, array $buttons): bool => str_contains($text, 'водитель или машинист')
-            && $buttons[0]['id'] === CustomerSearchAssistant::BUTTON_MENU,
+            && $buttons[0]['id'] === CustomerSearchAssistant::BUTTON_BACK,
     );
     $session = BotSession::factory()->waitingAt('search_driver')->create(['state' => null]);
 
@@ -1789,4 +1790,84 @@ test('a voice message the local guard blocked stops the turn instead of blaming 
         customerAiNode(),
         new InboundMessage(mediaType: ListingMediaType::Audio, mediaId: 'voice-blocked'),
     ))->toThrow(OutboundRequestBlocked::class);
+});
+
+test('«Назад» on an untouched search releases the customer one level up, silently', function (InboundMessage $back) {
+    SearchQueryExtractionAgent::fake()->preventStrayPrompts();
+    $session = searchSession();
+
+    $messenger = fakeSearchMessenger();
+    $messenger->shouldReceive('sendText')->never();
+    $messenger->shouldReceive('sendButtons')->never();
+    $messenger->shouldReceive('sendCtaUrl')->never();
+
+    $outcome = app(CustomerSearchAssistant::class)->resume($session, customerAiNode(), $back);
+
+    expect($outcome)->toBe(AiOutcome::Back);
+    SearchQueryExtractionAgent::assertNeverPrompted();
+})->with([
+    'кнопкой' => [new InboundMessage(text: 'Назад', replyId: 'search_back')],
+    'набранным названием' => [new InboundMessage(text: ' назад ')],
+]);
+
+test('an old «Назад» pressed after something was written ends the search like «В меню»', function () {
+    // Поиск подтверждения не спрашивает (см. ai-assistant.md, «Прерванная
+    // анкета»): старая кнопка ведёт в главное меню, как «В меню».
+    SearchQueryExtractionAgent::fake()->preventStrayPrompts();
+    $session = searchSession(['transcript' => ['нужен кран']]);
+
+    fakeSearchMessenger()->shouldReceive('sendText')->never();
+
+    $outcome = app(CustomerSearchAssistant::class)
+        ->resume($session, customerAiNode(), new InboundMessage(text: 'Назад', replyId: CustomerSearchAssistant::BUTTON_BACK));
+
+    expect($outcome)->toBe(AiOutcome::Completed);
+});
+
+test('через оркестратор «Назад» на нетронутом поиске обнуляет память блока', function () {
+    SearchQueryExtractionAgent::fake()->preventStrayPrompts();
+    $session = searchSession();
+
+    $outcome = app(ScenarioAiAssistant::class)
+        ->resume($session, customerAiNode(), new InboundMessage(text: 'Назад', replyId: CustomerSearchAssistant::BUTTON_BACK));
+
+    expect($outcome)->toBe(AiOutcome::Back)
+        ->and($session->fresh()->state)->toBeNull();
+});
+
+test('a service question before the first answer repeats the block greeting with «Назад»', function () {
+    // Повтор до первого вопроса — то же приглашение, что и на входе: та же
+    // фраза и та же кнопка, а не другой встроенный текст с «В меню».
+    SearchQueryExtractionAgent::fake([[
+        'subject' => null, 'location' => null, 'location_any' => false,
+        'clarifying_question' => '', 'user_intent' => 'service_question',
+    ]]);
+    $session = searchSession();
+
+    $messenger = fakeSearchMessenger();
+    $messenger->shouldReceive('sendText')->once()
+        ->withArgs(fn (Contact $to, string $text) => str_contains($text, 'оператор'));
+    $messenger->shouldReceive('sendButtons')->once()
+        ->withArgs(fn (Contact $to, string $text, array $buttons) => $text === 'Расскажите, что нужно и в каком городе — можно голосом. Например: «нужен кран 25 тонн, Шымкент».'
+            && $buttons === [['id' => CustomerSearchAssistant::BUTTON_BACK, 'title' => CustomerSearchAssistant::BUTTON_BACK_TITLE]]);
+
+    $outcome = app(CustomerSearchAssistant::class)
+        ->resume($session, customerAiNode(), new InboundMessage(text: 'а вы берёте комиссию?'));
+
+    expect($outcome)->toBe(AiOutcome::InProgress)
+        ->and($session->fresh()->state['transcript'])->toBe([]);
+});
+
+test('a photo as the first message asks for text and keeps «Назад»', function () {
+    SearchQueryExtractionAgent::fake()->preventStrayPrompts();
+
+    fakeSearchMessenger()->shouldReceive('sendButtons')->once()->withArgs(
+        fn (Contact $contact, string $text, array $buttons): bool => str_contains($text, 'Напишите, пожалуйста, текстом')
+            && $buttons[0]['id'] === CustomerSearchAssistant::BUTTON_BACK,
+    );
+
+    $outcome = app(CustomerSearchAssistant::class)
+        ->resume(searchSession(), customerAiNode(), new InboundMessage(mediaType: ListingMediaType::Photo, mediaId: 'img-1'));
+
+    expect($outcome)->toBe(AiOutcome::InProgress);
 });

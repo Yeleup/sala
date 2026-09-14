@@ -94,6 +94,15 @@ class CustomerSearchAssistant
 
     public const string BUTTON_MENU_TITLE = 'В меню';
 
+    /**
+     * The exit of an untouched search — one level up, to the menu the
+     * branch hangs under (AiOutcome::Back). Shown only while nothing has
+     * been written; see exitButton().
+     */
+    public const string BUTTON_BACK = 'search_back';
+
+    public const string BUTTON_BACK_TITLE = 'Назад';
+
     /** WhatsApp caps URL-button titles at 20 characters. */
     public const string CATALOG_BUTTON_RESULTS = 'Все варианты';
 
@@ -133,7 +142,7 @@ class CustomerSearchAssistant
         $this->messenger->sendButtons(
             $session->contact,
             trim((string) ($node['text'] ?? '')) ?: $this->searchGreeting($kind),
-            [['id' => self::BUTTON_MENU, 'title' => self::BUTTON_MENU_TITLE]],
+            $this->exitButton($session->state),
         );
 
         return AiOutcome::InProgress;
@@ -160,8 +169,18 @@ class CustomerSearchAssistant
         $state = is_array($session->state) ? $session->state : [];
         $state += $this->defaultState();
 
+        // «Назад» — the untouched search's own exit, one level up to the
+        // menu the branch hangs under. Once anything is written it can only
+        // be an old button from an earlier message, and then it means what
+        // «В меню» means: the search asks no confirmation, so it just ends.
+        if ($this->matchesBackButton($message)) {
+            return $this->hasProgress($state) ? AiOutcome::Completed : AiOutcome::Back;
+        }
+
         // «В меню» — by button tap or its typed name — releases the contact
-        // to the main dialog regardless of the phase.
+        // to the main dialog regardless of the phase. On an untouched search
+        // the button is no longer shown (see exitButton()) — this branch
+        // then serves a typed title or an older button only.
         if ($this->matchesMenuButton($message)) {
             return AiOutcome::Completed;
         }
@@ -222,7 +241,7 @@ class CustomerSearchAssistant
                 $this->messenger->sendButtons(
                     $session->contact,
                     'Голосовое не расшифровалось — бывает. Напишите, пожалуйста, текстом: что нужно и в каком городе?',
-                    [['id' => self::BUTTON_MENU, 'title' => self::BUTTON_MENU_TITLE]],
+                    $this->exitButton($state),
                 );
 
                 return AiOutcome::InProgress;
@@ -234,7 +253,7 @@ class CustomerSearchAssistant
             $this->messenger->sendButtons(
                 $session->contact,
                 'Напишите, пожалуйста, текстом: что нужно и в каком городе?',
-                [['id' => self::BUTTON_MENU, 'title' => self::BUTTON_MENU_TITLE]],
+                $this->exitButton($state),
             );
 
             return AiOutcome::InProgress;
@@ -619,12 +638,15 @@ class CustomerSearchAssistant
 
         $question = trim((string) ($state['last_question'] ?? ''));
         $greeting = trim((string) ($node['text'] ?? ''))
-            ?: sprintf('Что вам нужно и в каком городе, %s?', self::QUERY_EXAMPLE);
+            ?: $this->searchGreeting(ListingKind::fromNode($node['kind'] ?? null));
 
+        // A re-sent question keeps «В меню»: a question means something was
+        // said, and «Назад» under it would promise to undo an answer, which
+        // the search cannot do. Only the greeting itself carries «Назад».
         $this->messenger->sendButtons(
             $session->contact,
             $question !== '' ? $question : $greeting,
-            [['id' => self::BUTTON_MENU, 'title' => self::BUTTON_MENU_TITLE]],
+            $question !== '' ? [['id' => self::BUTTON_MENU, 'title' => self::BUTTON_MENU_TITLE]] : $this->exitButton($state),
         );
     }
 
@@ -810,6 +832,46 @@ class CustomerSearchAssistant
     {
         return $message->replyId === self::BUTTON_MENU
             || mb_strtolower(trim((string) $message->text)) === mb_strtolower(self::BUTTON_MENU_TITLE);
+    }
+
+    private function matchesBackButton(InboundMessage $message): bool
+    {
+        return $message->replyId === self::BUTTON_BACK
+            || mb_strtolower(trim((string) $message->text)) === mb_strtolower(self::BUTTON_BACK_TITLE);
+    }
+
+    /**
+     * Whether the search has moved past its first message: something was
+     * said, a question was asked, a place list or a legacy result list is
+     * open. Mirrors the collector's hasProgress() for the one decision it
+     * gates here — which exit the waiting message carries.
+     *
+     * @param  array<string, mixed>  $state
+     */
+    private function hasProgress(array $state): bool
+    {
+        return ($state['transcript'] ?? []) !== []
+            || ($state['query'] ?? null) !== null
+            || ($state['last_question'] ?? null) !== null
+            || ($state['location_candidates'] ?? []) !== []
+            || ($state['offered'] ?? []) !== [];
+    }
+
+    /**
+     * The exit an ordinary waiting message carries. An untouched search
+     * offers «Назад» — one level up, to the menu the branch hangs under:
+     * nothing is lost there, and «В меню» under the block's first message
+     * read as «Далее» (audit 2026-09-14: 48 of 77 presses landed on a
+     * block's invitation). Anything written switches it to «В меню».
+     *
+     * @param  array<string, mixed>  $state
+     * @return list<array{id: string, title: string}>
+     */
+    private function exitButton(array $state): array
+    {
+        return $this->hasProgress($state)
+            ? [['id' => self::BUTTON_MENU, 'title' => self::BUTTON_MENU_TITLE]]
+            : [['id' => self::BUTTON_BACK, 'title' => self::BUTTON_BACK_TITLE]];
     }
 
     /**

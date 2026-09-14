@@ -204,10 +204,12 @@ function fakeMediaDownload(string $mediaId = 'wamid-doc'): void
 test('entering the AI block greets the supplier and keeps the turn', function () {
     $session = collectorSession();
 
+    // Пока ничего не написано, единственная кнопка — «Назад» на экран
+    // раздела: «В меню» под первым сообщением читалось как «Далее».
     fakeCollectorMessenger()->shouldReceive('sendButtons')->once()
         ->withArgs(fn (Contact $to, string $text, array $buttons) => $to->is($session->contact)
             && str_contains($text, 'Расскажите')
-            && $buttons === [['id' => SupplierListingCollector::BUTTON_MENU, 'title' => SupplierListingCollector::BUTTON_MENU_TITLE]]);
+            && $buttons === [['id' => SupplierListingCollector::BUTTON_BACK, 'title' => SupplierListingCollector::BUTTON_BACK_TITLE]]);
 
     $outcome = app(SupplierListingCollector::class)->start($session, supplierAiNode());
 
@@ -220,7 +222,7 @@ test('the AI block sends the operator text instead of the built-in greeting', fu
 
     fakeCollectorMessenger()->shouldReceive('sendButtons')->once()
         ->withArgs(fn (Contact $to, string $text, array $buttons) => $text === 'Что сдаёте? Напишите или наговорите.'
-            && $buttons === [['id' => SupplierListingCollector::BUTTON_MENU, 'title' => SupplierListingCollector::BUTTON_MENU_TITLE]]);
+            && $buttons === [['id' => SupplierListingCollector::BUTTON_BACK, 'title' => SupplierListingCollector::BUTTON_BACK_TITLE]]);
 
     app(SupplierListingCollector::class)->start(
         $session,
@@ -2946,4 +2948,203 @@ test('a photo the local guard blocked stops the turn instead of being treated as
     ))->toThrow(OutboundRequestBlocked::class);
 
     ListingExtractionAgent::assertNeverPrompted();
+});
+
+test('приглашения ремонта и водителя говорят, как отвечать', function (array $node) {
+    // 33 из 40 нажатий «В меню» на приглашении пришлись на ремонт: у аренды
+    // и у поиска «можно голосом» уже было, у ремонта и водителя — нет.
+    fakeCollectorMessenger()->shouldReceive('sendButtons')->once()
+        ->withArgs(fn (Contact $to, string $text) => str_ends_with($text, 'Напишите или наговорите голосом.'));
+
+    app(SupplierListingCollector::class)->start(collectorSession(), $node);
+})->with([
+    'ремонт' => [['id' => 'collect', 'type' => 'ai', 'task' => 'collect_listing', 'kind' => 'repair']],
+    'водитель' => [['id' => 'collect', 'type' => 'ai', 'task' => 'collect_listing', 'kind' => 'driver']],
+]);
+
+test('«Назад» on an untouched questionnaire releases the supplier one level up, silently', function (InboundMessage $back) {
+    ListingExtractionAgent::fake()->preventStrayPrompts();
+    $session = collectorSession();
+
+    $messenger = fakeCollectorMessenger();
+    $messenger->shouldReceive('sendText')->never();
+    $messenger->shouldReceive('sendButtons')->never();
+    $messenger->shouldReceive('sendCtaUrl')->never();
+
+    $outcome = app(SupplierListingCollector::class)->resume($session, supplierAiNode(), $back);
+
+    expect($outcome)->toBe(AiOutcome::Back)
+        ->and(Listing::count())->toBe(0)
+        ->and($session->fresh()->paused_state)->toBeNull();
+    ListingExtractionAgent::assertNeverPrompted();
+})->with([
+    'кнопкой' => [new InboundMessage(text: 'Назад', replyId: 'collect_back')],
+    'набранным названием' => [new InboundMessage(text: ' назад ')],
+]);
+
+test('an old «Назад» pressed in a non-empty questionnaire asks to confirm, like «В меню»', function () {
+    // Кнопка из прежнего сообщения: написанное уже есть, терять его молча
+    // нельзя — тот же вопрос «Прервать анкету?», что и у «В меню».
+    ListingExtractionAgent::fake()->preventStrayPrompts();
+    $session = collectorSession(['transcript' => ['Сдаю экскаватор']]);
+
+    fakeCollectorMessenger()->shouldReceive('sendButtons')->once()
+        ->withArgs(fn (Contact $to, string $text, array $buttons) => array_column($buttons, 'title') === ['Да, в меню', 'Продолжить анкету']);
+
+    $outcome = app(SupplierListingCollector::class)->resume(
+        $session,
+        supplierAiNode(),
+        new InboundMessage(text: 'Назад', replyId: SupplierListingCollector::BUTTON_BACK),
+    );
+
+    expect($outcome)->toBe(AiOutcome::InProgress)
+        ->and($session->fresh()->state['exit_confirm'])->toBeTrue();
+});
+
+test('«Назад» while the exit confirmation is open exits like a second «В меню»', function () {
+    ListingExtractionAgent::fake()->preventStrayPrompts();
+    $session = collectorSession(['exit_confirm' => true, 'transcript' => ['Сдаю экскаватор']]);
+
+    fakeCollectorMessenger()->shouldReceive('sendText')->never();
+
+    $outcome = app(SupplierListingCollector::class)->resume(
+        $session,
+        supplierAiNode(),
+        new InboundMessage(text: 'Назад', replyId: SupplierListingCollector::BUTTON_BACK),
+    );
+
+    expect($outcome)->toBe(AiOutcome::Completed)
+        ->and($session->fresh()->paused_state)->not->toBeNull();
+});
+
+test('«Продолжить анкету» with progress but no open question re-sends the greeting with «В меню»', function () {
+    // Написанное есть, вопроса ещё не было (медиа без подписи): выход из
+    // непустой анкеты — «В меню», «Назад» только у нетронутой.
+    ListingExtractionAgent::fake()->preventStrayPrompts();
+    $session = collectorSession(['exit_confirm' => true, 'transcript' => ['Сдаю экскаватор'], 'last_question' => null]);
+
+    fakeCollectorMessenger()->shouldReceive('sendButtons')->once()
+        ->withArgs(fn (Contact $to, string $text, array $buttons) => str_contains($text, 'Расскажите')
+            && array_column($buttons, 'id') === [SupplierListingCollector::BUTTON_MENU]);
+
+    $outcome = app(SupplierListingCollector::class)->resume(
+        $session,
+        supplierAiNode(),
+        new InboundMessage(text: 'Продолжить анкету', replyId: SupplierListingCollector::BUTTON_EXIT_STAY),
+    );
+
+    expect($outcome)->toBe(AiOutcome::InProgress)
+        ->and($session->fresh()->state['exit_confirm'])->toBeFalse();
+});
+
+test('a service question before the first answer repeats the invitation with «Назад»', function () {
+    // Вопрос про сервис изымается из стенограммы — анкета остаётся
+    // нетронутой, и повтор приглашения несёт ту же кнопку, что и оно само.
+    ListingExtractionAgent::fake([repairExtraction(['user_intent' => 'service_question'])]);
+    $session = collectorSession(['kind' => 'repair']);
+
+    $messenger = fakeCollectorMessenger();
+    $messenger->shouldReceive('sendText')->once();   // ответ на вопрос про сервис
+    $messenger->shouldReceive('sendButtons')->once()
+        ->withArgs(fn ($to, string $text, array $buttons) => str_contains($text, 'Расскажите о себе')
+            && $buttons === [['id' => SupplierListingCollector::BUTTON_BACK, 'title' => SupplierListingCollector::BUTTON_BACK_TITLE]]);
+
+    $outcome = app(SupplierListingCollector::class)->resume($session, repairAiNode(), new InboundMessage(text: 'это платно?'));
+
+    expect($outcome)->toBe(AiOutcome::InProgress)
+        ->and($session->fresh()->state['transcript'])->toBe([]);
+});
+
+test('an unreadable first message keeps «Назад» — nothing has been written yet', function () {
+    ListingExtractionAgent::fake()->preventStrayPrompts();
+    $session = collectorSession();
+
+    test()->mock(DereuMediaDownloader::class)
+        ->shouldReceive('download')->once()->with('media-403')
+        ->andThrow(new RuntimeException('403 Медиа принадлежит другой компании'));
+
+    fakeCollectorMessenger()->shouldReceive('sendButtons')->once()
+        ->withArgs(fn (Contact $to, string $text, array $buttons) => str_contains($text, 'Сообщение не разобралось')
+            && $buttons === [['id' => SupplierListingCollector::BUTTON_BACK, 'title' => SupplierListingCollector::BUTTON_BACK_TITLE]]);
+
+    app(ScenarioAiAssistant::class)
+        ->resume($session, supplierAiNode(), new InboundMessage(mediaType: ListingMediaType::Audio, mediaId: 'media-403'));
+});
+
+test('a silent voice as the first message keeps «Назад» and leaves no draft behind', function () {
+    // Скачалось, но не распозналось: по правилу такое аудио к черновику не
+    // прикрепляется — анкета остаётся нетронутой, и её выход остаётся «Назад».
+    Transcription::fake(['']);
+    ListingExtractionAgent::fake()->preventStrayPrompts();
+    $session = collectorSession();
+
+    test()->mock(DereuMediaDownloader::class)
+        ->shouldReceive('download')->once()->with('voice-silent')
+        ->andReturn(['contents' => 'OGG-BYTES', 'mime_type' => 'audio/ogg']);
+
+    fakeCollectorMessenger()->shouldReceive('sendButtons')->once()
+        ->withArgs(fn (Contact $to, string $text, array $buttons) => str_contains($text, 'Сообщение не разобралось')
+            && $buttons === [['id' => SupplierListingCollector::BUTTON_BACK, 'title' => SupplierListingCollector::BUTTON_BACK_TITLE]]);
+
+    $outcome = app(ScenarioAiAssistant::class)
+        ->resume($session, supplierAiNode(), new InboundMessage(mediaType: ListingMediaType::Audio, mediaId: 'voice-silent'));
+
+    expect($outcome)->toBe(AiOutcome::InProgress)
+        ->and(Listing::count())->toBe(0)
+        ->and($session->fresh()->state['draft_id'])->toBeNull();
+});
+
+test('через оркестратор «Назад» на нетронутой анкете обнуляет память блока', function () {
+    ListingExtractionAgent::fake()->preventStrayPrompts();
+    $session = collectorSession();
+
+    $outcome = app(ScenarioAiAssistant::class)
+        ->resume($session, supplierAiNode(), new InboundMessage(text: 'Назад', replyId: SupplierListingCollector::BUTTON_BACK));
+
+    expect($outcome)->toBe(AiOutcome::Back)
+        ->and($session->fresh()->state)->toBeNull();
+});
+
+test('a pre-filled name keeps the greeting on «Назад», and «Назад» then leaves silently', function () {
+    // Подставленное ботом имя — не прогресс (кейс 322): анкета нетронута.
+    ListingExtractionAgent::fake()->preventStrayPrompts();
+    $session = collectorSession();
+    $session->contact->update(['display_name' => 'Ерлан']);
+
+    $messenger = fakeCollectorMessenger();
+    $messenger->shouldReceive('sendButtons')->once()
+        ->withArgs(fn ($to, string $text, array $buttons) => array_column($buttons, 'id') === [SupplierListingCollector::BUTTON_BACK]);
+    $messenger->shouldReceive('sendText')->never();
+
+    $collector = app(SupplierListingCollector::class);
+    $collector->start($session, repairAiNode());
+
+    expect($session->fresh()->state['fields']['person_name'])->toBe('Ерлан');
+
+    $outcome = $collector->resume(
+        $session->fresh(),
+        repairAiNode(),
+        new InboundMessage(text: 'Назад', replyId: SupplierListingCollector::BUTTON_BACK),
+    );
+
+    expect($outcome)->toBe(AiOutcome::Back)
+        ->and(Listing::count())->toBe(0)
+        ->and($session->fresh()->paused_state)->toBeNull();
+});
+
+test('an old «Назад» at the summary asks to confirm, like «В меню»', function () {
+    ListingExtractionAgent::fake()->preventStrayPrompts();
+    $session = collectorSession(['phase' => 'confirming', 'transcript' => ['Сдаю экскаватор, Алматы, 10000']]);
+
+    fakeCollectorMessenger()->shouldReceive('sendButtons')->once()
+        ->withArgs(fn ($to, string $text, array $buttons) => array_column($buttons, 'title') === ['Да, в меню', 'Продолжить анкету']);
+
+    $outcome = app(SupplierListingCollector::class)->resume(
+        $session,
+        supplierAiNode(),
+        new InboundMessage(text: 'Назад', replyId: SupplierListingCollector::BUTTON_BACK),
+    );
+
+    expect($outcome)->toBe(AiOutcome::InProgress)
+        ->and($session->fresh()->state['exit_confirm'])->toBeTrue();
 });

@@ -399,11 +399,13 @@ class BotEngine
                     $entering = $carried;
                     $carried = null;
 
-                    if ($this->aiAssistant->start($session, $node, $entering) !== AiOutcome::Completed) {
+                    $outcome = $this->aiAssistant->start($session, $node, $entering);
+
+                    if ($outcome === AiOutcome::InProgress) {
                         return;
                     }
 
-                    $nodeId = $definition->target($node['id'], ScenarioDefinition::OUTPUT_CONTINUE);
+                    $nodeId = $this->nodeAfterAi($definition, $node, $outcome);
                     break;
 
                 case BotNodeType::End:
@@ -1014,13 +1016,32 @@ class BotEngine
      */
     private function resumeAi(BotSession $session, Contact $contact, ScenarioDefinition $definition, array $node, InboundMessage $message): void
     {
-        if ($this->aiAssistant->resume($session, $node, $message) === AiOutcome::Completed) {
-            $this->advance($session, $contact, $definition, $definition->target($node['id'], ScenarioDefinition::OUTPUT_CONTINUE));
+        $outcome = $this->aiAssistant->resume($session, $node, $message);
+
+        if ($outcome === AiOutcome::InProgress) {
+            $session->save();
 
             return;
         }
 
-        $session->save();
+        $this->advance($session, $contact, $definition, $this->nodeAfterAi($definition, $node, $outcome));
+    }
+
+    /**
+     * Where a released contact goes next. «Назад» from the block's first
+     * message leads one level up — to the menu whose option brought them
+     * into the block — and only a block no menu leads into falls through
+     * its «continue» output the way a completed block does.
+     *
+     * @param  array<string, mixed>  $node
+     */
+    private function nodeAfterAi(ScenarioDefinition $definition, array $node, AiOutcome $outcome): ?string
+    {
+        $continue = $definition->target($node['id'], ScenarioDefinition::OUTPUT_CONTINUE);
+
+        return $outcome === AiOutcome::Back
+            ? ($definition->parentMenuOf((string) $node['id']) ?? $continue)
+            : $continue;
     }
 
     /**

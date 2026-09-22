@@ -23,10 +23,13 @@ use Throwable;
  * Outbound WhatsApp messages through Dereu (company api_key auth).
  *
  * Payloads are Meta Cloud API message objects passed through by Dereu;
- * delivery statuses arrive asynchronously via the webhook. Free session
+ * delivery statuses arrive asynchronously via the webhook. Session
  * messages are deliverable only inside the contact's 24-hour window —
  * sending one outside it throws SessionWindowClosed; outside the window
  * use an approved Template Message (sendTemplate / sendTextOrTemplate).
+ * Every journaled send carries a cost estimate: templates by category,
+ * session messages by the service rate once the month's free tier is
+ * used up (see WhatsappCostEstimator).
  */
 class DereuMessenger
 {
@@ -249,7 +252,7 @@ class DereuMessenger
             'dereu_message_id' => $response->json('id'),
             'status' => ChannelMessageStatus::Queued,
             'template_fallback' => $fallback?->toArray(),
-            ...($template === null ? [] : [
+            ...($template === null ? $this->costs->estimateSession() : [
                 'whatsapp_template_id' => $template->id,
                 ...$this->costs->estimate($template->category),
             ]),

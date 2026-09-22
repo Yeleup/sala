@@ -18,9 +18,12 @@ use Illuminate\Support\Collection;
  * One WhatsApp message in the channel journal — from the contact, from the
  * bot or from the operator's own phone, with the raw payload and the
  * delivery lifecycle. Outbound rows are matched
- * to Dereu delivery webhooks by dereu_message_id. Template messages carry
- * a tariff snapshot fixed at send time (cost_status = null means the row
- * predates cost accounting); session messages have no cost columns filled.
+ * to Dereu delivery webhooks by dereu_message_id. The bot's messages carry
+ * a tariff snapshot fixed at send time — templates by their Meta category,
+ * session messages by the service rate and their place in the month's free
+ * tier. cost_status = null means the row predates cost accounting for its
+ * kind (session messages got it on 2026-09-22) or is not the bot's: the
+ * contact's messages and the operator's from the phone app cost nothing.
  */
 #[Fillable([
     'contact_id', 'direction', 'author', 'type', 'text', 'payload', 'wamid',

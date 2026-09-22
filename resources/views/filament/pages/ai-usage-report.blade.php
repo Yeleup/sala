@@ -41,6 +41,8 @@
     @php
         $summary = $this->summary();
         $whatsapp = $this->whatsappSummary();
+        $session = $this->sessionSummary();
+        $tier = $this->freeTier();
     @endphp
 
     <div class="aiur">
@@ -173,8 +175,8 @@
         </div>
 
         <div class="aiur-subhead">
-            WhatsApp
-            <span class="aiur-note">Шаблонные сообщения: в суммы входят только доставленные/прочитанные — Meta списывает за доставленное сообщение.</span>
+            WhatsApp — итого ${{ $this->whatsappTotalCost() }}
+            <span class="aiur-note">Сообщения бота: в суммы входят только доставленные/прочитанные — Meta списывает за доставленное сообщение. Сообщения оператора из приложения WhatsApp бесплатны и здесь не считаются.</span>
         </div>
 
         <div class="aiur-cards">
@@ -199,25 +201,70 @@
             </div>
         </div>
 
+        {{-- Сессионные ответы бота: с 01.10.2026 Meta берёт за них деньги
+             сверх бесплатного месячного лимита на номер. --}}
+        <div class="aiur-cards">
+            <div class="aiur-card">
+                <div class="aiur-kpi-label">Сессионных доставлено</div>
+                <div class="aiur-kpi-value">{{ $session['delivered'] }}</div>
+            </div>
+            <div class="aiur-card">
+                <div class="aiur-kpi-label">Из них сверх бесплатного лимита</div>
+                <div class="aiur-kpi-value">{{ $session['paid'] }}</div>
+            </div>
+            <div class="aiur-card">
+                <div class="aiur-kpi-label">Бесплатный лимит, текущий месяц</div>
+                @if ($tier['limit'] !== null)
+                    <div class="aiur-kpi-value {{ $tier['used'] >= $tier['limit'] ? 'aiur-danger' : ($tier['used'] >= $tier['limit'] * 0.8 ? 'aiur-warn' : '') }}">
+                        {{ number_format($tier['used'], 0, ',', ' ') }} из {{ number_format($tier['limit'], 0, ',', ' ') }}
+                    </div>
+                    <div class="aiur-kpi-note">сессионных на номер; сверх лимита — ${{ number_format((float) $tier['rate'], 4) }} за сообщение</div>
+                @elseif ($tier['rate'] === null)
+                    <div class="aiur-kpi-value">—</div>
+                    <div class="aiur-kpi-note aiur-warn">тариф сессионных не задан</div>
+                @elseif ($tier['rate'] > 0)
+                    <div class="aiur-kpi-value">нет</div>
+                    <div class="aiur-kpi-note">каждое сессионное — ${{ number_format($tier['rate'], 4) }}</div>
+                @else
+                    <div class="aiur-kpi-value">—</div>
+                    <div class="aiur-kpi-note">
+                        @if ($tier['next_from'] !== null && $tier['next_limit'] !== null && $tier['next_rate'] !== null)
+                            Сессионные сейчас бесплатны; с {{ $tier['next_from'] }} — {{ number_format($tier['next_limit'], 0, ',', ' ') }} в месяц бесплатно, дальше ${{ number_format($tier['next_rate'], 4) }} за сообщение
+                        @else
+                            Сессионные сейчас бесплатны
+                        @endif
+                    </div>
+                @endif
+            </div>
+            <div class="aiur-card">
+                <div class="aiur-kpi-label">Расходы на сессионные (оценка)</div>
+                <div class="aiur-kpi-value">${{ $session['cost_usd'] }}</div>
+                @if ($session['unknown_cost'] > 0)
+                    <div class="aiur-kpi-note aiur-warn">{{ $session['unknown_cost'] }} сообщение(й) без тарифа — не входят в сумму</div>
+                @endif
+            </div>
+        </div>
+
         <div class="aiur-duo">
-            <x-filament::section heading="Шаблоны по дням">
+            <x-filament::section heading="WhatsApp по дням">
                 <table class="aiur-table">
                     <thead>
                         <tr>
-                            <th>Дата</th><th class="is-num">Отправлено</th><th class="is-num">Доставлено</th><th class="is-num">Ошибок</th><th class="is-num">Расход, $</th>
+                            <th>Дата</th><th class="is-num">Шаблонов</th><th class="is-num">Доставлено</th><th class="is-num">Ошибок</th><th class="is-num">Сессионных дост.</th><th class="is-num">Расход, $</th>
                         </tr>
                     </thead>
                     <tbody>
                         @forelse ($this->whatsappByDay() as $row)
                             <tr>
                                 <td>{{ $row->day }}</td>
-                                <td class="is-num">{{ $row->sent }}</td>
-                                <td class="is-num">{{ $row->billable }}</td>
-                                <td class="is-num">{{ $row->failed }}</td>
+                                <td class="is-num">{{ $row->templates_sent }}</td>
+                                <td class="is-num">{{ $row->templates_delivered }}</td>
+                                <td class="is-num">{{ $row->templates_failed }}</td>
+                                <td class="is-num">{{ $row->session_delivered }}</td>
                                 <td class="is-num">{{ number_format((float) $row->cost, 4) }}</td>
                             </tr>
                         @empty
-                            <tr><td colspan="5" class="is-muted">За период шаблонов не отправлялось.</td></tr>
+                            <tr><td colspan="6" class="is-muted">За период бот ничего не отправлял.</td></tr>
                         @endforelse
                     </tbody>
                 </table>

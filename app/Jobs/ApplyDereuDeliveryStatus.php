@@ -9,6 +9,7 @@ use App\Models\WhatsappTemplate;
 use App\Services\DereuMessenger;
 use App\Services\ListingRenewalPollFailureHandler;
 use App\Services\ScenarioRunDeliveryFailureHandler;
+use App\Services\WhatsappCostEstimator;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
 use Illuminate\Support\Facades\Log;
@@ -30,7 +31,7 @@ class ApplyDereuDeliveryStatus implements ShouldQueue
 
     public function __construct(public DereuWebhookEvent $event) {}
 
-    public function handle(ListingRenewalPollFailureHandler $renewalPolls, ScenarioRunDeliveryFailureHandler $runs): void
+    public function handle(ListingRenewalPollFailureHandler $renewalPolls, ScenarioRunDeliveryFailureHandler $runs, WhatsappCostEstimator $costs): void
     {
         $event = $this->event->fresh();
 
@@ -51,6 +52,8 @@ class ApplyDereuDeliveryStatus implements ShouldQueue
             ->where('dereu_message_id', $dereuMessageId)
             ->first();
 
+        $wasFailed = $entry?->status === ChannelMessageStatus::Failed;
+
         $entry?->applyDeliveryStatus(
             $status,
             wamid: $event->payload['wamid'] ?? null,
@@ -67,6 +70,12 @@ class ApplyDereuDeliveryStatus implements ShouldQueue
                 'contact_id' => $entry?->contact_id,
                 'reason' => $event->payload['reason'] ?? null,
             ]);
+
+            // Meta bills delivered messages only: an undelivered free-tier
+            // reply hands its slot to the first paid one after it.
+            if ($entry !== null && ! $wasFailed) {
+                $costs->releaseFreeSlot($entry);
+            }
 
             $resent = $entry !== null
                 && $this->resendThroughTemplateFallback($entry, (string) ($event->payload['reason'] ?? ''));

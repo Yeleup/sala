@@ -147,10 +147,11 @@
                             <div class="wa-header-sub">+{{ ltrim($contact->phone, '+') }}</div>
                         @endif
                     </div>
-                    <div class="wa-header-stats" title="Суммы — оценка по сохранённым тарифам; шаблоны считаются только доставленные/прочитанные.">
+                    <div class="wa-header-stats" title="Суммы — оценка по сохранённым тарифам; сообщения считаются только доставленные/прочитанные, сессионные — только сверх бесплатного месячного лимита.">
                         <div>
                             AI: ${{ $totals['ai_cost'] }}@if ($totals['ai_unknown'] > 0) <span class="wa-warn">(без тарифа: {{ $totals['ai_unknown'] }})</span>@endif
                             · Шаблоны: ${{ $totals['template_cost'] }}@if ($totals['template_unknown'] > 0) <span class="wa-warn">(без тарифа: {{ $totals['template_unknown'] }})</span>@endif
+                            · Сессионные: ${{ $totals['session_cost'] }}@if ($totals['session_unknown'] > 0) <span class="wa-warn">(без тарифа: {{ $totals['session_unknown'] }})</span>@endif
                         </div>
                         <div>вх: {{ $totals['inbound'] }} · бот: {{ $totals['bot'] }} · оператор: {{ $totals['operator'] }} · шаблонов: {{ $totals['templates'] }} · ошибок: {{ $totals['failed'] }}</div>
                     </div>
@@ -233,12 +234,19 @@
                             @endif
 
                             <div class="wa-meta">
-                                @if ($message->type === 'template' && $message->cost_status !== null)
+                                {{-- Недоставленное Meta не списывает — цены у него нет. --}}
+                                @if ($message->status === \App\Enums\ChannelMessageStatus::Failed)
+                                    {{-- без цены --}}
+                                @elseif ($message->type === 'template' && $message->cost_status !== null)
                                     @if ($message->cost_status === \App\Enums\AiCostStatus::Estimated)
                                         <span>${{ number_format((float) $message->estimated_cost_usd, 4) }} · {{ $message->pricing_snapshot['category'] ?? '' }}</span>
                                     @else
                                         <span class="wa-warn">тариф не задан</span>
                                     @endif
+                                {{-- Сессионное сообщение помечается, только когда стоит денег:
+                                     в пределах бесплатного лимита метка была бы у каждого ответа бота. --}}
+                                @elseif ($message->type !== 'template' && $message->cost_status === \App\Enums\AiCostStatus::Estimated && (float) $message->estimated_cost_usd > 0)
+                                    <span>${{ number_format((float) $message->estimated_cost_usd, 4) }} · {{ isset($message->pricing_snapshot['free_tier']) ? 'сверх лимита' : 'service' }}</span>
                                 @endif
 
                                 <span>{{ \App\Support\DisplayTime::local($message->created_at)->format('H:i') }}</span>

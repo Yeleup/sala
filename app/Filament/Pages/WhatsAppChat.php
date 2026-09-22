@@ -34,14 +34,15 @@ use Livewire\Attributes\Url;
  * operator has taken it over. Inbound
  * messages expose the AI operations they triggered (prompt, response,
  * tokens, money); the thread header shows what the contact has cost so
- * far. Money follows the delivered-based rule: template spend counts only
- * delivered/read messages (Meta bills per delivered template message).
+ * far. Money follows the delivered-based rule: template and session spend
+ * counts only delivered/read messages (Meta bills per delivered message);
+ * session messages cost money only beyond the month's free tier.
  */
 class WhatsAppChat extends Page
 {
     private const PAGE_SIZE = 50;
 
-    /** Statuses Meta actually bills a template message for. */
+    /** Statuses Meta actually bills a message for. */
     private const BILLABLE_STATUSES = [ChannelMessageStatus::Delivered, ChannelMessageStatus::Read];
 
     private const CONFIDENCE_VERDICTS = [
@@ -427,10 +428,11 @@ class WhatsAppChat extends Page
     }
 
     /**
-     * What the selected contact has cost so far — AI calls plus delivered
-     * template messages — and the dialog's message counters.
+     * What the selected contact has cost so far — AI calls plus the bot's
+     * delivered template and session messages — and the dialog's message
+     * counters.
      *
-     * @return array{ai_cost: string, ai_unknown: int, template_cost: string, template_unknown: int, inbound: int, bot: int, operator: int, templates: int, failed: int}
+     * @return array{ai_cost: string, ai_unknown: int, template_cost: string, template_unknown: int, session_cost: string, session_unknown: int, inbound: int, bot: int, operator: int, templates: int, failed: int}
      */
     public function contactTotals(): array
     {
@@ -454,6 +456,8 @@ class WhatsAppChat extends Page
             ->selectRaw('count(*) filter (where status = ?) as failed', [ChannelMessageStatus::Failed->value])
             ->selectRaw("coalesce(sum(estimated_cost_usd) filter (where type = 'template' and status in (?, ?)), 0) as template_cost", $billable)
             ->selectRaw("count(*) filter (where type = 'template' and cost_status = ? and status in (?, ?)) as template_unknown", [AiCostStatus::Unknown->value, ...$billable])
+            ->selectRaw("coalesce(sum(estimated_cost_usd) filter (where type <> 'template' and author = ? and status in (?, ?)), 0) as session_cost", [ChannelMessageAuthor::Bot->value, ...$billable])
+            ->selectRaw("count(*) filter (where type <> 'template' and author = ? and cost_status = ? and status in (?, ?)) as session_unknown", [ChannelMessageAuthor::Bot->value, AiCostStatus::Unknown->value, ...$billable])
             ->first();
 
         return [
@@ -461,6 +465,8 @@ class WhatsAppChat extends Page
             'ai_unknown' => (int) $ai->unknown_cost,
             'template_cost' => number_format((float) $messages->template_cost, 4),
             'template_unknown' => (int) $messages->template_unknown,
+            'session_cost' => number_format((float) $messages->session_cost, 4),
+            'session_unknown' => (int) $messages->session_unknown,
             'inbound' => (int) $messages->inbound,
             'bot' => (int) $messages->bot,
             'operator' => (int) $messages->operator,

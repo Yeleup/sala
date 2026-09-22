@@ -6,12 +6,15 @@ use App\Enums\AiAttemptStatus;
 use App\Enums\AiCostStatus;
 use App\Enums\AiOperationType;
 use App\Enums\ChannelDirection;
+use App\Enums\ChannelMessageAuthor;
 use App\Enums\ChannelMessageStatus;
 use App\Enums\WhatsappTemplateCategory;
 use App\Models\AiAttempt;
 use App\Models\ChannelMessage;
+use App\Services\WhatsappCostEstimator;
 use App\Support\DisplayTime;
 use BackedEnum;
+use Carbon\CarbonImmutable;
 use Filament\Pages\Page;
 use Filament\Support\Icons\Heroicon;
 use Illuminate\Database\Eloquent\Builder;
@@ -21,15 +24,17 @@ use Livewire\Attributes\Url;
 /**
  * Operator expense report: the AI audit journal (money by day, model,
  * function and contact, plus request counts, errors and latency) and the
- * WhatsApp template message spend (Meta bills per delivered template
- * message — only delivered/read ones enter the sums). Money columns are
- * estimates from the stored tariff snapshots; calls or messages without a
- * configured tariff are counted separately as «без тарифа» (see
- * config/ai-pricing.php and config/whatsapp-pricing.php).
+ * bot's WhatsApp spend: template messages by category and session messages
+ * beyond the monthly free tier of the business number (Meta bills per
+ * delivered message — only delivered/read ones enter the sums). Money
+ * columns are estimates from the stored tariff snapshots; calls or messages
+ * without a configured tariff are counted separately as «без тарифа» (see
+ * config/ai-pricing.php and config/whatsapp-pricing.php). The operator's
+ * messages from the phone app are free and stay out of the money.
  */
 class AiUsageReport extends Page
 {
-    /** Statuses Meta actually bills a template message for. */
+    /** Statuses Meta actually bills a message for. */
     private const BILLABLE_STATUSES = [ChannelMessageStatus::Delivered, ChannelMessageStatus::Read];
 
     protected static ?string $slug = 'ai-usage';
@@ -180,17 +185,81 @@ class AiUsageReport extends Page
     }
 
     /**
+     * The bot's session messages: how many were delivered, how many of them
+     * fell beyond the monthly free tier, and what they cost.
+     *
+     * @return array{delivered: int, paid: int, cost_usd: string, unknown_cost: int}
+     */
+    public function sessionSummary(): array
+    {
+        $billable = $this->billableStatusValues();
+
+        $row = $this->sessionMessages()
+            ->selectRaw('count(*) filter (where status in (?, ?)) as delivered', $billable)
+            ->selectRaw('count(*) filter (where status in (?, ?) and estimated_cost_usd > 0) as paid', $billable)
+            ->selectRaw('coalesce(sum(estimated_cost_usd) filter (where status in (?, ?)), 0) as cost', $billable)
+            ->selectRaw('count(*) filter (where cost_status = ? and status in (?, ?)) as unknown_cost', [AiCostStatus::Unknown->value, ...$billable])
+            ->first();
+
+        return [
+            'delivered' => (int) $row->delivered,
+            'paid' => (int) $row->paid,
+            'cost_usd' => number_format((float) $row->cost, 4),
+            'unknown_cost' => (int) $row->unknown_cost,
+        ];
+    }
+
+    /**
+     * Templates plus session messages — the whole WhatsApp spend of the period.
+     */
+    public function whatsappTotalCost(): string
+    {
+        $cost = $this->botMessages()
+            ->whereIn('status', self::BILLABLE_STATUSES)
+            ->sum('estimated_cost_usd');
+
+        return number_format((float) $cost, 4);
+    }
+
+    /**
+     * How much of the current month's free tier of session messages the
+     * business number has used, or — while session messages are free
+     * altogether — when the tier starts and what comes after it.
+     *
+     * @return array{limit: int|null, used: int, rate: float|null, next_from: string|null, next_limit: int|null, next_rate: float|null}
+     */
+    public function freeTier(): array
+    {
+        $estimator = app(WhatsappCostEstimator::class);
+        $now = now();
+        $current = $estimator->rateCardAt($now);
+        $next = $estimator->nextRateCardAfter($now);
+
+        return [
+            'limit' => $current['service_free_tier'] ?? null,
+            'rate' => isset($current['categories']['service']) ? (float) $current['categories']['service'] : null,
+            'used' => $estimator->sessionMessagesInMonth($now),
+            'next_from' => $next !== null ? CarbonImmutable::parse($next['effective_from'])->format('d.m.Y') : null,
+            'next_limit' => $next['service_free_tier'] ?? null,
+            'next_rate' => isset($next['categories']['service']) ? (float) $next['categories']['service'] : null,
+        ];
+    }
+
+    /**
      * @return Collection<int, object>
      */
     public function whatsappByDay(): Collection
     {
         $billable = $this->billableStatusValues();
 
-        return $this->templateMessages()
+        return $this->botMessages()
             ->selectRaw($this->localDayExpression(), [DisplayTime::timezone()])
-            ->selectRaw('count(*) as sent')
-            ->selectRaw('count(*) filter (where status in (?, ?)) as billable', $billable)
-            ->selectRaw('count(*) filter (where status = ?) as failed', [ChannelMessageStatus::Failed->value])
+            ->selectRaw("count(*) filter (where type = 'template') as templates_sent")
+            ->selectRaw("count(*) filter (where type = 'template' and status in (?, ?)) as templates_delivered", $billable)
+            ->selectRaw("count(*) filter (where type <> 'template' and status in (?, ?)) as session_delivered", $billable)
+            // Отказы шаблонов — как в карточке «Ошибок доставки»; все отказы
+            // дня видны в таблице «Сообщения по дням».
+            ->selectRaw("count(*) filter (where type = 'template' and status = ?) as templates_failed", [ChannelMessageStatus::Failed->value])
             ->selectRaw('coalesce(sum(estimated_cost_usd) filter (where status in (?, ?)), 0) as cost', $billable)
             ->groupBy('day')
             ->orderByDesc('day')
@@ -263,6 +332,28 @@ class AiUsageReport extends Page
     {
         return ChannelMessage::query()
             ->where('type', 'template')
+            ->where('channel_messages.created_at', '>=', now()->subDays($this->days));
+    }
+
+    /**
+     * @return Builder<ChannelMessage>
+     */
+    protected function sessionMessages(): Builder
+    {
+        return $this->botMessages()->where('type', '<>', 'template');
+    }
+
+    /**
+     * Everything the bot sent through the API — what Meta bills for; the
+     * operator's messages from the phone app are free.
+     *
+     * @return Builder<ChannelMessage>
+     */
+    protected function botMessages(): Builder
+    {
+        return ChannelMessage::query()
+            ->where('direction', ChannelDirection::Outbound)
+            ->where('author', ChannelMessageAuthor::Bot)
             ->where('channel_messages.created_at', '>=', now()->subDays($this->days));
     }
 

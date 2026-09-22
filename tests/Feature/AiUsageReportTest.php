@@ -2,6 +2,7 @@
 
 use App\Enums\AiCostStatus;
 use App\Enums\AiOperationType;
+use App\Enums\ChannelMessageStatus;
 use App\Filament\Pages\AiUsageReport;
 use App\Models\AiAttempt;
 use App\Models\AiOperation;
@@ -127,4 +128,63 @@ test('отчёт считает расходы на шаблоны только 
         ->assertSee('listing_renewal_report')
         ->assertSee('Утилитарный')
         ->assertSee('1 сообщение(й) без тарифа — не входят в сумму');
+});
+
+test('отчёт считает сессионные сообщения сверх бесплатного лимита и расход лимита текущего месяца', function () {
+    $this->travelTo('2026-10-10 10:00:00');
+    $template = WhatsappTemplate::factory()->approved()->create();
+
+    ChannelMessage::factory()->template($template)->delivered()->create([
+        'estimated_cost_usd' => '0.018000',
+        'cost_status' => AiCostStatus::Estimated,
+    ]);
+    // Доставленные сессионные: одно уже сверх лимита, одно в его пределах.
+    ChannelMessage::factory()->outbound()->delivered()->create([
+        'estimated_cost_usd' => '0.018000',
+        'cost_status' => AiCostStatus::Estimated,
+    ]);
+    ChannelMessage::factory()->outbound()->delivered()->create([
+        'estimated_cost_usd' => '0.000000',
+        'cost_status' => AiCostStatus::Estimated,
+    ]);
+    // Ещё не доставлено: лимит уже тратит, в деньги не входит.
+    ChannelMessage::factory()->outbound()->create([
+        'estimated_cost_usd' => '0.018000',
+        'cost_status' => AiCostStatus::Estimated,
+    ]);
+    // Отклонённое Meta: ни в деньгах, ни в лимите.
+    ChannelMessage::factory()->outbound()->create([
+        'status' => ChannelMessageStatus::Failed,
+        'estimated_cost_usd' => '0.018000',
+        'cost_status' => AiCostStatus::Estimated,
+    ]);
+    // Оператор с телефона не стоит ничего и лимит не тратит.
+    ChannelMessage::factory()->operator()->create();
+
+    $page = Livewire::test(AiUsageReport::class)
+        ->assertOk()
+        ->assertSee('WhatsApp — итого $0.0360')
+        ->assertSee('3 из 1 000')
+        ->assertSee('$0.0180 за сообщение');
+
+    expect($page->instance()->sessionSummary())->toBe([
+        'delivered' => 2,
+        'paid' => 1,
+        'cost_usd' => '0.0180',
+        'unknown_cost' => 0,
+    ])
+        ->and($page->instance()->whatsappByDay()->first())
+        ->templates_sent->toBe(1)
+        ->templates_delivered->toBe(1)
+        ->templates_failed->toBe(0)
+        ->session_delivered->toBe(2)
+        ->cost->toBe('0.036000');
+});
+
+test('до 1 октября отчёт говорит, что сессионные бесплатны, и с какого числа это кончится', function () {
+    $this->travelTo('2026-09-22 10:00:00');
+
+    Livewire::test(AiUsageReport::class)
+        ->assertOk()
+        ->assertSee('Сессионные сейчас бесплатны; с 01.10.2026 — 1 000 в месяц бесплатно, дальше $0.0180 за сообщение');
 });

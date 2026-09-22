@@ -325,7 +325,7 @@ test('кнопка подгрузки показывает более ранни
         ->assertSee('Самое раннее сообщение');
 });
 
-test('шапка треда показывает расходы AI и шаблонов и счётчики сообщений', function () {
+test('шапка треда показывает расходы AI, шаблонов и сессионных и счётчики сообщений', function () {
     $contact = Contact::factory()->create();
     ChannelMessage::factory()->for($contact)->create(['text' => 'Входящее']);
 
@@ -345,15 +345,57 @@ test('шапка треда показывает расходы AI и шабло
         'estimated_cost_usd' => null,
         'cost_status' => AiCostStatus::Unknown,
     ]);
+    // Сессионное сверх бесплатного лимита стоит денег и помечено в ленте;
+    // бесплатное в пределах лимита — ни в сумме, ни меткой.
+    ChannelMessage::factory()->for($contact)->outbound()->delivered()->create([
+        'text' => 'Платный ответ бота',
+        'estimated_cost_usd' => '0.018000',
+        'cost_status' => AiCostStatus::Estimated,
+        'pricing_snapshot' => ['category' => 'service', 'per_delivered_usd' => 0.018, 'rate_card' => '2026-10-01', 'free_tier' => 1000, 'position_in_month' => 1001],
+    ]);
+    ChannelMessage::factory()->for($contact)->outbound()->delivered()->create([
+        'text' => 'Бесплатный ответ бота',
+        'estimated_cost_usd' => '0.000000',
+        'cost_status' => AiCostStatus::Estimated,
+    ]);
+    // Не доставленное — в очереди или отклонённое Meta — не списывается:
+    // ни в сумме, ни ценой в ленте.
+    ChannelMessage::factory()->for($contact)->outbound()->create([
+        'text' => 'Ответ бота в очереди',
+        'estimated_cost_usd' => '0.020000',
+        'cost_status' => AiCostStatus::Estimated,
+        'pricing_snapshot' => ['category' => 'service', 'per_delivered_usd' => 0.02, 'rate_card' => '2026-10-01', 'free_tier' => 1000, 'position_in_month' => 1002],
+    ]);
+    ChannelMessage::factory()->for($contact)->outbound()->create([
+        'text' => 'Отклонённый ответ бота',
+        'status' => ChannelMessageStatus::Failed,
+        'estimated_cost_usd' => '0.030000',
+        'cost_status' => AiCostStatus::Estimated,
+    ]);
+    // Без тарифа: два доставленных сессионных против одного шаблона выше.
+    ChannelMessage::factory()->for($contact)->outbound()->delivered()->count(2)->create([
+        'estimated_cost_usd' => null,
+        'cost_status' => AiCostStatus::Unknown,
+    ]);
 
-    Livewire::test(WhatsAppChat::class)
+    $page = Livewire::test(WhatsAppChat::class)
         ->call('selectContact', $contact->id)
         ->assertSee('AI: $0.0200')
         ->assertSee('Шаблоны: $0.0450')
+        ->assertSee('Сессионные: $0.0180')
+        ->assertSee('Бесплатный ответ бота')
+        ->assertSee('$0.0180 · сверх лимита')
+        ->assertSee('$0.0200 · сверх лимита')
+        ->assertDontSee('$0.0000 · сверх лимита')
+        ->assertDontSee('$0.0300')
         ->assertSee('без тарифа: 1')
+        ->assertSee('без тарифа: 2')
         ->assertSee('вх: 1')
-        ->assertSee('бот: 3')
+        ->assertSee('бот: 9')
         ->assertSee('шаблонов: 3');
+
+    expect($page->instance()->contactTotals())
+        ->toMatchArray(['session_cost' => '0.0180', 'session_unknown' => 2, 'template_unknown' => 1]);
 });
 
 test('в ленте видны три стороны, и у сообщения оператора нет галочек доставки', function () {

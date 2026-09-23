@@ -16,6 +16,7 @@
         "pest-testing",
         "tailwindcss-development",
         "demo-video",
-        "dereu-integration"
+        "dereu-integration",
+        "implement-review"
     ]
 }

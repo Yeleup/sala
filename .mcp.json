@@ -1,14 +1,10 @@
 {
     "mcpServers": {
         "laravel-boost": {
-            "command": "docker",
+            "command": "sh",
             "args": [
-                "exec",
-                "-i",
-                "sala-app-1",
-                "php",
-                "artisan",
-                "boost:mcp"
+                "-c",
+                "cd \"$(git rev-parse --show-toplevel)\" && exec make --no-print-directory -s boost-mcp"
             ]
         }
     }

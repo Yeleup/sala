@@ -14,10 +14,15 @@ abstract class TestCase extends BaseTestCase
      * объявления синхронно запускает GenerateListingEmbedding, и без фейка
      * такой тест ходил бы в реальный API провайдера. Тесты со своими
      * векторами перекрывают дефолт повторным Embeddings::fake(...).
+     *
+     * Vite отключён, чтобы страницы рендерились без dev-сервера и манифеста
+     * сборки: в git worktree нет ни public/hot, ни public/build.
      */
     protected function setUp(): void
     {
         parent::setUp();
+
+        $this->withoutVite();
 
         Embeddings::fake(fn (EmbeddingsPrompt $prompt): array => array_map(
             $this->deterministicVector(...),

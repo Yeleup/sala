@@ -56,6 +56,12 @@ docker run --rm -i \
     bash -lc '
         set -euo pipefail
 
+        # Контейнер работает root-ом (ffmpeg ставится apt-ом), поэтому результат отдаём владельцу
+        # проекта — иначе видео не удалить и не перезаписать без sudo. Через trap, а не последней
+        # строкой: после падения записи root-овы файлы иначе остаются в рабочем дереве (в git
+        # worktree они ещё и мешают её удалить).
+        trap '\''chown -R "$HOST_OWNER" /work/storage/app/demo-video node_modules 2>/dev/null || true'\'' EXIT
+
         if ! command -v ffmpeg >/dev/null; then
             echo "→ Ставлю ffmpeg"
             apt-get update -qq && apt-get install -y -qq ffmpeg >/dev/null
@@ -74,11 +80,6 @@ docker run --rm -i \
 
         echo "→ Сборка"
         node build.mjs
-
-        # Контейнер работает root-ом (ffmpeg ставится apt-ом), поэтому
-        # результат отдаём владельцу проекта — иначе видео не удалить и
-        # не перезаписать без sudo.
-        chown -R "$HOST_OWNER" /work/storage/app/demo-video node_modules
     '
 
 echo

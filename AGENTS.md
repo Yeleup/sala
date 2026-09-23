@@ -18,13 +18,17 @@ make npm npm_args="run build"            # npm ...
 
 make test                                # php artisan test
 
+make pint                                # vendor/bin/pint --format agent on uncommitted PHP files
+
 make shell                               # shell in the app container
 
 ```
 
+`make artisan`, `make composer`, `make test`, `make pint` and `make shell` start one-off containers that mount the current checkout (the main checkout or a git worktree), so only the database has to be running.
+
 ## Tests: only `make test`
 
-Run tests ONLY via `make test` (or `make test-worktree` in a git worktree). Pass arguments through `test_args`:
+Run tests ONLY via `make test`, in the main checkout and in git worktrees alike. Pass arguments through `test_args`:
 
 ```bash
 make test test_args="--compact --filter=SomeTest"
@@ -32,20 +36,29 @@ make test test_args="--compact --filter=SomeTest"
 
 Never run `php artisan test` directly — not on the host and not via `docker exec`. The `make test` target overrides the environment (`APP_ENV=testing`, `DB_DATABASE=$DB_TEST_DATABASE`) so tests hit the dedicated test database. A bare `php artisan test` inside the container uses the dev `.env`, and `RefreshDatabase` wipes the development database.
 
-For anything not covered by the Makefile, use `docker exec` with the app container:
+For anything not covered by the Makefile, use `make artisan` (keep `$` out of the PHP code: make would expand it):
 
 ```bash
-docker exec sala-app-1 php artisan tinker --execute='...'
+make artisan artisan_args="tinker --execute='echo App\Models\User::count();'"
 ```
+
+In the main checkout `docker exec` into the running app container works as well (`XDG_CONFIG_HOME=/tmp` lets tinker write its config):
+
+```bash
+docker exec -e XDG_CONFIG_HOME=/tmp sala-app-1 php artisan tinker --execute='...'
+```
+
+`sala-app-1` runs the main checkout's code and database: in a git worktree use `make artisan` or `make shell` instead.
 
 ## MCP servers
 
-MCP servers such as Laravel Boost are launched through `docker exec -i` in `.mcp.json`. The stack must be running (`make up`) before an MCP client connects.
+Laravel Boost runs through `make boost-mcp` (see `.mcp.json`) in a one-off container for the checkout the MCP client was started in. That checkout's database must be running (`make up` or `make db-up`; a git worktree also uses the main checkout's).
 
 ## Never do
 
 - `php artisan ...`, `composer ...`, `vendor/bin/pint`, `vendor/bin/pest` directly on the host.
 - `php artisan test` or `vendor/bin/pest` via `docker exec` — it runs against the dev database and destroys its data; use `make test`.
+- `docker exec sala-app-1 ...` from a git worktree — it runs the main checkout's code (Pint formats the main checkout's files); use `make pint`, `make artisan`, `make shell`.
 - Starting the app with `php artisan serve` or `composer run dev` — use `make up` / `make build`.
 
 === .ai/laravel-docker-template rules ===
@@ -67,6 +80,9 @@ This applies to:
 - `docker-compose.yml`
 - `docker-compose.override.yml`
 - `docker/app/*`
+- `docker/worktree/*`
+- `orca.yaml`
+- Docker-related agent guidelines (`.ai/guidelines/docker-runtime.md`, `.ai/guidelines/worktrees.md`)
 - Docker-related README instructions
 
 Keep the template reusable. Do not copy project-specific secrets, local machine paths, app names, generated files, or one-off values into `laravel-docker-template` unless the change is intentionally part of the reusable template.
@@ -141,6 +157,25 @@ This applies to product pages, category pages, product cards, storefront homepag
 The preview update must be a close visual match to the production UI, not just a short mention or rough approximation of the new feature. Match the relevant Blade/component structure, layout, controls, labels, spacing, and states closely enough that the preview can be used for design review.
 
 When a storefront page has both mobile and desktop preview states, update every relevant viewport/state shown in `storefront-design-preview.blade.php`. Do not update only mobile or only desktop unless the changed screen exists in the preview for only that viewport.
+
+=== .ai/worktrees rules ===
+
+# Git Worktrees (Orca, Claude Code, Codex)
+
+Parallel agents work in git worktrees: Orca creates them in `~/orca/workspaces/<repo>/<name>`, Claude Code in `.claude/worktrees/<name>`. You are in a worktree when `git rev-parse --path-format=absolute --git-dir` differs from `git rev-parse --path-format=absolute --git-common-dir` (without `--path-format=absolute` they also differ in subdirectories of the main checkout).
+
+- The main checkout's running stack (its `APP_URL`, Vite port, `sala-*` containers and `docker exec sala-app-1`) serves the MAIN checkout's code and database. Never use it to verify or change a worktree.
+- A worktree gets its own `.env` from `make worktree-setup` (Orca runs it through `orca.yaml` before the agent starts): `WORKTREE_MANAGED=1`, its own `DOCKER_PROJECT_NAME`, ports, databases and database role. Never copy or symlink the main `.env`, never run `make init` in a worktree, never point `DOCKER_PROJECT_NAME` or `docker compose -p` at the main project.
+- If `.env` or `vendor/` is missing, or make says the `.env` "was not generated for this git worktree" or that `vendor/` is shared with the main checkout, run `make worktree-setup` and nothing else: it moves a copied `.env` aside to `.env.pre-worktree`, writes this worktree's own, and replaces a `vendor/` that shares files with the main checkout.
+- `make test`, `make artisan`, `make composer`, `make pint` and `make shell` run in one-off containers that mount the current checkout, so they test and change THIS worktree.
+- `make test` uses the worktree's own test database on the main checkout's PostgreSQL, so parallel agents do not collide. "No running database": ask the user to start the main stack, or run `make db-up` (only this worktree's db and redis).
+- After adding migrations: `make artisan artisan_args="migrate"` (the worktree's own database). Boost MCP answers for this worktree's code and database.
+- On the main checkout's PostgreSQL the worktree role is not a superuser and gets only the extensions the main database already has. A migration that adds another untrusted extension fails there with "permission denied to create extension": run `make db-up` (this worktree's own PostgreSQL, where its role is the superuser) and test against it.
+- UI checks: `make up` starts an isolated stack at `APP_URL` from the worktree's `.env` with a freshly migrated, empty database (`make artisan artisan_args="db:seed"` to fill it); `make down` when finished.
+- After changing `Dockerfile` or `docker/app/*`: `make build` in the worktree (one-off containers otherwise use the main checkout's image).
+- `docs/changelog.md`: add your entry without reordering existing ones; expect merge conflicts there.
+- Deleting a worktree: `make worktree-archive` in it, or `orca worktree rm --run-hooks ...` (without `--run-hooks` Orca skips the cleanup and leaves the databases, role and containers behind; `make worktree-prune CONFIRM=yes` in the main checkout removes them later).
+- After a branch is merged, migrations do not run by themselves in the main checkout: `make artisan artisan_args="migrate"` there.
 
 === foundation rules ===
 

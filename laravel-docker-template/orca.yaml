@@ -1,0 +1,20 @@
+# Orca (https://github.com/stablyai/orca) hooks for git worktrees of this repository.
+#
+# Orca reads `setup` from the NEW worktree (the version committed on its base branch) and `archive`
+# from the main checkout. The repository setting "Command source" must include orca.yaml
+# ("orca.yaml only" or "Run both"): "Local only" ignores these scripts.
+#
+# Never share .env, vendor or node_modules through worktree.sharedDirectories / "Worktree Shared Paths":
+# Orca creates absolute symlinks into the main checkout, which containers cannot follow and which write
+# through to the main checkout. `make worktree-setup` creates everything a worktree needs.
+scripts:
+  setup: |
+    cd "$ORCA_WORKTREE_PATH"
+    make --no-print-directory worktree-setup
+  archive: |
+    cd "$ORCA_WORKTREE_PATH" || exit 0
+    script="$ORCA_ROOT_PATH/docker/worktree/worktree.sh"
+    [ -f "$script" ] || script=docker/worktree/worktree.sh
+    timeout 100 bash "$script" archive || echo "Worktree cleanup failed: run 'make worktree-prune' in the main checkout." >&2
+    exit 0
+setupAgentStartupPolicy: wait-for-setup

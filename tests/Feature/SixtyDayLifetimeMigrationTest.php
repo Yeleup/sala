@@ -127,6 +127,23 @@ describe('сдвиг срока уже опубликованных объявл
             ->and(Schema::hasTable('listing_lifetime_extensions'))->toBeFalse();
     });
 
+    test('откат не отнимает дни у публикации, которой опрос нового цикла уже ушёл', function () {
+        // Без этого откат вернул бы срок в прошлое при живом опросе у
+        // поставщика, и ближайший прогон цикла сразу увёл бы объявление в архив.
+        $expiresAt = now()->addDays(2)->startOfSecond();
+        $listing = Listing::factory()->published()->create(['expires_at' => $expiresAt, 'renewal_requested_at' => null]);
+
+        runSixtyDayListingShiftMigration();
+
+        $this->travel(31)->days();
+        $listing->refresh()->update(['renewal_requested_at' => now()]);
+
+        sixtyDayListingShiftMigration()->down();
+
+        expect($listing->refresh()->expires_at->toDateTimeString())->toBe($expiresAt->copy()->addDays(30)->toDateTimeString())
+            ->and($listing->renewal_requested_at)->not->toBeNull();
+    });
+
     test('архив, черновики и объявления без срока не трогаются', function () {
         $expiresAt = now()->addDays(5)->startOfSecond();
         $archived = Listing::factory()->archived()->create(['expires_at' => $expiresAt]);

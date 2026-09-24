@@ -1,7 +1,9 @@
 <?php
 
 use Illuminate\Database\Migrations\Migration;
+use Illuminate\Database\Query\Builder;
 use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 
@@ -12,6 +14,11 @@ return new class extends Migration
      * какой срок был у неё до сдвига.
      */
     private const string SNAPSHOT_TABLE = 'listing_lifetime_extensions';
+
+    /**
+     * Разница между новым сроком показа (60 дней) и прежним (30).
+     */
+    private const int EXTRA_DAYS = 30;
 
     /**
      * Переводит уже опубликованные объявления на 60-дневный срок показа:
@@ -58,21 +65,18 @@ return new class extends Migration
             );
         }
 
-        DB::update(sprintf(
-            "update listings set expires_at = snapshot.previous_expires_at + interval '30 days'
-             from %s as snapshot
-             where listings.id = snapshot.listing_id
-               and listings.expires_at = snapshot.previous_expires_at
-               and listings.status = 'published'
-               and listings.renewal_requested_at is null",
-            self::SNAPSHOT_TABLE,
-        ));
+        $this->eachSnapshotRow(function (int $listingId, Carbon $previous): void {
+            $this->stillUnpolledPublication($listingId)
+                ->where('expires_at', $previous)
+                ->update(['expires_at' => $previous->copy()->addDays(self::EXTRA_DAYS)]);
+        });
     }
 
     /**
      * Возвращает прежний срок тем публикациям, у которых он всё ещё
-     * сдвинут ровно на разницу; продлённые после выкладки получили свой
-     * срок заново и остаются как есть.
+     * сдвинут ровно на разницу и опрос нового цикла ещё не ушёл;
+     * продлённые после выкладки получили свой срок заново и остаются как
+     * есть.
      */
     public function down(): void
     {
@@ -80,14 +84,39 @@ return new class extends Migration
             return;
         }
 
-        DB::update(sprintf(
-            "update listings set expires_at = snapshot.previous_expires_at
-             from %s as snapshot
-             where listings.id = snapshot.listing_id
-               and listings.expires_at = snapshot.previous_expires_at + interval '30 days'",
-            self::SNAPSHOT_TABLE,
-        ));
+        $this->eachSnapshotRow(function (int $listingId, Carbon $previous): void {
+            $this->stillUnpolledPublication($listingId)
+                ->where('expires_at', $previous->copy()->addDays(self::EXTRA_DAYS))
+                ->update(['expires_at' => $previous]);
+        });
 
         Schema::drop(self::SNAPSHOT_TABLE);
+    }
+
+    /**
+     * @param  Closure(int, Carbon): void  $callback
+     */
+    private function eachSnapshotRow(Closure $callback): void
+    {
+        DB::table(self::SNAPSHOT_TABLE)
+            ->orderBy('listing_id')
+            ->chunk(500, function ($rows) use ($callback): void {
+                foreach ($rows as $row) {
+                    $callback((int) $row->listing_id, Carbon::parse($row->previous_expires_at));
+                }
+            });
+    }
+
+    /**
+     * Публикация, по которой вопрос текущего цикла ещё не задан. Опрошенную
+     * не трогают ни сдвиг, ни откат: вопрос уже у поставщика, и отнятые
+     * откатом дни отправили бы её в архив, пока он держит живой опрос.
+     */
+    private function stillUnpolledPublication(int $listingId): Builder
+    {
+        return DB::table('listings')
+            ->where('id', $listingId)
+            ->where('status', 'published')
+            ->whereNull('renewal_requested_at');
     }
 };

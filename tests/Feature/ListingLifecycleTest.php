@@ -44,7 +44,7 @@ test('approving publishes the listing for 30 days and clears the old rejection r
 
     $listing->refresh();
     expect($listing->status)->toBe(ListingStatus::Published)
-        ->and($listing->expires_at->toDateTimeString())->toBe(now()->addDays(30)->toDateTimeString())
+        ->and($listing->expires_at->toDateTimeString())->toBe(now()->addDays(60)->toDateTimeString())
         ->and($listing->rejection_reason)->toBeNull();
 });
 
@@ -61,7 +61,7 @@ test('оператор публикует свой черновик сразу, 
 
     $listing->refresh();
     expect($listing->status)->toBe(ListingStatus::Published)
-        ->and($listing->expires_at->toDateTimeString())->toBe(now()->addDays(30)->toDateTimeString())
+        ->and($listing->expires_at->toDateTimeString())->toBe(now()->addDays(60)->toDateTimeString())
         ->and($listing->moderated_by_user_id)->toBe($operator->id)
         ->and($listing->moderated_at)->not->toBeNull();
 });
@@ -202,7 +202,7 @@ test('renewing prolongs a published listing for another 30 days', function () {
     $listing->renew();
 
     expect($listing->refresh()->expires_at->toDateTimeString())
-        ->toBe(now()->addDays(30)->toDateTimeString());
+        ->toBe(now()->addDays(60)->toDateTimeString());
 });
 
 test('an archived listing returns to the search for another 30 days', function () {
@@ -217,7 +217,7 @@ test('an archived listing returns to the search for another 30 days', function (
     $listing->refresh();
 
     expect($listing->status)->toBe(ListingStatus::Published)
-        ->and($listing->expires_at->toDateTimeString())->toBe(now()->addDays(30)->toDateTimeString())
+        ->and($listing->expires_at->toDateTimeString())->toBe(now()->addDays(60)->toDateTimeString())
         // Отметка прежнего опроса не должна пережить возврат — иначе
         // следующий цикл промолчит и объявление снова тихо истечёт.
         ->and($listing->renewal_requested_at)->toBeNull();

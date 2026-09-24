@@ -45,7 +45,7 @@ test('отказ уведомления о заявке пишется в лог
         ->once();
 });
 
-test('отказ 30-дневного опроса пишется в лог уровнем error', function () {
+test('отказ опроса актуальности пишется в лог уровнем error', function () {
     WhatsappTemplate::factory()->approved()
         ->create(['name' => WhatsappTemplateLibrary::LISTING_RENEWAL]);
     $supplier = Contact::factory()->withOpenSessionWindow()->create();

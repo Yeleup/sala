@@ -148,8 +148,8 @@ test('an ordinary message is not intercepted', function () {
         ->toBeFalse();
 });
 
-describe('ответы на 30-дневный опрос', function () {
-    test('«Да, актуально» продлевает публикацию ещё на 30 дней', function () {
+describe('ответы на опрос актуальности', function () {
+    test('«Да, актуально» продлевает публикацию ещё на 60 дней', function () {
         $supplier = Contact::factory()->withOpenSessionWindow()->create();
         $listing = Listing::factory()->published()->for($supplier, 'supplier')
             ->create(['expires_at' => now()->addHours(10), 'renewal_requested_at' => now()]);
@@ -167,7 +167,7 @@ describe('ответы на 30-дневный опрос', function () {
         expect($handled)->toBeTrue();
         $listing->refresh();
         expect($listing->status)->toBe(ListingStatus::Published)
-            ->and($listing->expires_at->isAfter(now()->addDays(29)))->toBeTrue()
+            ->and($listing->expires_at->isAfter(now()->addDays(59)))->toBeTrue()
             ->and($listing->renewal_requested_at)->toBeNull();
     });
 
@@ -390,7 +390,7 @@ describe('пачечный опрос: один ответ за все объя�
 
         foreach ($batch->listings()->get() as $listing) {
             expect($listing->status)->toBe(ListingStatus::Published)
-                ->and($listing->expires_at->isAfter(now()->addDays(29)))->toBeTrue()
+                ->and($listing->expires_at->isAfter(now()->addDays(59)))->toBeTrue()
                 ->and($listing->renewal_requested_at)->toBeNull();
         }
     });

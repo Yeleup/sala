@@ -175,7 +175,7 @@ class DereuMessenger
     /**
      * Session text while the 24-hour window is open, the approved template
      * otherwise — the channel choice WhatsApp imposes on every proactive
-     * notification (customer requests, the 30-day relevance poll).
+     * notification (customer requests, the relevance poll).
      *
      * @param  list<string>  $bodyParameters
      */

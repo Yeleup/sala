@@ -40,7 +40,7 @@ class Listing extends Model
     /**
      * How long a publication stays active until the supplier re-confirms it.
      */
-    public const int LIFETIME_DAYS = 30;
+    public const int LIFETIME_DAYS = 60;
 
     /**
      * The cap on photos per listing, shared by the supplier cabinet and
@@ -395,7 +395,7 @@ class Listing extends Model
      * Возврат из архива в поиск: поставщик снял объявление с публикации
      * или дал сроку истечь, а потом передумал. Объявление уже проходило
      * модерацию, а править архивное поставщик не может — содержимое то
-     * же самое, поэтому возврат ведёт прямо в поиск на новые 30 дней,
+     * же самое, поэтому возврат ведёт прямо в поиск на новый полный срок,
      * без второго круга модерации.
      *
      * Полнота полей здесь не проверяется — по той же причине, что и в
@@ -418,7 +418,7 @@ class Listing extends Model
     /**
      * The listing still awaits an answer to the renewal poll it was
      * actually asked. The poll mark is what ties a question to its
-     * 30-day cycle: renew() and restoreFromArchive() clear it, so a
+     * renewal cycle: renew() and restoreFromArchive() clear it, so a
      * button left over from a superseded cycle must no longer decide
      * anything — the same invariant ListingRenewalBatch::pending()
      * enforces for the batch poll. Archiving deliberately keeps the
@@ -433,7 +433,7 @@ class Listing extends Model
     /**
      * The supplier confirmed the listing is still relevant: prolong it
      * without leaving the published status. The renewal poll flag resets
-     * so the next 30-day cycle asks again.
+     * so the next cycle asks again.
      */
     public function renew(): void
     {
@@ -446,7 +446,7 @@ class Listing extends Model
     }
 
     /**
-     * Published listings due for the 30-day relevance poll: unpolled and
+     * Published listings due for the relevance poll: unpolled and
      * inside the polling window — the last day of the period plus one
      * grace day past it. The grace day exists for publications whose poll
      * never went out (a send failure, or Meta rejected the accepted

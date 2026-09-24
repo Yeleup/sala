@@ -87,7 +87,7 @@ test('оператор публикует своё объявление одно
 
     $listing->refresh();
     expect($listing->status)->toBe(ListingStatus::Published)
-        ->and($listing->expires_at->toDateTimeString())->toBe(now()->addDays(30)->toDateTimeString());
+        ->and($listing->expires_at->toDateTimeString())->toBe(now()->addDays(60)->toDateTimeString());
 });
 
 test('пока полей не хватает, публикация недоступна', function () {

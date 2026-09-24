@@ -174,7 +174,7 @@ describe('ежедневный опрос актуальности', function ()
         $listing->renew();
 
         expect($listing->refresh()->renewal_requested_at)->toBeNull()
-            ->and($listing->expires_at->isAfter(now()->addDays(29)))->toBeTrue();
+            ->and($listing->expires_at->isAfter(now()->addDays(59)))->toBeTrue();
     });
 });
 

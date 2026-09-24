@@ -4,6 +4,7 @@ namespace App\Console\Commands;
 
 use App\Enums\BotScenarioTrigger;
 use App\Models\BotScenario;
+use App\Models\Listing;
 use App\Services\Bot\ScenarioDefinition;
 use App\Services\Bot\ScenarioValidator;
 use App\Services\WhatsappTemplateLibrary;
@@ -16,7 +17,7 @@ use Illuminate\Console\Command;
  * (docs/modules/user-flows.md): the main dialog (the supplier branch
  * through the AI collector, customer search, «Мои объявления» CTA) and
  * the three flow scenarios — the customer request notification and the
- * 30-day renewal poll in its per-listing and per-supplier shapes.
+ * renewal poll in its per-listing and per-supplier shapes.
  * Refuses to overwrite an already published
  * scenario without --force so a customized graph is not lost; each
  * scenario is judged separately.
@@ -287,7 +288,7 @@ class InstallDefaultBotScenario extends Command
     }
 
     /**
-     * Продление объявления: 30-дневный опрос актуальности. Ветка таймаута
+     * Продление объявления: опрос актуальности за сутки до конца срока показа. Ветка таймаута
      * не подключена — молчание и так уводит публикацию в архив по
      * истечении срока, воскрешать нечего, — но срок ожидания задан: через
      * сутки опрос закрывается статусом «Не ответили». Без него запуск
@@ -317,7 +318,7 @@ class InstallDefaultBotScenario extends Command
                 ['id' => 'do_renew', 'type' => 'action', 'action' => 'renew_listing', 'x' => 540, 'y' => 80],
                 ['id' => 'do_archive', 'type' => 'action', 'action' => 'archive_listing', 'x' => 540, 'y' => 400],
                 ['id' => 'renewed_text', 'type' => 'text', 'x' => 820, 'y' => 80,
-                    'text' => 'Продлили: объявление «{{listing.title}}» будет показываться ещё 30 дней.'],
+                    'text' => 'Продлили: объявление «{{listing.title}}» будет показываться ещё '.Listing::LIFETIME_DAYS.' дней.'],
                 ['id' => 'archived_text', 'type' => 'text', 'x' => 820, 'y' => 400,
                     'text' => 'Перенесли объявление в архив — оно больше не показывается в поиске.'],
                 ['id' => 'already_archived', 'type' => 'text', 'x' => 820, 'y' => 240,
@@ -370,7 +371,7 @@ class InstallDefaultBotScenario extends Command
                 ['id' => 'do_renew_all', 'type' => 'action', 'action' => 'renew_batch_listings', 'x' => 560, 'y' => 80],
                 ['id' => 'do_archive_all', 'type' => 'action', 'action' => 'archive_batch_listings', 'x' => 560, 'y' => 520],
                 ['id' => 'renewed_text', 'type' => 'text', 'x' => 860, 'y' => 80,
-                    'text' => 'Продлили: эти объявления будут показываться ещё 30 дней.'],
+                    'text' => 'Продлили: эти объявления будут показываться ещё '.Listing::LIFETIME_DAYS.' дней.'],
                 ['id' => 'archived_text', 'type' => 'text', 'x' => 860, 'y' => 520,
                     'text' => 'Перенесли эти объявления в архив — они больше не показываются в поиске.'],
                 ['id' => 'already_archived', 'type' => 'text', 'x' => 860, 'y' => 300,

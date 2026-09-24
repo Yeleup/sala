@@ -812,7 +812,7 @@ describe('архивирование', function () {
 });
 
 describe('продление и возврат из архива', function () {
-    test('«Продлить» отодвигает срок показа ещё на 30 дней и сбрасывает отметку опроса', function () {
+    test('«Продлить» отодвигает срок показа ещё на 60 дней и сбрасывает отметку опроса', function () {
         $listing = Listing::factory()->published()->create([
             'expires_at' => now()->addHours(6),
             'renewal_requested_at' => now(),
@@ -825,7 +825,7 @@ describe('продление и возврат из архива', function () {
         $listing->refresh();
 
         expect($listing->status)->toBe(ListingStatus::Published)
-            ->and($listing->expires_at->isAfter(now()->addDays(29)))->toBeTrue()
+            ->and($listing->expires_at->isAfter(now()->addDays(59)))->toBeTrue()
             ->and($listing->renewal_requested_at)->toBeNull();
     });
 
@@ -838,12 +838,12 @@ describe('продление и возврат из архива', function () {
         $this->post(portalLinks()->renewAllUrl($contact))->assertRedirect();
 
         expect($soon->refresh()->expires_at->diffInMinutes($later->refresh()->expires_at))->toBeLessThan(1)
-            ->and($soon->expires_at->isAfter(now()->addDays(29)))->toBeTrue()
+            ->and($soon->expires_at->isAfter(now()->addDays(59)))->toBeTrue()
             // Продление — про публикации: архив им не трогается.
             ->and($archived->refresh()->status)->toBe(ListingStatus::Archived);
     });
 
-    test('«Вернуть в поиск» возвращает архивное объявление в публикацию на 30 дней', function () {
+    test('«Вернуть в поиск» возвращает архивное объявление в публикацию на 60 дней', function () {
         $listing = Listing::factory()->publishable()->archived()->create();
 
         $this->post(portalLinks()->restoreUrl($listing))
@@ -853,7 +853,7 @@ describe('продление и возврат из архива', function () {
         $listing->refresh();
 
         expect($listing->status)->toBe(ListingStatus::Published)
-            ->and($listing->expires_at->isAfter(now()->addDays(29)))->toBeTrue()
+            ->and($listing->expires_at->isAfter(now()->addDays(59)))->toBeTrue()
             ->and($listing->renewal_requested_at)->toBeNull();
     });
 
@@ -901,9 +901,23 @@ describe('продление и возврат из архива', function () {
 
         $this->get(portalLinks()->myListingsUrl($contact))
             ->assertOk()
-            ->assertSee('Продлить все на 30 дней')
-            ->assertSee('Продлить на 30 дней')
+            ->assertSee('Каждое объявление показывается в поиске 60 дней.')
+            ->assertSee('Продлить все на 60 дней')
+            ->assertSee('Продлить на 60 дней')
             ->assertSee('Вернуть в поиск');
+    });
+
+    test('страница объявления называет 60-дневный срок у опубликованного и архивного', function () {
+        $published = Listing::factory()->publishable()->published()->create();
+        $archived = Listing::factory()->publishable()->archived()->create();
+
+        $this->get(portalLinks()->editUrl($published))
+            ->assertOk()
+            ->assertSee('Продлить на 60 дней');
+
+        $this->get(portalLinks()->editUrl($archived))
+            ->assertOk()
+            ->assertSee('Кнопка ниже вернёт его в поиск на 60 дней.');
     });
 
     test('без опубликованных объявлений «Продлить все» не показывается', function () {
@@ -912,6 +926,6 @@ describe('продление и возврат из архива', function () {
 
         $this->get(portalLinks()->myListingsUrl($contact))
             ->assertOk()
-            ->assertDontSee('Продлить все на 30 дней');
+            ->assertDontSee('Продлить все на 60 дней');
     });
 });

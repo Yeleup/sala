@@ -30,11 +30,11 @@
             <div class="meta">
                 <strong>Срок показа</strong>
             </div>
-            <p class="muted" style="margin: 0.25rem 0 0;">Каждое объявление показывается в поиске 30 дней. Продлите все разом — сроки сойдутся к одной дате, и напоминание придёт одним сообщением.</p>
+            <p class="muted" style="margin: 0.25rem 0 0;">Каждое объявление показывается в поиске {{ \App\Models\Listing::LIFETIME_DAYS }} дней. Продлите все разом — сроки сойдутся к одной дате, и напоминание придёт одним сообщением.</p>
             <div class="actions">
                 <form method="POST" action="{{ $renewAllUrl }}">
                     @csrf
-                    <button type="submit" class="btn btn-primary">Продлить все на 30 дней</button>
+                    <button type="submit" class="btn btn-primary">Продлить все на {{ \App\Models\Listing::LIFETIME_DAYS }} дней</button>
                 </form>
             </div>
         </article>
@@ -85,7 +85,7 @@
                 @if ($renewUrls->has($listing->id))
                     <form method="POST" action="{{ $renewUrls[$listing->id] }}">
                         @csrf
-                        <button type="submit" class="btn btn-secondary">Продлить на 30 дней</button>
+                        <button type="submit" class="btn btn-secondary">Продлить на {{ \App\Models\Listing::LIFETIME_DAYS }} дней</button>
                     </form>
                 @endif
 

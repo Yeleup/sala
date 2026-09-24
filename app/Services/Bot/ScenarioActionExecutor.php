@@ -25,7 +25,7 @@ use LogicException;
  * block's «skipped» output — a race between two replies must not crash
  * the run. The renewal actions read that precondition the same way for
  * one listing and for a batch: the question must still be open, so a
- * button of a superseded 30-day cycle decides nothing (see
+ * button of a superseded renewal cycle decides nothing (see
  * Listing::isAwaitingRenewalAnswer and ListingRenewalBatch::pending).
  * Best-effort actions (CTA link, customer notification) never report
  * Skipped: «did less than intended» keeps the continue branch.

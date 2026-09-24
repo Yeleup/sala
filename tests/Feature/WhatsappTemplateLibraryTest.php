@@ -106,3 +106,11 @@ test('сожжённое имя listings_renewal_batch из библиотеки
     expect(app(WhatsappTemplateLibrary::class)->all()->pluck('name'))
         ->not->toContain('listings_renewal_batch');
 });
+
+test('шаблон «Объявление опубликовано» называет 60-дневный срок показа и остаётся утилитарным', function () {
+    $entry = app(WhatsappTemplateLibrary::class)->all()
+        ->firstWhere('name', WhatsappTemplateLibrary::LISTING_APPROVED);
+
+    expect($entry['category'])->toBe(WhatsappTemplateCategory::Utility)
+        ->and($entry['body'])->toBe('Ваше объявление «{{1}}» прошло модерацию и опубликовано — оно будет показываться в поиске 60 дней.');
+});

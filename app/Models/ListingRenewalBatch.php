@@ -13,7 +13,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 
 /**
- * One 30-day relevance poll that covers several listings of the same
+ * One relevance poll that covers several listings of the same
  * supplier at once. A supplier whose publications expire on the same day
  * gets a single question instead of one paid template per listing, and
  * answers for the whole set with one button.
@@ -57,7 +57,7 @@ class ListingRenewalBatch extends Model
      *   project;
      * - the poll mark is gone, i.e. the publication was renewed or
      *   returned from the archive since. A button of a superseded cycle
-     *   must not reach into the new 30-day period.
+     *   must not reach into the new period.
      *
      * @return Collection<int, Listing>
      */
@@ -80,7 +80,7 @@ class ListingRenewalBatch extends Model
             ->whereNotNull('listings.renewal_requested_at');
     }
 
-    /** «Все актуальны»: every publication of the batch lives another 30 days. */
+    /** «Все актуальны»: every publication of the batch starts a new full period. */
     public function renewAll(): void
     {
         $this->pendingListings()->each(fn (Listing $listing) => $listing->renew());

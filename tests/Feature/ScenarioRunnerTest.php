@@ -447,7 +447,7 @@ describe('сценарий «Продление объявления»', functio
 
         $listing->refresh();
         expect($listing->status)->toBe(ListingStatus::Published)
-            ->and($listing->expires_at->isAfter(now()->addDays(29)))->toBeTrue()
+            ->and($listing->expires_at->isAfter(now()->addDays(59)))->toBeTrue()
             ->and($run->refresh()->status)->toBe(ScenarioRunStatus::Completed);
     });
 
@@ -493,7 +493,7 @@ describe('сценарий «Продление объявления»', functio
         $run = app(ScenarioRunner::class)->launch($scenario, $supplier, $listing);
 
         // Срок вышел без ответа — автоархив; объявление вернули в поиск,
-        // и начался новый 30-дневный цикл. Кнопка прежнего цикла в него
+        // и начался новый цикл. Кнопка прежнего цикла в него
         // дотянуться не должна — ни продлением, ни архивом.
         $listing->archive();
         $listing->restoreFromArchive();
@@ -576,7 +576,7 @@ describe('сценарий «Продление объявления»', functio
         );
 
         // Запуск шёл по версии 1: объявление продлено, хотя версия 2 продление убрала.
-        expect($listing->refresh()->expires_at->isAfter(now()->addDays(29)))->toBeTrue()
+        expect($listing->refresh()->expires_at->isAfter(now()->addDays(59)))->toBeTrue()
             ->and($run->refresh()->scenario_version)->toBe(1);
     });
 });
@@ -894,7 +894,7 @@ describe('сценарий «Продление нескольких объяв�
 
         foreach ($listings as $listing) {
             expect($listing->refresh()->status)->toBe(ListingStatus::Published)
-                ->and($listing->expires_at->isAfter(now()->addDays(29)))->toBeTrue();
+                ->and($listing->expires_at->isAfter(now()->addDays(59)))->toBeTrue();
         }
 
         expect($run->refresh()->status)->toBe(ScenarioRunStatus::Completed);

@@ -135,7 +135,7 @@ class SupplierListingController extends Controller
     }
 
     /**
-     * «Продлить»: публикация живёт ещё 30 дней с этой минуты. Отметка
+     * «Продлить»: публикация живёт полный срок показа с этой минуты. Отметка
      * отправленного опроса сбрасывается — следующий цикл спросит заново.
      */
     public function renew(Listing $listing): RedirectResponse

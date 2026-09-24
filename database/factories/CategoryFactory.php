@@ -19,6 +19,17 @@ class CategoryFactory extends Factory
     {
         return [
             'name' => ucfirst(fake()->unique()->words(2, true)),
+            'approved_at' => now(),
         ];
+    }
+
+    /**
+     * A category the AI added that no approved listing carries yet.
+     */
+    public function unapproved(): static
+    {
+        return $this->state(fn (array $attributes): array => [
+            'approved_at' => null,
+        ]);
     }
 }

@@ -197,7 +197,7 @@ test('водитель назвал технику вне справочника
     Livewire::test(EditListing::class, ['record' => $listing->getRouteKey()])
         ->assertSchemaComponentVisible('unlisted_machinery')
         ->assertFormSet(['unlisted_machinery' => 'Автобус'])
-        ->assertSee('Водитель назвал технику, которой нет в справочнике. Заведите категорию, отметьте её в поле выше и очистите эту строку.');
+        ->assertSee('Техника словами водителя, без категории в справочнике. Заведите категорию, отметьте её в поле выше и очистите эту строку.');
 });
 
 test('moderation actions are hidden for an already published listing', function () {

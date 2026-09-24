@@ -14,9 +14,10 @@ use Filament\Support\Icons\Heroicon;
 use Filament\Tables\Table;
 
 /**
- * The operator-managed dictionary of listing categories. The AI assistant
- * and the supplier web form pick strictly from this list, so the dictionary
- * fully controls which categories exist in the system.
+ * The operator-managed dictionary of listing categories. The supplier web
+ * form picks strictly from this list. New categories the AI added from the
+ * chat are not listed here: they are approved together with their listing
+ * on the moderation form (see Category).
  */
 class CategoryResource extends Resource
 {

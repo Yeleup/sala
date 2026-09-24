@@ -8,8 +8,10 @@ use App\Enums\RepairPlace;
 use App\Models\Listing;
 use App\Models\ListingMedia;
 use App\Support\WhatsappText;
+use Illuminate\Database\Query\Builder;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Validation\Rule;
+use Illuminate\Validation\Rules\Exists;
 use Illuminate\Validation\Validator;
 
 /**
@@ -68,7 +70,7 @@ class UpdateSupplierListingRequest extends FormRequest
             'remove_photos.*' => ['integer'],
             ...match ($kind) {
                 ListingKind::Rental => [
-                    'category_id' => ['required', 'integer', Rule::exists('categories', 'id')],
+                    'category_id' => ['required', 'integer', $this->offeredCategory()],
                     'brand_id' => ['nullable', 'integer', Rule::exists('brands', 'id')],
                     'description' => ['required', 'string', 'max:2000'],
                     'price' => ['required', 'string', 'max:255'],
@@ -91,7 +93,7 @@ class UpdateSupplierListingRequest extends FormRequest
                     // then adds the category during moderation. Demanding a
                     // checkbox here would lock out a driver of a bus.
                     'machine_categories' => ['required_without:unlisted_machinery', 'array'],
-                    'machine_categories.*' => ['integer', Rule::exists('categories', 'id')],
+                    'machine_categories.*' => ['integer', $this->offeredCategory()],
                     'unlisted_machinery' => ['nullable', 'string', 'max:120'],
                     'description' => ['nullable', 'string', 'max:2000'],
                     // Required only while the listing has no stored document —
@@ -100,6 +102,25 @@ class UpdateSupplierListingRequest extends FormRequest
                 ],
             },
         ];
+    }
+
+    /**
+     * A category the form offers: an approved one, or a new one the listing
+     * already carries — the AI added it from the chat and the operator has
+     * not seen it yet. Other suppliers' new categories stay out of reach.
+     */
+    private function offeredCategory(): Exists
+    {
+        $listing = $this->route('listing');
+        $ownIds = $listing instanceof Listing
+            ? [$listing->category_id, ...$listing->machineCategories()->pluck('categories.id')->all()]
+            : [];
+
+        return Rule::exists('categories', 'id')->where(
+            fn (Builder $query): Builder => $query->where(fn (Builder $either): Builder => $either
+                ->whereNotNull('approved_at')
+                ->orWhereIn('id', array_values(array_filter($ownIds)))),
+        );
     }
 
     /**

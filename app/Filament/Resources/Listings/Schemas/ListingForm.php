@@ -17,6 +17,7 @@ use App\Models\ListingMedia;
 use App\Models\Location;
 use App\Services\Locations\LocationResolver;
 use App\Support\PhoneNumber;
+use Closure;
 use Filament\Actions\Action;
 use Filament\Forms\Components\FileUpload;
 use Filament\Forms\Components\Repeater;
@@ -29,6 +30,7 @@ use Filament\Notifications\Notification;
 use Filament\Schemas\Components\Group;
 use Filament\Schemas\Components\Utilities\Get;
 use Filament\Schemas\Schema;
+use Filament\Support\Icons\Heroicon;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Support\Arr;
@@ -169,11 +171,14 @@ class ListingForm
                     ->visible(fn (Get $get): bool => self::kindOf($get) !== ListingKind::Rental),
                 Select::make('category_id')
                     ->label('Категория')
-                    ->relationship('category', 'name')
+                    ->relationship('category', 'name', modifyQueryUsing: fn (Builder $query, ?Listing $record): Builder => self::offeredCategories($query, $record))
+                    ->getOptionLabelFromRecordUsing(fn (Category $record): string => self::categoryLabel($record))
                     ->searchable()
                     ->preload()
                     ->live()
                     ->placeholder('Без категории')
+                    ->helperText(fn (?Listing $record): ?string => self::newEquipmentHelp($record, 'category'))
+                    ->hintAction(self::renameNewEquipmentAction('category'))
                     ->visible(fn (Get $get): bool => self::kindOf($get) === ListingKind::Rental)
                     // The client names a trade the dictionary does not have
                     // yet: adding it here beats abandoning the form.
@@ -182,7 +187,7 @@ class ListingForm
                     // dictionary row being created.
                     ->createOptionForm(fn (): array => [CategoryForm::nameField(ignoreRecord: false)])
                     ->createOptionModalHeading('Новая категория')
-                    ->createOptionUsing(fn (array $data): int => Category::create($data)->getKey()),
+                    ->createOptionUsing(fn (array $data): int => Category::createByOperator($data['name'])->getKey()),
                 Select::make('brand_id')
                     ->label('Марка')
                     ->relationship('brand', 'name')
@@ -254,20 +259,23 @@ class ListingForm
                     ->visible(fn (Get $get): bool => self::kindOf($get) !== ListingKind::Driver),
                 Select::make('machine_categories')
                     ->label('Техника, на которой работает')
-                    ->relationship('machineCategories', 'name')
+                    ->relationship('machineCategories', 'name', modifyQueryUsing: fn (Builder $query, ?Listing $record): Builder => self::offeredCategories($query, $record))
+                    ->getOptionLabelFromRecordUsing(fn (Category $record): string => self::categoryLabel($record))
                     ->multiple()
                     ->searchable()
                     ->preload()
+                    ->helperText(fn (?Listing $record): ?string => self::newEquipmentHelp($record, 'machineCategories'))
+                    ->hintAction(self::renameNewEquipmentAction('machineCategories'))
                     ->visible(fn (Get $get): bool => self::kindOf($get) === ListingKind::Driver),
-                // Machinery the driver named that the dictionary lacks, in
-                // his own words: the bot keeps it rather than repeating the
-                // same question until the attempt limit runs out. It does
-                // not block publication — the operator adds the category on
+                // Machinery in the driver's own words: typed into the web
+                // form, kept from a rejected listing, or left from the chat
+                // before the AI added new categories itself. It does not
+                // block publication — the operator adds the category on
                 // moderation, ticks it above and clears this line.
                 TextInput::make('unlisted_machinery')
                     ->label('Техника вне справочника')
-                    ->helperText('Водитель назвал технику, которой нет в справочнике. Заведите категорию, отметьте её в поле выше и очистите эту строку.')
-                    ->maxLength(120)
+                    ->helperText('Техника словами водителя, без категории в справочнике. Заведите категорию, отметьте её в поле выше и очистите эту строку.')
+                    ->maxLength(Listing::UNLISTED_MACHINERY_MAX_LENGTH)
                     ->visible(fn (Get $get): bool => self::kindOf($get) === ListingKind::Driver),
                 Select::make('licence_type')
                     ->label('Тип удостоверения')
@@ -340,6 +348,94 @@ class ListingForm
                     ->columnSpanFull()
                     ->hiddenOn('create'),
             ]);
+    }
+
+    /**
+     * The categories a select offers: the approved dictionary plus the new
+     * ones this listing carries — a new category the AI added for another
+     * supplier's listing stays out of sight until that listing is approved.
+     */
+    private static function offeredCategories(Builder $query, ?Listing $record): Builder
+    {
+        return $query->approvedOr($record === null ? [] : [
+            $record->category_id,
+            ...$record->machineCategories()->pluck('categories.id'),
+        ]);
+    }
+
+    private static function categoryLabel(Category $category): string
+    {
+        return $category->isApproved() ? $category->name : $category->name.' (новая)';
+    }
+
+    /**
+     * The new categories the AI added that sit in the given relation of
+     * the listing (category or machineCategories).
+     *
+     * @return Collection<int, Category>
+     */
+    private static function newEquipmentOf(?Listing $record, string $relation): Collection
+    {
+        if ($record === null) {
+            return new Collection;
+        }
+
+        $categories = $relation === 'category'
+            ? new Collection(array_filter([$record->category()->first()]))
+            : $record->machineCategories()->get();
+
+        return $categories->reject(fn (Category $category): bool => $category->isApproved())->values();
+    }
+
+    private static function newEquipmentHelp(?Listing $record, string $relation): ?string
+    {
+        $new = self::newEquipmentOf($record, $relation);
+
+        return $new->isEmpty() ? null : sprintf(
+            'Новая техника: %s — её завёл ИИ со слов поставщика, в справочнике её ещё нет. Одобрение объявления добавит её в справочник; поправьте название или выберите вместо неё существующую категорию, если такая есть. При отклонении объявления новая техника удалится, если больше ни к чему не привязана.',
+            $new->map(fn (Category $category): string => '«'.$category->name.'»')->implode(', '),
+        );
+    }
+
+    /**
+     * Rename the new categories the AI added for this listing — its spelling
+     * becomes a dictionary entry once the listing is approved. Only these:
+     * approved categories are renamed on the dictionary page.
+     */
+    private static function renameNewEquipmentAction(string $relation): Action
+    {
+        return Action::make('renameNewEquipment'.ucfirst($relation))
+            ->label('Переименовать новую технику')
+            ->icon(Heroicon::OutlinedPencilSquare)
+            ->visible(fn (?Listing $record): bool => self::newEquipmentOf($record, $relation)->isNotEmpty())
+            ->modalHeading('Новая техника')
+            ->modalDescription('Название попадёт в справочник категорий, когда объявление будет одобрено.')
+            ->schema(fn (?Listing $record): array => self::newEquipmentOf($record, $relation)
+                ->map(fn (Category $category): TextInput => TextInput::make('names.'.$category->id)
+                    ->label('Было: '.$category->name)
+                    ->default($category->name)
+                    ->required()
+                    ->maxLength(255)
+                    ->rule(fn (): Closure => function (string $attribute, mixed $value, Closure $fail) use ($category): void {
+                        $existing = Category::findByName((string) $value);
+
+                        if ($existing !== null && $existing->isNot($category)) {
+                            $fail('Такая категория уже есть — выберите её в списке вместо новой.');
+                        }
+                    })
+                    ->validationMessages(['required' => 'Укажите название.']))
+                ->all())
+            ->action(function (array $data, ?Listing $record) use ($relation): void {
+                foreach (self::newEquipmentOf($record, $relation) as $category) {
+                    $name = $data['names'][$category->id] ?? null;
+
+                    if (is_string($name) && Category::normalizeName($name) !== '') {
+                        $category->update(['name' => Category::normalizeName($name)]);
+                    }
+                }
+
+                Notification::make()->title('Название новой техники сохранено')->success()->send();
+            });
     }
 
     private static function supplierLabel(Contact $contact): string

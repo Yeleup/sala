@@ -29,12 +29,15 @@ use Stringable;
  * clarifying_question names the single most important missing field so the
  * collector can ask for it. Dictionary-backed fields (the rental category
  * and brand, the driver's machine categories) are constrained to the
- * operator's dictionaries both in the prompt and in the response schema.
- * The driver's questionnaire adds an escape hatch to that constraint:
- * machinery the dictionary lacks («автобус») goes into unlisted_machinery
- * as free text, so an answer the enum cannot express no longer collapses
- * into null and the same question asked again — the collector handles the
- * field itself, and it is never a clarifying_question target.
+ * dictionaries both in the prompt and in the response schema. Equipment
+ * the category dictionary lacks under any spelling has a field of its own
+ * (new_category for a rental, new_machine_categories for a driver): the
+ * model writes it in the dictionary's normal form and the collector adds it
+ * to the dictionary as a new category awaiting the operator. Keeping the
+ * dictionary enum next to that field is what prevents duplicates: a plural,
+ * a typo or a synonym of a listed category belongs in the enum, and the
+ * model is told so — the match is semantic, never a list of words. The new
+ * fields are never clarifying_question targets.
  * Unlike the category, the brand is optional and never asked about. The
  * title is the one field the model composes itself from the supplier's
  * words instead of extracting — it is never asked about either.
@@ -46,7 +49,7 @@ class ListingExtractionAgent implements Agent, HasStructuredOutput
     use Promptable;
 
     /**
-     * @param  list<string>  $categories  Dictionary of allowed category names.
+     * @param  list<string>  $categories  The category dictionary, the new categories still awaiting approval included — equipment another supplier already named must be reused, not added twice.
      * @param  list<string>  $brands  Dictionary of allowed equipment brand names.
      */
     public function __construct(
@@ -129,7 +132,7 @@ class ListingExtractionAgent implements Agent, HasStructuredOutput
         - clarifying_question: если не хватает {$clarifyingFields} — задай ОДИН короткий
           вопрос про самое важное недостающее поле, а в clarifying_field укажи, про какое поле
           этот вопрос. Спрашивай только про поле, которое осталось null, — не переспрашивай и не
-          уточняй уже заполненное. Если всё есть — clarifying_question пустая строка,
+          уточняй уже заполненное{$this->newEquipmentAnswersClarification()}. Если всё есть — clarifying_question пустая строка,
           clarifying_field null. Вопрос живой
           и короткий, на «вы», ТОЛЬКО на русском языке — даже если поставщик написал по-казахски.
           Без канцелярита и без глаголов первого лица в прошедшем времени («нашла», «поняла» —
@@ -142,8 +145,8 @@ class ListingExtractionAgent implements Agent, HasStructuredOutput
     private function rentalFields(): string
     {
         $categoryHint = $this->categories === []
-            ? 'справочник категорий пуст — всегда оставляй category равным null.'
-            : 'выбери одну категорию СТРОГО из списка ниже — дословно, как в списке. Не придумывай и не перефразируй категории; если ни одна не подходит или ты не уверен — оставь null.';
+            ? 'справочник категорий пуст — всегда оставляй category равным null; названный вид техники идёт в new_category.'
+            : 'вид техники — одна категория СТРОГО из списка ниже, дословно, как в списке. Выбирай её и тогда, когда поставщик назвал ту же технику иначе: с опечаткой, во множественном числе, в другом падеже, синонимом или по-казахски. Не придумывай и не перефразируй категории; если такой техники в списке нет — оставь null и заполни new_category.';
 
         $brandHint = $this->brands === []
             ? 'справочник марок пуст — всегда оставляй brand равным null.'
@@ -155,6 +158,7 @@ class ListingExtractionAgent implements Agent, HasStructuredOutput
           аренду»). Название не спрашивай у поставщика: пока предложение непонятно, оставь null,
           а как только суть ясна — заполни. Не вставляй в название цену и лишние детали.
         - category: {$categoryHint}
+        - new_category: {$this->newEquipmentHint('вид техники', 'category')}
         - brand: {$brandHint}
         - description: суть предложения своими словами, кратко.
         - location: где находится техника — ТОЛЬКО название места в именительном падеже, без слов
@@ -194,8 +198,8 @@ class ListingExtractionAgent implements Agent, HasStructuredOutput
     private function driverFields(): string
     {
         $machineCategoriesHint = $this->categories === []
-            ? 'справочник категорий пуст — всегда оставляй machine_categories равным null; техника, которой нет в списке, идёт в unlisted_machinery.'
-            : 'категории техники, на которой работает водитель, — СТРОГО из списка ниже, дословно, как в списке; можно несколько. Не придумывай и не перефразируй категории; если ни одна не подходит или ты не уверен — оставь null. Техника, которой нет в списке, идёт в unlisted_machinery.';
+            ? 'справочник категорий пуст — всегда оставляй machine_categories равным null; названная техника идёт в new_machine_categories.'
+            : 'категории техники, на которой работает водитель, — СТРОГО из списка ниже, дословно, как в списке; можно несколько. Выбирай категорию и тогда, когда водитель назвал ту же технику иначе: с опечаткой, во множественном числе, в другом падеже, синонимом или по-казахски. Не придумывай и не перефразируй категории; если ни одна не подходит — оставь null. Техника, которой в списке нет, идёт в new_machine_categories.';
 
         return <<<TEXT
         - title: короткое название объявления на русском в именительном падеже, до 60 символов —
@@ -204,9 +208,7 @@ class ListingExtractionAgent implements Agent, HasStructuredOutput
           ясна — заполни. Не вставляй в название лишние детали.
         - person_name: имя водителя, как он сам представился. Не представился — null.
         - machine_categories: {$machineCategoriesHint}
-        - unlisted_machinery: техника, на которой работает водитель, если её НЕТ в списке категорий —
-          его же словами, одним-двумя словами в именительном падеже («автобус», «водовоз»). Техника
-          из списка сюда не попадает — она идёт в machine_categories. Не названа — null.
+        - new_machine_categories: {$this->newEquipmentHint('каждый вид техники', 'machine_categories')} Несколько видов — отдельными элементами массива.
         - licence_type: удостоверение водителя — строго одно из driver_licence (водительское),
           tractor_operator (тракторист-машинист), other (другой документ). Заполняй, только
           если водитель сказал, какое у него удостоверение; иначе null.
@@ -219,6 +221,37 @@ class ListingExtractionAgent implements Agent, HasStructuredOutput
           названного: район города, город или село. Не выдумывай место.
         - location_detail: уточнение внутри места, если водитель его назвал («центр», «мкр Нурсат»,
           «вдоль трассы»). Нет уточнения — null.
+        TEXT;
+    }
+
+    /**
+     * Equipment written into the new-equipment field is an answer: the
+     * model must not ask about the category it stands in for.
+     */
+    private function newEquipmentAnswersClarification(): string
+    {
+        return match ($this->kind) {
+            ListingKind::Rental => '; техника в new_category — это ответ про category, её не переспрашивай',
+            ListingKind::Driver => '; техника в new_machine_categories — это ответ про machine_categories, её не переспрашивай',
+            ListingKind::Repair => '',
+        };
+    }
+
+    /**
+     * The rule for the field that carries equipment the dictionary lacks —
+     * shared by the rental's single category and the driver's machinery so
+     * both add to the dictionary by the same normal form.
+     */
+    private function newEquipmentHint(string $subject, string $listField): string
+    {
+        return <<<TEXT
+        только если поставщик назвал технику, которой НЕТ в списке категорий ни под каким
+          написанием, — {$subject} название в нормальной форме, как пишут в справочнике: ПО-РУССКИ, даже
+          если поставщик писал по-казахски, в именительном падеже, в единственном числе, с заглавной
+          буквы, без марки, модели и характеристик («Автобус», а не «автобусы» или «автобус Yutong»).
+          Эта техника будет добавлена в справочник как новая категория, поэтому если в списке есть
+          та же техника под другим написанием — выбери её в {$listField}, а сюда ничего не пиши. Не
+          заноси сюда общие слова вроде «техника», «спецтехника», «машина». Иначе — null.
         TEXT;
     }
 
@@ -284,6 +317,7 @@ class ListingExtractionAgent implements Agent, HasStructuredOutput
                 'category' => ($this->categories === []
                     ? $schema->string()
                     : $schema->string()->enum($this->categories))->nullable()->required(),
+                'new_category' => $schema->string()->nullable()->required(),
                 'brand' => ($this->brands === []
                     ? $schema->string()
                     : $schema->string()->enum($this->brands))->nullable()->required(),
@@ -300,7 +334,7 @@ class ListingExtractionAgent implements Agent, HasStructuredOutput
                 'machine_categories' => ($this->categories === []
                     ? $schema->array()->items($schema->string())
                     : $schema->array()->items($schema->string()->enum($this->categories)))->nullable()->required(),
-                'unlisted_machinery' => $schema->string()->nullable()->required(),
+                'new_machine_categories' => $schema->array()->items($schema->string())->nullable()->required(),
                 'licence_type' => $schema->string()->enum(array_column(LicenceType::cases(), 'value'))->nullable()->required(),
                 'experience_years' => $schema->integer()->nullable()->required(),
                 'travels_to_other_cities' => $schema->boolean()->nullable()->required(),

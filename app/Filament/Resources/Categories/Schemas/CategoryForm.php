@@ -9,6 +9,7 @@ use Filament\Schemas\Components\Utilities\Get;
 use Filament\Schemas\Schema;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Validation\Rules\Unique;
 
 class CategoryForm
 {
@@ -37,13 +38,20 @@ class CategoryForm
             ->placeholder('Например: Автокран')
             ->required()
             ->maxLength(255)
-            ->unique(table: Category::class, ignoreRecord: $ignoreRecord)
+            // A new category the AI added under this name does not count:
+            // it is invisible here, and creating adopts it instead
+            // (Category::createByOperator()).
+            ->unique(
+                table: Category::class,
+                ignoreRecord: $ignoreRecord,
+                modifyRuleUsing: fn (Unique $rule): Unique => $rule->whereNotNull('approved_at'),
+            )
             // A near-duplicate («Автокран» next to «Кран автомобильный»)
             // splits one kind of offer in two and hides half of it from
             // the customer; uniqueness alone catches only exact repeats.
             ->live(onBlur: true)
             ->helperText(fn (?Model $record, Get $get): ?string => app(SimilarNameLookup::class)->hint(
-                Category::query()->when(
+                Category::query()->approved()->when(
                     $record instanceof Category,
                     fn (Builder $query): Builder => $query->whereKeyNot($record->getKey()),
                 ),

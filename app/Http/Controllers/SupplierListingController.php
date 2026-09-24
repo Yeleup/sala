@@ -67,7 +67,13 @@ class SupplierListingController extends Controller
 
         return view('supplier.listing-edit', [
             'listing' => $listing,
-            'categories' => Category::query()->orderBy('name')->get(),
+            // The listing's own new categories (added by the AI from the
+            // chat) are offered alongside the approved ones, so the form
+            // shows what the supplier named instead of an empty choice.
+            'categories' => Category::query()
+                ->approvedOr([$listing->category_id, ...$listing->machineCategories->pluck('id')])
+                ->orderBy('name')
+                ->get(),
             'brands' => Brand::query()->orderBy('name')->get(),
             'repairPlaces' => RepairPlace::cases(),
             'licenceTypes' => LicenceType::cases(),
@@ -98,6 +104,9 @@ class SupplierListingController extends Controller
         }
 
         $listing->save();
+        // A new category the supplier swapped for a listed one leaves
+        // the dictionary once nothing carries it.
+        Category::pruneUnattachedUnapproved();
         $this->applyPhotoChanges($request, $listing);
         $listing->submitForModeration();
 

@@ -6,6 +6,7 @@ use App\Enums\ListingKind;
 use App\Enums\ListingStatus;
 use App\Filament\Resources\Listings\ListingResource;
 use App\Jobs\GenerateListingEmbedding;
+use App\Models\Category;
 use App\Models\Listing;
 use Filament\Actions\DeleteAction;
 use Filament\Resources\Pages\EditRecord;
@@ -84,6 +85,10 @@ class EditListing extends EditRecord
     {
         /** @var Listing $record */
         $record = $this->getRecord();
+
+        // A new category the operator swapped for an existing one leaves
+        // the dictionary once nothing carries it.
+        Category::pruneUnattachedUnapproved();
 
         if ($record->status === ListingStatus::Published && $record->kind === ListingKind::Driver) {
             GenerateListingEmbedding::dispatch($record);

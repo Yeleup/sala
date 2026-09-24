@@ -19,6 +19,7 @@ use App\Services\Locations\LocationResolver;
 use App\Support\PhoneNumber;
 use Closure;
 use Filament\Actions\Action;
+use Filament\Forms\Components\CheckboxList;
 use Filament\Forms\Components\FileUpload;
 use Filament\Forms\Components\Repeater;
 use Filament\Forms\Components\Select;
@@ -169,16 +170,42 @@ class ListingForm
                     ->maxLength(255)
                     ->live(onBlur: true)
                     ->visible(fn (Get $get): bool => self::kindOf($get) !== ListingKind::Rental),
+                // New equipment the AI added for this listing lives outside
+                // the dictionary select: the select offers approved
+                // categories only (see Category) and starts empty; left empty,
+                // it keeps the new equipment, a pick replaces it.
+                TextEntry::make('new_category')
+                    ->label('Новая техника')
+                    ->state(fn (?Listing $record): array => self::newEquipmentOf($record, 'category')->pluck('name')->all())
+                    ->badge()
+                    ->color('info')
+                    ->helperText(fn (?Listing $record): ?string => self::newEquipmentHelp($record, 'category'))
+                    ->hintAction(self::renameNewEquipmentAction('category'))
+                    ->visible(fn (Get $get, ?Listing $record): bool => self::kindOf($get) === ListingKind::Rental
+                        && self::newEquipmentOf($record, 'category')->isNotEmpty()),
                 Select::make('category_id')
                     ->label('Категория')
-                    ->relationship('category', 'name', modifyQueryUsing: fn (Builder $query, ?Listing $record): Builder => self::offeredCategories($query, $record))
-                    ->getOptionLabelFromRecordUsing(fn (Category $record): string => self::categoryLabel($record))
+                    ->relationship('category', 'name', modifyQueryUsing: fn (Builder $query): Builder => $query->approved())
+                    ->loadStateFromRelationshipsUsing(fn (Select $component, ?Listing $record) => $component->state(
+                        $record?->category?->isApproved() ? $record->category_id : null,
+                    ))
+                    // Empty while the listing carries new equipment means
+                    // «keep it»: the column is left as it is.
+                    ->dehydrated(fn (mixed $state, ?Listing $record): bool => filled($state) || self::newEquipmentOf($record, 'category')->isEmpty())
+                    ->saveRelationshipsUsing(function (Select $component, mixed $state, ?Listing $record): void {
+                        if (filled($state) || self::newEquipmentOf($record, 'category')->isEmpty()) {
+                            $component->saveStateToRelationship();
+                        }
+                    })
                     ->searchable()
                     ->preload()
                     ->live()
-                    ->placeholder('Без категории')
-                    ->helperText(fn (?Listing $record): ?string => self::newEquipmentHelp($record, 'category'))
-                    ->hintAction(self::renameNewEquipmentAction('category'))
+                    ->placeholder(fn (?Listing $record): string => self::newEquipmentOf($record, 'category')->isEmpty()
+                        ? 'Без категории'
+                        : 'Оставить новую технику')
+                    ->helperText(fn (?Listing $record): ?string => self::newEquipmentOf($record, 'category')->isEmpty()
+                        ? null
+                        : 'Выберите категорию из справочника, чтобы заменить ею новую технику.')
                     ->visible(fn (Get $get): bool => self::kindOf($get) === ListingKind::Rental)
                     // The client names a trade the dictionary does not have
                     // yet: adding it here beats abandoning the form.
@@ -257,16 +284,31 @@ class ListingForm
                     ->maxLength(255)
                     ->live(onBlur: true)
                     ->visible(fn (Get $get): bool => self::kindOf($get) !== ListingKind::Driver),
+                // The driver's machinery from the dictionary: approved
+                // categories only. His new equipment is the separate field
+                // below and is written back together with this one.
                 Select::make('machine_categories')
                     ->label('Техника, на которой работает')
-                    ->relationship('machineCategories', 'name', modifyQueryUsing: fn (Builder $query, ?Listing $record): Builder => self::offeredCategories($query, $record))
-                    ->getOptionLabelFromRecordUsing(fn (Category $record): string => self::categoryLabel($record))
+                    ->relationship('machineCategories', 'name', modifyQueryUsing: fn (Builder $query): Builder => $query->approved())
+                    ->loadStateFromRelationshipsUsing(fn (Select $component, ?Listing $record) => $component->state(
+                        $record?->machineCategories()->approved()->pluck('categories.id')->map(fn (int $id): string => (string) $id)->all() ?? [],
+                    ))
+                    ->saveRelationshipsUsing(fn (Select $component, ?Listing $record, Get $get) => self::syncMachinery($record, $component->getState(), $get('new_machine_categories')))
                     ->multiple()
                     ->searchable()
                     ->preload()
+                    ->visible(fn (Get $get): bool => self::kindOf($get) === ListingKind::Driver),
+                CheckboxList::make('new_machine_categories')
+                    ->label('Новая техника')
+                    ->options(fn (?Listing $record): array => self::newEquipmentOf($record, 'machineCategories')->pluck('name', 'id')->all())
+                    ->afterStateHydrated(fn (CheckboxList $component, ?Listing $record) => $component->state(
+                        self::newEquipmentOf($record, 'machineCategories')->pluck('id')->map(fn (int $id): string => (string) $id)->all(),
+                    ))
+                    ->dehydrated(false)
                     ->helperText(fn (?Listing $record): ?string => self::newEquipmentHelp($record, 'machineCategories'))
                     ->hintAction(self::renameNewEquipmentAction('machineCategories'))
-                    ->visible(fn (Get $get): bool => self::kindOf($get) === ListingKind::Driver),
+                    ->visible(fn (Get $get, ?Listing $record): bool => self::kindOf($get) === ListingKind::Driver
+                        && self::newEquipmentOf($record, 'machineCategories')->isNotEmpty()),
                 // Machinery in the driver's own words: typed into the web
                 // form, kept from a rejected listing, or left from the chat
                 // before the AI added new categories itself. It does not
@@ -351,21 +393,25 @@ class ListingForm
     }
 
     /**
-     * The categories a select offers: the approved dictionary plus the new
-     * ones this listing carries — a new category the AI added for another
-     * supplier's listing stays out of sight until that listing is approved.
+     * Write the driver's machinery: the dictionary categories picked in
+     * the select plus the new equipment still ticked. Only the listing's
+     * own new equipment can be kept this way — never another listing's.
+     *
+     * @param  array<int, int|string>|null  $picked
+     * @param  array<int, int|string>|null  $keptNew
      */
-    private static function offeredCategories(Builder $query, ?Listing $record): Builder
+    private static function syncMachinery(?Listing $record, ?array $picked, ?array $keptNew): void
     {
-        return $query->approvedOr($record === null ? [] : [
-            $record->category_id,
-            ...$record->machineCategories()->pluck('categories.id'),
-        ]);
-    }
+        if ($record === null) {
+            return;
+        }
 
-    private static function categoryLabel(Category $category): string
-    {
-        return $category->isApproved() ? $category->name : $category->name.' (новая)';
+        $ownNew = self::newEquipmentOf($record, 'machineCategories')->pluck('id')->all();
+
+        $record->machineCategories()->sync([
+            ...Category::query()->approved()->whereKey($picked ?? [])->pluck('id')->all(),
+            ...array_values(array_intersect($ownNew, array_map('intval', $keptNew ?? []))),
+        ]);
     }
 
     /**
@@ -392,7 +438,7 @@ class ListingForm
         $new = self::newEquipmentOf($record, $relation);
 
         return $new->isEmpty() ? null : sprintf(
-            'Новая техника: %s — её завёл ИИ со слов поставщика, в справочнике её ещё нет. Одобрение объявления добавит её в справочник; поправьте название или выберите вместо неё существующую категорию, если такая есть. При отклонении объявления новая техника удалится, если больше ни к чему не привязана.',
+            'Новая техника: %s — её завёл ИИ со слов поставщика, в справочнике её ещё нет. Одобрение объявления добавит её в справочник; поправьте название или замените её существующей категорией, если такая есть. При отклонении объявления новая техника удалится, если больше ни к чему не привязана.',
             $new->map(fn (Category $category): string => '«'.$category->name.'»')->implode(', '),
         );
     }
@@ -525,6 +571,12 @@ class ListingForm
 
         foreach (array_keys($kind->publicationFields()) as $field) {
             $values[$field] = $get($field);
+        }
+
+        // An empty category select keeps the listing's new equipment.
+        if (array_key_exists('category_id', $values) && blank($values['category_id'])
+            && self::newEquipmentOf($record, 'category')->isNotEmpty()) {
+            $values['category_id'] = $record->category_id;
         }
 
         $missing = Listing::missingPublicationFields($kind, $values);

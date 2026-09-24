@@ -67,13 +67,12 @@ class SupplierListingController extends Controller
 
         return view('supplier.listing-edit', [
             'listing' => $listing,
-            // The listing's own new categories (added by the AI from the
-            // chat) are offered alongside the approved ones, so the form
-            // shows what the supplier named instead of an empty choice.
-            'categories' => Category::query()
-                ->approvedOr([$listing->category_id, ...$listing->machineCategories->pluck('id')])
-                ->orderBy('name')
-                ->get(),
+            // The dictionary lists approved categories only. The listing's
+            // own new equipment (added by the AI from the chat) is shown
+            // apart from it: kept as is, or replaced by a pick from the list.
+            'categories' => Category::query()->approved()->orderBy('name')->get(),
+            'newCategory' => $listing->category?->isApproved() === false ? $listing->category : null,
+            'newMachinery' => $listing->machineCategories->reject(fn (Category $category): bool => $category->isApproved())->values(),
             'brands' => Brand::query()->orderBy('name')->get(),
             'repairPlaces' => RepairPlace::cases(),
             'licenceTypes' => LicenceType::cases(),
@@ -93,13 +92,16 @@ class SupplierListingController extends Controller
         $this->assertLinkIssuedToCurrentOwner($listing);
         abort_unless($this->isEditable($listing), 403);
 
-        $listing->fill($request->safe()->except(['photos', 'remove_photos', 'document', 'machine_categories']));
+        $listing->fill($request->safe()->except(['photos', 'remove_photos', 'document', 'machine_categories', 'keep_new_machinery']));
 
         if ($listing->kind === ListingKind::Driver) {
             // No GenerateListingEmbedding dispatch after the sync: the
             // supplier only ever edits drafts and rejected listings, and
             // the vector is (re)built when moderation publishes them.
-            $listing->machineCategories()->sync($request->validated('machine_categories', []));
+            $listing->machineCategories()->sync([
+                ...$request->validated('machine_categories', []),
+                ...$request->validated('keep_new_machinery', []),
+            ]);
             $this->applyDocumentReplacement($request, $listing);
         }
 

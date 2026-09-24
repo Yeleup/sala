@@ -1,5 +1,7 @@
 <?php
 
+use App\Enums\LicenceType;
+use App\Enums\ListingMediaType;
 use App\Enums\ListingStatus;
 use App\Filament\Resources\Categories\Pages\ListCategories;
 use App\Filament\Resources\Listings\Pages\CreateListing;
@@ -8,13 +10,17 @@ use App\Filament\Resources\Listings\Pages\ListListings;
 use App\Models\Category;
 use App\Models\Contact;
 use App\Models\Listing;
+use App\Models\ListingMedia;
 use App\Models\User;
 use App\Services\Ai\CtaLinkBuilder;
 use App\Services\Ai\ListingEmbeddings;
 use App\Services\Ai\ListingMatcher;
 use Filament\Actions\Testing\TestAction;
+use Filament\Forms\Components\Select;
 use Filament\Schemas\Components\Component;
+use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
 use Laravel\Ai\Embeddings;
 use Livewire\Livewire;
 
@@ -63,6 +69,43 @@ describe('справочник', function () {
             ->and(Category::findOrCreateUnapproved('ЭКСКАВАТОР')->is($approved))->toBeTrue()
             ->and(Category::findOrCreateUnapproved('Автобус')->is($new))->toBeTrue()
             ->and(Category::count())->toBe(2);
+    });
+});
+
+describe('гонка двух поставщиков', function () {
+    test('база не пропускает вторую запись, отличающуюся только регистром', function () {
+        Category::factory()->unapproved()->create(['name' => 'Автобус']);
+
+        expect(fn () => DB::transaction(fn () => DB::table('categories')->insert(['name' => 'АВТОБУС'])))
+            ->toThrow(UniqueConstraintViolationException::class)
+            ->and(Category::count())->toBe(1);
+    });
+
+    test('проигравший вставку поставщик получает запись победителя, даже в другом регистре', function () {
+        // Второе соединение — другой поставщик: оно вставляет «АВТОБУС» и
+        // коммитит между проверкой по имени и вставкой первого. Первый ловит
+        // нарушение уникальности без учёта регистра и берёт запись второго.
+        config(['database.connections.race' => config('database.connections.'.config('database.default'))]);
+        $race = DB::connection('race');
+        $raced = false;
+
+        Category::creating(function () use ($race, &$raced): void {
+            if (! $raced) {
+                $raced = true;
+                $race->table('categories')->insert(['name' => 'АВТОБУС', 'approved_at' => null, 'created_at' => now(), 'updated_at' => now()]);
+            }
+        });
+
+        try {
+            $category = Category::findOrCreateUnapproved('Автобус');
+
+            expect($raced)->toBeTrue()
+                ->and($category->name)->toBe('АВТОБУС')
+                ->and(Category::query()->whereRaw('lower(name) = ?', ['автобус'])->count())->toBe(1);
+        } finally {
+            $race->table('categories')->whereRaw('lower(name) = ?', ['автобус'])->delete();
+            $race->disconnect();
+        }
     });
 });
 
@@ -191,22 +234,26 @@ describe('видимость до одобрения', function () {
         $this->get($url.'&category_id='.$listing->category_id)->assertViewHas('filters', fn (array $filters): bool => $filters['category']?->is($listing->category) === true);
     });
 
-    test('веб-форма поставщика показывает его новую категорию, но не чужую', function () {
+    test('веб-форма поставщика показывает свою новую технику отдельно, а в списке категорий — только утверждённые', function () {
         categoryNamed('Автокран');
         $own = Listing::factory()->create([
             'status' => ListingStatus::Draft,
             'category_id' => Category::factory()->unapproved()->create(['name' => 'Автобус'])->id,
         ]);
-        Category::factory()->unapproved()->create(['name' => 'Водовоз']);
+        $foreign = Category::factory()->unapproved()->create(['name' => 'Водовоз']);
 
         $this->get(app(CtaLinkBuilder::class)->editUrl($own))
             ->assertOk()
-            ->assertSee('Автокран')
-            ->assertSee('Автобус')
+            ->assertViewHas('categories', fn ($categories): bool => $categories->pluck('name')->all() === ['Автокран'])
+            ->assertSee('Новая техника')
+            ->assertSee('— оставить новую технику —')
+            ->assertDontSee('<option value="'.$own->category_id.'"', false)
             ->assertDontSee('Водовоз');
+
+        expect($foreign->refresh()->isApproved())->toBeFalse();
     });
 
-    test('веб-форма не принимает чужую новую категорию и отпускает свою при замене', function () {
+    test('веб-форма аренды: пустой выбор оставляет свою новую технику, чужую не принять, замена отпускает свою', function () {
         $own = Listing::factory()->create([
             'status' => ListingStatus::Draft,
             'category_id' => Category::factory()->unapproved()->create(['name' => 'Автобус'])->id,
@@ -222,14 +269,50 @@ describe('видимость до одобрения', function () {
 
         $this->post($updateUrl, [...$payload, 'category_id' => $foreign->id])->assertSessionHasErrors('category_id');
 
-        $this->post($updateUrl, [...$payload, 'category_id' => $own->category_id])->assertSessionHasNoErrors();
-        expect($own->refresh()->status)->toBe(ListingStatus::PendingModeration);
+        $this->post($updateUrl, [...$payload, 'category_id' => ''])->assertSessionHasNoErrors();
+        expect($own->refresh()->status)->toBe(ListingStatus::PendingModeration)
+            ->and($own->category->name)->toBe('Автобус');
 
         $own->update(['status' => ListingStatus::Draft]);
         $this->post($updateUrl, [...$payload, 'category_id' => categoryNamed('Автокран')->id])->assertSessionHasNoErrors();
 
         expect($own->refresh()->category->name)->toBe('Автокран')
             ->and(Category::query()->where('name', 'Автобус')->exists())->toBeFalse();
+    });
+
+    test('веб-форма водителя: своя новая техника — отдельным блоком, её можно оставить или снять, чужую не принять', function () {
+        $new = Category::factory()->unapproved()->create(['name' => 'Автобус']);
+        $foreign = Category::factory()->unapproved()->create(['name' => 'Водовоз']);
+        $listing = Listing::factory()->driver()->create(['status' => ListingStatus::Draft, 'unlisted_machinery' => null]);
+        $listing->machineCategories()->attach($new);
+        ListingMedia::create(['listing_id' => $listing->id, 'type' => ListingMediaType::Document, 'disk' => 'local', 'path' => 'doc.jpg']);
+        $updateUrl = app(CtaLinkBuilder::class)->updateUrl($listing);
+        $payload = [
+            'title' => 'Водитель автобуса',
+            'person_name' => 'Серик',
+            'licence_type' => LicenceType::DriverLicence->value,
+            'experience_years' => 8,
+            'location_id' => locationNamed('г.Шымкент')->id,
+            'travels_to_other_cities' => '1',
+        ];
+
+        $this->get(app(CtaLinkBuilder::class)->editUrl($listing))
+            ->assertOk()
+            ->assertSee('name="keep_new_machinery[]" value="'.$new->id.'"', false)
+            ->assertDontSee('name="machine_categories[]" value="'.$new->id.'"', false)
+            ->assertDontSee('Водовоз');
+
+        $this->post($updateUrl, [...$payload, 'machine_categories' => [$foreign->id]])->assertSessionHasErrors('machine_categories.0');
+        $this->post($updateUrl, [...$payload, 'keep_new_machinery' => [$foreign->id]])->assertSessionHasErrors('keep_new_machinery.0');
+
+        $this->post($updateUrl, [...$payload, 'keep_new_machinery' => [$new->id]])->assertSessionHasNoErrors();
+        expect($listing->refresh()->machineCategories->pluck('name')->all())->toBe(['Автобус']);
+
+        $listing->update(['status' => ListingStatus::Draft]);
+        $this->post($updateUrl, [...$payload, 'machine_categories' => [categoryNamed('Экскаватор')->id]])->assertSessionHasNoErrors();
+
+        expect($listing->refresh()->machineCategories->pluck('name')->all())->toBe(['Экскаватор'])
+            ->and(Category::find($new->id))->toBeNull();
     });
 
     test('исправление опечаток поиска не опирается на новую категорию', function () {
@@ -284,17 +367,41 @@ describe('админка', function () {
                 === 'Уже есть похожие: Автобус пассажирский. Проверьте, не заводите ли дубль.');
     });
 
-    test('форма объявления помечает новую технику и не предлагает чужую новую', function () {
+    test('форма объявления показывает новую технику отдельно, а в выборе категории — только утверждённые', function () {
         categoryNamed('Автокран');
         $listing = pendingRentalWithNewCategory();
-        Category::factory()->unapproved()->create(['name' => 'Водовоз']);
+        $foreign = Category::factory()->unapproved()->create(['name' => 'Водовоз']);
 
         Livewire::test(EditListing::class, ['record' => $listing->getRouteKey()])
-            ->assertSee('Автобус (новая)')
             ->assertSee('Новая техника: «Автобус»')
-            ->assertSee('Автокран')
             ->assertDontSee('Водовоз')
-            ->assertActionVisible(TestAction::make('renameNewEquipmentCategory')->schemaComponent('category_id'));
+            // Выбор категории стартует пустым («оставить новую технику»),
+            // и среди его вариантов нет ни своей, ни чужой новой записи.
+            ->assertFormSet(['category_id' => null])
+            ->assertSchemaComponentExists('category_id', checkComponentUsing: fn (Select $field): bool => array_values($field->getOptions()) === ['Автокран'])
+            ->assertActionVisible(TestAction::make('renameNewEquipmentCategory')->schemaComponent('new_category'));
+
+        expect($foreign->refresh()->isApproved())->toBeFalse();
+    });
+
+    test('сохранение с пустым выбором категории оставляет новую технику, чужую новую выбрать нельзя', function () {
+        $listing = pendingRentalWithNewCategory();
+        $foreign = Category::factory()->unapproved()->create(['name' => 'Водовоз']);
+
+        Livewire::test(EditListing::class, ['record' => $listing->getRouteKey()])
+            ->assertSee('Готовность к публикации')
+            ->assertDontSee('Не хватает для публикации: категория')
+            ->call('save')
+            ->assertHasNoFormErrors();
+
+        expect($listing->refresh()->category->name)->toBe('Автобус');
+
+        Livewire::test(EditListing::class, ['record' => $listing->getRouteKey()])
+            ->fillForm(['category_id' => $foreign->id])
+            ->call('save')
+            ->assertHasFormErrors(['category_id']);
+
+        expect($listing->refresh()->category->name)->toBe('Автобус');
     });
 
     test('форма нового объявления не предлагает новые категории', function () {
@@ -310,7 +417,7 @@ describe('админка', function () {
         $listing = pendingRentalWithNewCategory('Автобусы');
 
         Livewire::test(EditListing::class, ['record' => $listing->getRouteKey()])
-            ->callAction(TestAction::make('renameNewEquipmentCategory')->schemaComponent('category_id'), [
+            ->callAction(TestAction::make('renameNewEquipmentCategory')->schemaComponent('new_category'), [
                 'names' => [$listing->category_id => 'автобус'],
             ])
             ->assertHasNoActionErrors();
@@ -324,7 +431,7 @@ describe('админка', function () {
         $listing = pendingRentalWithNewCategory('Автобусы');
 
         Livewire::test(EditListing::class, ['record' => $listing->getRouteKey()])
-            ->callAction(TestAction::make('renameNewEquipmentCategory')->schemaComponent('category_id'), [
+            ->callAction(TestAction::make('renameNewEquipmentCategory')->schemaComponent('new_category'), [
                 'names' => [$listing->category_id => 'автобус'],
             ])
             ->assertHasActionErrors();
@@ -345,18 +452,52 @@ describe('админка', function () {
             ->and(Category::query()->where('name', 'Автобус')->exists())->toBeFalse();
     });
 
-    test('оператор заменяет новую технику водителя — новая уходит из справочника', function () {
+    test('новая техника водителя — отдельным полем, выбор техники предлагает только утверждённую', function () {
         $new = Category::factory()->unapproved()->create(['name' => 'Автобус']);
+        Category::factory()->unapproved()->create(['name' => 'Водовоз']);
         $listing = pendingDriverWithNewMachinery($new);
+        $excavator = categoryNamed('Экскаватор');
 
         Livewire::test(EditListing::class, ['record' => $listing->getRouteKey()])
-            ->assertSee('Автобус (новая)')
-            ->fillForm(['machine_categories' => [categoryNamed('Экскаватор')->id]])
+            ->assertSee('Новая техника: «Автобус»')
+            ->assertDontSee('Водовоз')
+            ->assertFormSet(['machine_categories' => [(string) $excavator->id], 'new_machine_categories' => [(string) $new->id]])
+            ->assertSchemaComponentExists('machine_categories', checkComponentUsing: fn (Select $field): bool => array_values($field->getOptions()) === ['Экскаватор'])
+            ->assertActionVisible(TestAction::make('renameNewEquipmentMachineCategories')->schemaComponent('new_machine_categories'))
             ->call('save')
             ->assertHasNoFormErrors();
 
-        expect($listing->refresh()->machineCategories->pluck('name')->all())->toBe(['Экскаватор'])
+        expect($listing->refresh()->machineCategories->pluck('name')->sort()->values()->all())->toBe(['Автобус', 'Экскаватор']);
+    });
+
+    test('оператор заменяет новую технику водителя — новая уходит из справочника', function () {
+        $new = Category::factory()->unapproved()->create(['name' => 'Автобус']);
+        $listing = pendingDriverWithNewMachinery($new);
+        $crane = categoryNamed('Автокран');
+
+        Livewire::test(EditListing::class, ['record' => $listing->getRouteKey()])
+            ->fillForm(['machine_categories' => [categoryNamed('Экскаватор')->id, $crane->id], 'new_machine_categories' => []])
+            ->call('save')
+            ->assertHasNoFormErrors();
+
+        expect($listing->refresh()->machineCategories->pluck('name')->sort()->values()->all())->toBe(['Автокран', 'Экскаватор'])
             ->and(Category::find($new->id))->toBeNull();
+    });
+
+    test('чужую новую технику водителю не поставить ни выбором, ни подменой поля новой техники', function () {
+        $listing = pendingDriverWithNewMachinery(Category::factory()->unapproved()->create(['name' => 'Автобус']));
+        $foreign = Category::factory()->unapproved()->create(['name' => 'Водовоз']);
+
+        Livewire::test(EditListing::class, ['record' => $listing->getRouteKey()])
+            ->fillForm(['machine_categories' => [$foreign->id]])
+            ->call('save')
+            ->assertHasFormErrors(['machine_categories.0']);
+
+        Livewire::test(EditListing::class, ['record' => $listing->getRouteKey()])
+            ->set('data.new_machine_categories', [(string) $foreign->id])
+            ->call('save');
+
+        expect($listing->refresh()->machineCategories->pluck('name')->all())->not->toContain('Водовоз');
     });
 
     test('очередь модерации показывает новую технику, а фильтр категорий её не предлагает', function () {

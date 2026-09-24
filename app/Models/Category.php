@@ -10,6 +10,8 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\UniqueConstraintViolationException;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 
 /**
@@ -21,9 +23,11 @@ use Illuminate\Support\Str;
  * (approved_at is null) attached to that supplier's listing. An unapproved
  * category stays out of every list and filter — customer search, the
  * catalog, the web form, the admin — until the operator approves a listing
- * it is attached to; a rejected listing takes an orphaned one away with it.
- * Categories the operator adds are approved from the start (the column
- * defaults to the insert time).
+ * it is attached to (that listing's own forms show it apart from the list);
+ * a rejected listing takes an orphaned one away with it. Categories the
+ * operator adds are approved from the start (the column defaults to the
+ * insert time). A name is unique regardless of letter case — enforced by
+ * a database index, so concurrent dialogs cannot add «Автобус» twice.
  */
 #[Fillable(['name', 'approved_at'])]
 class Category extends Model
@@ -50,23 +54,6 @@ class Category extends Model
     protected function approved(Builder $query): void
     {
         $query->whereNotNull($query->qualifyColumn('approved_at'));
-    }
-
-    /**
-     * Approved categories plus the given ones whatever their status: a
-     * form editing a listing must still show and accept the new category
-     * that listing already carries.
-     *
-     * @param  iterable<int, int|string|null>  $ids
-     */
-    #[Scope]
-    protected function approvedOr(Builder $query, iterable $ids): void
-    {
-        $ids = collect($ids)->filter()->values()->all();
-
-        $query->where(fn (Builder $builder): Builder => $builder
-            ->whereNotNull($builder->qualifyColumn('approved_at'))
-            ->when($ids !== [], fn (Builder $either): Builder => $either->orWhereIn($either->qualifyColumn('id'), $ids)));
     }
 
     #[Scope]
@@ -99,7 +86,7 @@ class Category extends Model
 
         return $name === ''
             ? null
-            : self::query()->whereRaw('lower(name) = lower(?)', [$name])->orderBy('id')->first();
+            : self::query()->useWritePdo()->whereRaw('lower(name) = lower(?)', [$name])->first();
     }
 
     /**
@@ -114,8 +101,21 @@ class Category extends Model
     {
         $name = self::normalizeName($name);
 
-        return self::findByName($name)
-            ?? self::query()->createOrFirst(['name' => $name], ['approved_at' => null]);
+        $existing = self::findByName($name);
+
+        if ($existing !== null) {
+            return $existing;
+        }
+
+        // Two suppliers may name the same new equipment at once, in any
+        // letter case: both miss the lookup above, and the case-insensitive
+        // unique index lets only one insert through. The savepoint keeps an
+        // enclosing transaction usable after the losing insert.
+        try {
+            return DB::transaction(fn (): self => self::query()->create(['name' => $name, 'approved_at' => null]));
+        } catch (UniqueConstraintViolationException $exception) {
+            return self::findByName($name) ?? throw $exception;
+        }
     }
 
     /**

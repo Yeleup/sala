@@ -41,6 +41,15 @@ class UpdateSupplierListingRequest extends FormRequest
         if (is_string($this->input('title'))) {
             $this->merge(['title' => WhatsappText::templateParameter($this->input('title')) ?: null]);
         }
+
+        // The rental's new equipment is not among the select's options: an
+        // empty choice keeps it, a pick from the dictionary replaces it.
+        $listing = $this->route('listing');
+
+        if ($listing instanceof Listing && blank($this->input('category_id'))
+            && $listing->category !== null && ! $listing->category->isApproved()) {
+            $this->merge(['category_id' => $listing->category_id]);
+        }
     }
 
     /**
@@ -92,8 +101,13 @@ class UpdateSupplierListingRequest extends FormRequest
                     // when the dictionary has no entry for it — the operator
                     // then adds the category during moderation. Demanding a
                     // checkbox here would lock out a driver of a bus.
-                    'machine_categories' => ['required_without:unlisted_machinery', 'array'],
-                    'machine_categories.*' => ['integer', $this->offeredCategory()],
+                    // The driver's own new equipment (added by the AI from
+                    // the chat, not yet approved) comes as a separate list
+                    // of the ones he keeps — never among the dictionary.
+                    'machine_categories' => ['required_without_all:unlisted_machinery,keep_new_machinery', 'array'],
+                    'machine_categories.*' => ['integer', Rule::exists('categories', 'id')->whereNotNull('approved_at')],
+                    'keep_new_machinery' => ['nullable', 'array'],
+                    'keep_new_machinery.*' => ['integer', Rule::in($this->ownNewMachineryIds())],
                     'unlisted_machinery' => ['nullable', 'string', 'max:120'],
                     'description' => ['nullable', 'string', 'max:2000'],
                     // Required only while the listing has no stored document —
@@ -105,22 +119,32 @@ class UpdateSupplierListingRequest extends FormRequest
     }
 
     /**
-     * A category the form offers: an approved one, or a new one the listing
-     * already carries — the AI added it from the chat and the operator has
-     * not seen it yet. Other suppliers' new categories stay out of reach.
+     * A category the form accepts: an approved one, or the new one the
+     * listing already carries (kept unchanged — see prepareForValidation()).
+     * Other suppliers' new categories stay out of reach.
      */
     private function offeredCategory(): Exists
     {
         $listing = $this->route('listing');
-        $ownIds = $listing instanceof Listing
-            ? [$listing->category_id, ...$listing->machineCategories()->pluck('categories.id')->all()]
-            : [];
+        $ownId = $listing instanceof Listing ? $listing->category_id : null;
 
         return Rule::exists('categories', 'id')->where(
             fn (Builder $query): Builder => $query->where(fn (Builder $either): Builder => $either
                 ->whereNotNull('approved_at')
-                ->orWhereIn('id', array_values(array_filter($ownIds)))),
+                ->when($ownId !== null, fn (Builder $own): Builder => $own->orWhere('id', $ownId))),
         );
+    }
+
+    /**
+     * @return list<int>
+     */
+    private function ownNewMachineryIds(): array
+    {
+        $listing = $this->route('listing');
+
+        return $listing instanceof Listing
+            ? $listing->machineCategories()->unapproved()->pluck('categories.id')->all()
+            : [];
     }
 
     /**
@@ -202,7 +226,8 @@ class UpdateSupplierListingRequest extends FormRequest
             'experience_years.min' => 'Стаж не может быть отрицательным.',
             'experience_years.max' => 'Стаж больше :max лет не принимается.',
             'travels_to_other_cities.boolean' => 'Отметка «готов выезжать» повреждена — обновите страницу и попробуйте снова.',
-            'machine_categories.required_without' => 'Отметьте технику из списка или напишите её словами.',
+            'machine_categories.required_without_all' => 'Отметьте технику из списка или напишите её словами.',
+            'keep_new_machinery.*.in' => 'Выберите технику из списка.',
             'machine_categories.*.integer' => 'Выберите технику из списка.',
             'machine_categories.*.exists' => 'Выберите технику из списка.',
             'document.image' => 'Документ принимается как фото: JPG, PNG или WebP.',

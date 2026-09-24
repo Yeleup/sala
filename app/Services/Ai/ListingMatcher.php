@@ -338,7 +338,9 @@ class ListingMatcher
      */
     protected function dictionaryWords(): array
     {
-        return $this->dictionaryWords ??= Category::query()->pluck('name')
+        // Only approved categories: a new one the AI added is not a
+        // dictionary word until the operator approves its listing.
+        return $this->dictionaryWords ??= Category::query()->approved()->pluck('name')
             ->merge(Brand::query()->pluck('name'))
             ->flatMap(fn (string $name): array => $this->tokenize($name))
             ->map(fn (string $word): string => $this->stemmed($word))

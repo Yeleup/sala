@@ -14,6 +14,7 @@ use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Attributes\Scope;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Casts\Attribute;
+use Illuminate\Database\Eloquent\Collection as EloquentCollection;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -21,6 +22,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\HasOne;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use InvalidArgumentException;
@@ -47,6 +49,11 @@ class Listing extends Model
      * the admin form. Photos arriving from the bot are not capped.
      */
     public const int MAX_PHOTOS = 10;
+
+    /**
+     * The width of the «техника вне справочника» line (the column).
+     */
+    public const int UNLISTED_MACHINERY_MAX_LENGTH = 120;
 
     protected $attributes = [
         'status' => ListingStatus::Draft->value,
@@ -83,7 +90,16 @@ class Listing extends Model
             if ($listing->status === ListingStatus::Published && $listing->wasChanged(self::EMBEDDING_SOURCE_FIELDS)) {
                 GenerateListingEmbedding::dispatch($listing);
             }
+
+            // A new category swapped for another one — by the operator on
+            // moderation, the supplier in the web form or the bot — must
+            // not linger in the dictionary with nothing attached.
+            if ($listing->wasChanged('category_id') && $listing->getOriginal('category_id') !== null) {
+                Category::pruneUnattachedUnapproved();
+            }
         });
+
+        static::deleted(fn (): null => Category::pruneUnattachedUnapproved());
     }
 
     /** @return BelongsTo<Contact, $this> */
@@ -163,6 +179,21 @@ class Listing extends Model
         $parts = array_filter([$this->location?->name, $this->location_detail]);
 
         return $parts === [] ? null : implode(', ', $parts);
+    }
+
+    /**
+     * The new categories the AI added for this listing that the operator
+     * has not approved yet — the rental category and the driver's
+     * machinery alike.
+     *
+     * @return EloquentCollection<int, Category>
+     */
+    public function unapprovedCategories(): EloquentCollection
+    {
+        return (new EloquentCollection(array_filter([$this->category, ...$this->machineCategories->all()])))
+            ->reject(fn (Category $category): bool => $category->isApproved())
+            ->unique('id')
+            ->values();
     }
 
     /**
@@ -336,37 +367,79 @@ class Listing extends Model
             'A listing cannot be published while '.implode(', ', $this->missingForPublication()).' is missing.',
         );
 
-        $this->update([
-            'status' => ListingStatus::Published,
-            'expires_at' => now()->addDays(self::LIFETIME_DAYS),
-            'rejection_reason' => null,
-            ...self::verdict($author),
-        ]);
+        $this->goLive($author);
     }
 
+    /**
+     * Approval from the moderation queue. The new categories the AI added
+     * for this listing are approved with it: the operator has just seen
+     * them on the form (and could rename or swap them), so from now on
+     * they are ordinary dictionary entries.
+     */
     public function approve(?User $author = null): void
     {
         $this->assertStatusIn([ListingStatus::PendingModeration], 'approve');
 
-        $this->update([
-            'status' => ListingStatus::Published,
-            'expires_at' => now()->addDays(self::LIFETIME_DAYS),
-            'rejection_reason' => null,
-            ...self::verdict($author),
-        ]);
+        $this->goLive($author);
     }
 
+    /**
+     * The shared step of approve() and publish(): into search, with the
+     * listing's still-new categories approved in the same transaction —
+     * a published listing never carries a category the lists hide.
+     */
+    private function goLive(?User $author): void
+    {
+        DB::transaction(function () use ($author): void {
+            $this->unsetRelation('category')->unsetRelation('machineCategories');
+            $this->unapprovedCategories()->each(fn (Category $category) => $category->approve());
+
+            $this->update([
+                'status' => ListingStatus::Published,
+                'expires_at' => now()->addDays(self::LIFETIME_DAYS),
+                'rejection_reason' => null,
+                ...self::verdict($author),
+            ]);
+        });
+    }
+
+    /**
+     * A rejected listing lets go of the new categories the AI added for it:
+     * the operator did not approve them, and a category nothing else
+     * carries leaves the dictionary. The driver's machinery is kept in his
+     * own words (the «техника вне справочника» line) so the rejected
+     * questionnaire still says what he operates; a rental's category
+     * empties and is picked from the list when the supplier corrects it.
+     */
     public function reject(string $reason, ?User $author = null): void
     {
         $this->assertStatusIn([ListingStatus::PendingModeration], 'reject');
 
         throw_if(blank($reason), new InvalidArgumentException('A rejection reason is required.'));
 
-        $this->update([
-            'status' => ListingStatus::Rejected,
-            'rejection_reason' => $reason,
-            ...self::verdict($author),
-        ]);
+        DB::transaction(function () use ($reason, $author): void {
+            $this->unsetRelation('category')->unsetRelation('machineCategories');
+            $released = $this->unapprovedCategories();
+            $releasedMachinery = $released->reject(fn (Category $category): bool => $category->id === $this->category_id);
+
+            if ($releasedMachinery->isNotEmpty()) {
+                $this->machineCategories()->detach($releasedMachinery->pluck('id')->all());
+                $this->unlisted_machinery = Str::limit(collect([$this->unlisted_machinery])
+                    ->merge($releasedMachinery->pluck('name'))
+                    ->filter()
+                    ->implode(', '), self::UNLISTED_MACHINERY_MAX_LENGTH, '');
+            }
+
+            $this->update([
+                'status' => ListingStatus::Rejected,
+                'rejection_reason' => $reason,
+                'category_id' => $released->contains('id', $this->category_id) ? null : $this->category_id,
+                ...self::verdict($author),
+            ]);
+
+            $this->unsetRelation('category')->unsetRelation('machineCategories');
+            Category::pruneUnattachedUnapproved();
+        });
     }
 
     /**

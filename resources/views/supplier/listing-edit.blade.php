@@ -38,12 +38,18 @@
                 </div>
 
                 @if ($listing->kind === \App\Enums\ListingKind::Rental)
+                    {{-- Новая техника, которую ИИ завёл из переписки, — не вариант списка: пустой выбор её оставляет, выбор из списка заменяет. --}}
+                    @php($selectedCategory = old('category_id', $newCategory ? null : $listing->category_id))
                     <div class="field">
                         <label for="category_id">Категория</label>
+                        @if ($newCategory)
+                            <p style="margin: 0 0 0.5rem;"><span class="badge badge-amber">Новая техника</span> {{ $newCategory->name }}</p>
+                            <p class="muted" style="margin: 0 0 0.5rem;">Такой техники в нашем списке пока нет — её проверит оператор. Если нужная есть в списке, выберите её.</p>
+                        @endif
                         <select id="category_id" name="category_id">
-                            <option value="" @selected(old('category_id', $listing->category_id) === null)>— выберите категорию —</option>
+                            <option value="" @selected(blank($selectedCategory))>{{ $newCategory ? '— оставить новую технику —' : '— выберите категорию —' }}</option>
                             @foreach ($categories as $category)
-                                <option value="{{ $category->id }}" @selected((int) old('category_id', $listing->category_id) === $category->id)>{{ $category->name }}</option>
+                                <option value="{{ $category->id }}" @selected((int) $selectedCategory === $category->id)>{{ $category->name }}</option>
                             @endforeach
                         </select>
                         @error('category_id') <p class="error">{{ $message }}</p> @enderror
@@ -108,6 +114,22 @@
                         @error('machine_categories') <p class="error">{{ $message }}</p> @enderror
                         @error('machine_categories.*') <p class="error">{{ $message }}</p> @enderror
                     </div>
+
+                    @if ($newMachinery->isNotEmpty())
+                        {{-- Новая техника из переписки — отдельно от списка: её проверит оператор. --}}
+                        <div class="field">
+                            <label>Новая техника</label>
+                            @foreach ($newMachinery as $category)
+                                <label style="display: flex; align-items: center; gap: 0.5rem; margin: 0; padding: 0.4375rem 0; font-size: 0.9375rem; font-weight: 400; letter-spacing: normal; text-transform: none; color: #1e293b; cursor: pointer;">
+                                    <input type="checkbox" name="keep_new_machinery[]" value="{{ $category->id }}" style="width: auto; margin: 0; accent-color: #2563eb;"
+                                           @checked(in_array($category->id, array_map('intval', (array) old('keep_new_machinery', $newMachinery->pluck('id')->all())), true))>
+                                    {{ $category->name }}
+                                </label>
+                            @endforeach
+                            <p class="muted" style="margin: 0.25rem 0 0;">Такой техники в нашем списке пока нет — её проверит оператор. Снимите галочку, если отметили нужную технику в списке выше.</p>
+                            @error('keep_new_machinery.*') <p class="error">{{ $message }}</p> @enderror
+                        </div>
+                    @endif
 
                     <div class="field">
                         {{-- Выход для техники, которой в справочнике нет: чекбоксы тогда не обязательны, категорию заведёт оператор. --}}

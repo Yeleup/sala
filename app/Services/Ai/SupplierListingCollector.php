@@ -29,6 +29,7 @@ use App\Services\DereuMessenger;
 use App\Services\Locations\LocationResolver;
 use App\Support\WhatsappText;
 use Illuminate\Database\Eloquent\Collection;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
@@ -70,7 +71,10 @@ class SupplierListingCollector
 
     /**
      * How many times the «Нет в списке» prompt may go out for a driver whose
-     * machinery the category dictionary lacks. The prompt spends no
+     * machinery the category dictionary lacks. Since the AI adds unknown
+     * machinery to the dictionary itself (a new category awaiting the
+     * operator), the prompt is reached only by a dialog that remembered the
+     * machinery in words before that change. The prompt spends no
      * clarification attempt — it is an honest explanation plus a button, not
      * a question the supplier failed to answer — so it must be bounded on
      * its own: after the second one the machinery field closes by itself and
@@ -647,8 +651,7 @@ class SupplierListingCollector
 
         if ($missing === []) {
             $draft = $this->ensureDraft($session, $state);
-            $draft->update($this->listingAttributes($state));
-            $this->syncMachineCategories($draft, $state);
+            $this->saveDraft($draft, $state, $this->listingAttributes($state));
 
             // A driver's licence document is mandatory but is not a field:
             // the summary goes out without the submit button and asks for
@@ -836,8 +839,7 @@ class SupplierListingCollector
     private function handOffToWebForm(BotSession $session, array $state): AiOutcome
     {
         $draft = $this->ensureDraft($session, $state);
-        $draft->update($this->listingAttributes($state));
-        $this->syncMachineCategories($draft, $state);
+        $this->saveDraft($draft, $state, $this->listingAttributes($state));
         $this->persist($session, $state);
 
         // Reached from the confirmation phase the data IS collected: the bot
@@ -938,7 +940,7 @@ class SupplierListingCollector
         }
 
         $draft = $this->ensureDraft($session, $state);
-        $draft->update($attributes);
+        $this->saveDraft($draft, $state, $attributes);
         $this->persist($session, $state);
         $this->messenger->sendText(
             $session->contact,
@@ -991,7 +993,7 @@ class SupplierListingCollector
         }
 
         $draft = $this->ensureDraft($session, $state);
-        $draft->update($attributes);
+        $this->saveDraft($draft, $state, $attributes);
 
         if ($shouldSnapshot) {
             $this->snapshotPausedState($session, $state);
@@ -1597,34 +1599,31 @@ class SupplierListingCollector
             return null;
         }
 
+        // Equipment the dictionary lacks arrives in its own field and joins
+        // the dictionary field as a name: the questionnaire treats it as
+        // named equipment, and the category record is added — new, awaiting
+        // the operator — only when the draft is written (saveDraft()).
         if ($kind === ListingKind::Rental) {
-            $fields['category'] = $this->canonicalCategory($fields['category'] ?? null, $categories)?->name;
+            $fields['category'] = $this->canonicalCategory($fields['category'] ?? null, $categories)?->name
+                ?? $this->newEquipmentName($fields['new_category'] ?? null, $categories);
             $fields['brand'] = $this->canonicalBrand($fields['brand'] ?? null, $brands)?->name;
         }
 
         if ($kind === ListingKind::Driver) {
+            $newMachinery = collect(is_array($fields['new_machine_categories'] ?? null) ? $fields['new_machine_categories'] : [])
+                ->map(fn (mixed $name): ?string => $this->newEquipmentName($name, $categories))
+                ->filter()
+                ->all();
+
             // Null stays null: it means «not extracted yet», and later it
             // must not erase machine categories synced on an earlier turn.
-            $fields['machine_categories'] = is_array($fields['machine_categories'] ?? null)
-                ? $this->canonicalMachineCategories($fields['machine_categories'], $categories)
-                : null;
-
-            $fields['unlisted_machinery'] = $this->normalizeUnlistedMachinery($fields['unlisted_machinery'] ?? null);
-
-            // A word that does match a dictionary category (the operator
-            // added it, the model did not notice) is machinery from the
-            // list, not outside it: moved over, so the «Нет в списке» prompt
-            // never goes out for machinery the dictionary does have.
-            $listed = $this->canonicalCategory($fields['unlisted_machinery'], $categories);
-
-            if ($listed !== null) {
-                $fields['machine_categories'] = collect($fields['machine_categories'] ?? [])
-                    ->push($listed->name)
-                    ->unique()
+            $fields['machine_categories'] = is_array($fields['machine_categories'] ?? null) || $newMachinery !== []
+                ? collect($this->canonicalMachineCategories($fields['machine_categories'] ?? [], $categories))
+                    ->merge($newMachinery)
+                    ->unique(fn (string $name): string => mb_strtolower($name))
                     ->values()
-                    ->all();
-                $fields['unlisted_machinery'] = null;
-            }
+                    ->all()
+                : null;
         }
 
         return $this->resolveLocation($fields, $state);
@@ -1785,18 +1784,48 @@ class SupplierListingCollector
     }
 
     /**
-     * The machinery the driver named in their own words because the
-     * dictionary had no category for it, as the listing stores and the bot
-     * quotes it — trimmed, first letter capitalized like a category name —
-     * or null when nothing was named.
+     * Equipment the model named outside the dictionary, in the spelling a
+     * category is stored in — or the dictionary's own spelling when the
+     * name, letter case aside, is already there (the model missed it, or
+     * another supplier's new category just got added). Null when nothing
+     * was named.
+     *
+     * @param  Collection<int, Category>  $categories
      */
-    private function normalizeUnlistedMachinery(mixed $named): ?string
+    private function newEquipmentName(mixed $named, Collection $categories): ?string
     {
-        if (! is_string($named) || trim($named) === '') {
+        if (! is_string($named) || Category::normalizeName($named) === '') {
             return null;
         }
 
-        return $this->unlistedMachineryWord($named);
+        return $this->canonicalCategory($named, $categories)?->name
+            ?? Str::limit(Category::normalizeName($named), 255, '');
+    }
+
+    /**
+     * Write the collected fields into the draft. The equipment names become
+     * category links here — and a name the dictionary does not have yet
+     * becomes a new category awaiting the operator (see Category), all in
+     * one transaction with the listing, so a new category never exists
+     * without the listing that brought it. One the supplier took back on a
+     * later turn is let go of and leaves the dictionary.
+     *
+     * @param  array<string, mixed>  $state
+     * @param  array<string, mixed>  $attributes
+     */
+    private function saveDraft(Listing $draft, array $state, array $attributes): void
+    {
+        DB::transaction(function () use ($draft, $state, $attributes): void {
+            if ($this->kind($state) === ListingKind::Rental) {
+                $category = $state['fields']['category'] ?? null;
+                $attributes['category_id'] = is_string($category) && filled($category)
+                    ? Category::findOrCreateUnapproved($category)->id
+                    : null;
+            }
+
+            $draft->update($attributes);
+            $this->syncMachineCategories($draft, $state);
+        });
     }
 
     /**
@@ -1813,9 +1842,16 @@ class SupplierListingCollector
             return;
         }
 
-        $draft->machineCategories()->sync(
-            Category::query()->whereIn('name', $state['fields']['machine_categories'])->pluck('id'),
-        );
+        $changes = $draft->machineCategories()->sync(collect($state['fields']['machine_categories'])
+            ->filter(fn (mixed $name): bool => is_string($name) && filled($name))
+            ->map(fn (string $name): int => Category::findOrCreateUnapproved($name)->id)
+            ->unique()
+            ->values()
+            ->all());
+
+        if ($changes['detached'] !== []) {
+            Category::pruneUnattachedUnapproved();
+        }
     }
 
     /**
@@ -1970,8 +2006,11 @@ class SupplierListingCollector
 
         return $common + match ($kind) {
             ListingKind::Rental => [
-                'category_id' => filled($fields['category'] ?? null)
-                    ? Category::query()->where('name', $fields['category'])->value('id') : null,
+                // Only an existing entry here: the method also serves the
+                // read-only progress checks, and a new category is added by
+                // saveDraft() alone.
+                'category_id' => is_string($fields['category'] ?? null) && filled($fields['category'])
+                    ? Category::findByName($fields['category'])?->id : null,
                 'brand_id' => filled($fields['brand'] ?? null)
                     ? Brand::query()->where('name', $fields['brand'])->value('id') : null,
                 'price' => $fields['price'] ?? null,

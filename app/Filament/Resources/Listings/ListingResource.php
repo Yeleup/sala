@@ -140,6 +140,12 @@ class ListingResource extends Resource
     {
         $notes = ['Объявление попадёт в поиск на '.Listing::LIFETIME_DAYS.' дней.'];
 
+        $newEquipment = self::newEquipmentNames($record);
+
+        if ($newEquipment !== null) {
+            $notes[] = 'Новая техника '.$newEquipment.' войдёт в справочник категорий и станет видна в поиске, фильтрах и списках.';
+        }
+
         if ($record->supplier?->hasOpenSessionWindow()) {
             $notes[] = 'Поставщик недавно писал — уведомление уйдёт ему бесплатным сообщением.';
         } elseif (self::paidNoticeIsOperatorsChoice($record)) {
@@ -151,6 +157,16 @@ class ListingResource extends Resource
         return implode(' ', $notes);
     }
 
+    /**
+     * The listing's new categories as the modal names them, or null.
+     */
+    private static function newEquipmentNames(Listing $record): ?string
+    {
+        $names = $record->unapprovedCategories()->map(fn ($category): string => '«'.$category->name.'»');
+
+        return $names->isEmpty() ? null : $names->implode(', ');
+    }
+
     public static function rejectAction(): Action
     {
         return Action::make('reject')
@@ -159,7 +175,12 @@ class ListingResource extends Resource
             ->color('danger')
             ->visible(fn (Listing $record): bool => $record->status === ListingStatus::PendingModeration)
             ->modalHeading('Отклонить объявление')
-            ->modalDescription('Поставщик получит уведомление в WhatsApp; причину он увидит по ссылке в веб-кабинете.')
+            ->modalDescription(fn (Listing $record): string => implode(' ', array_filter([
+                'Поставщик получит уведомление в WhatsApp; причину он увидит по ссылке в веб-кабинете.',
+                self::newEquipmentNames($record) !== null
+                    ? 'Новая техника '.self::newEquipmentNames($record).' уйдёт из объявления и удалится из справочника, если больше ни к чему не привязана.'
+                    : null,
+            ])))
             ->schema([
                 Textarea::make('rejection_reason')
                     ->label('Причина отклонения')

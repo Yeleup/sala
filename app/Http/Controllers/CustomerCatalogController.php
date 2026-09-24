@@ -63,7 +63,7 @@ class CustomerCatalogController extends Controller
         return view('customer.catalog', [
             'filters' => $filters,
             'listings' => $listings,
-            'categories' => Category::query()->orderBy('name')->get(),
+            'categories' => Category::query()->approved()->orderBy('name')->get(),
             'kinds' => ListingKind::cases(),
             'locationLabel' => $filters['location']?->label(),
             'resetUrl' => $this->links->catalogUrl($contact),
@@ -191,7 +191,7 @@ class CustomerCatalogController extends Controller
             // the link would empty their выдача through a filter the
             // customer can neither see nor clear.
             'category' => $kind === null || $kind->usesCategory()
-                ? Category::find((int) $request->query('category_id'))
+                ? Category::query()->approved()->find((int) $request->query('category_id'))
                 : null,
             'location' => Location::find((int) $request->query('location_id')),
             'sort' => $sort,

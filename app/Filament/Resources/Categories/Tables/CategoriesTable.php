@@ -9,12 +9,16 @@ use Filament\Notifications\Notification;
 use Filament\Support\Icons\Heroicon;
 use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Table;
+use Illuminate\Database\Eloquent\Builder;
 
 class CategoriesTable
 {
     public static function configure(Table $table): Table
     {
         return $table
+            // New categories the AI added wait for the approval of their
+            // listing on the moderation form, not here.
+            ->modifyQueryUsing(fn (Builder $query): Builder => $query->approved())
             ->columns([
                 TextColumn::make('name')
                     ->label('Название')

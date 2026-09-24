@@ -24,6 +24,8 @@ class ListingsTable
     public static function configure(Table $table): Table
     {
         return $table
+            // The «Новая техника» column reads both category relations.
+            ->modifyQueryUsing(fn (Builder $query): Builder => $query->with(['category', 'machineCategories']))
             // Every column can be switched off, and the four the operator
             // needs least often start off: they do not all fit a laptop
             // screen, and which ones matter depends on what he is doing
@@ -79,6 +81,16 @@ class ListingsTable
                 // still needs the operator's hand before publication — a
                 // category to add and tick — and the queue should show
                 // that at a glance.
+                // Equipment the AI added to the dictionary from the chat and
+                // the operator has not approved yet — approving the listing
+                // approves it, so the moderation queue shows it at a glance.
+                TextColumn::make('new_equipment')
+                    ->label('Новая техника')
+                    ->state(fn (Listing $record): array => $record->unapprovedCategories()->pluck('name')->all())
+                    ->badge()
+                    ->color('info')
+                    ->placeholder('—')
+                    ->toggleable(),
                 TextColumn::make('unlisted_machinery')
                     ->label('Техника вне справочника')
                     ->searchable()
@@ -135,7 +147,7 @@ class ListingsTable
                     )->all()),
                 SelectFilter::make('category_id')
                     ->label('Категория')
-                    ->relationship('category', 'name'),
+                    ->relationship('category', 'name', fn (Builder $query): Builder => $query->approved()),
                 SelectFilter::make('origin')
                     ->label('Источник')
                     ->options(ListingOrigin::class),

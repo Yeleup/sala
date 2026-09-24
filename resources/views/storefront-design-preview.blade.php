@@ -1038,6 +1038,36 @@
 </div>
 
 <div class="preview-section">
+    <h2>Портал поставщика — черновик из переписки с новой техникой, mobile 375px (аренда: новая техника над списком категорий; водитель: отдельный блок «Новая техника» под списком)</h2>
+    <div class="viewport viewport-mobile viewport-supplier">
+        <main>
+            <div class="card">
+                <div class="field">
+                    <label>Категория</label>
+                    <p style="margin: 0 0 0.5rem;"><span class="badge badge-amber">Новая техника</span> Автобус</p>
+                    <p class="muted" style="margin: 0 0 0.5rem;">Такой техники в нашем списке пока нет — её проверит оператор. Если нужная есть в списке, выберите её.</p>
+                    <select><option selected>— оставить новую технику —</option><option>Автокран</option><option>Экскаватор</option></select>
+                </div>
+            </div>
+            <div class="card" style="margin-top: 1rem;">
+                <div class="field">
+                    <label>Техника, на которой работаете</label>
+                    <div style="max-height: 13rem; overflow-y: auto; border: 1px solid #cbd5e1; border-radius: 0.625rem; background: #fff; padding: 0.25rem 0.75rem;">
+                        <label style="display: flex; align-items: center; gap: 0.5rem; margin: 0; padding: 0.4375rem 0; font-size: 0.9375rem; font-weight: 400; letter-spacing: normal; text-transform: none; color: #1e293b; cursor: pointer;"><input type="checkbox" style="width: auto; margin: 0; accent-color: #2563eb;"> Автокран</label>
+                        <label style="display: flex; align-items: center; gap: 0.5rem; margin: 0; padding: 0.4375rem 0; font-size: 0.9375rem; font-weight: 400; letter-spacing: normal; text-transform: none; color: #1e293b; cursor: pointer;"><input type="checkbox" checked style="width: auto; margin: 0; accent-color: #2563eb;"> Экскаватор</label>
+                    </div>
+                </div>
+                <div class="field">
+                    <label>Новая техника</label>
+                    <label style="display: flex; align-items: center; gap: 0.5rem; margin: 0; padding: 0.4375rem 0; font-size: 0.9375rem; font-weight: 400; letter-spacing: normal; text-transform: none; color: #1e293b; cursor: pointer;"><input type="checkbox" checked style="width: auto; margin: 0; accent-color: #2563eb;"> Автобус</label>
+                    <p class="muted" style="margin: 0.25rem 0 0;">Такой техники в нашем списке пока нет — её проверит оператор. Снимите галочку, если отметили нужную технику в списке выше.</p>
+                </div>
+            </div>
+        </main>
+    </div>
+</div>
+
+<div class="preview-section">
     <h2>Портал поставщика — просмотр опубликованного объявления (данные списком, снятие с публикации)</h2>
     <div class="viewport viewport-desktop viewport-supplier">
         <main>

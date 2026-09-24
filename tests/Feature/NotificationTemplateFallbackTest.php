@@ -49,7 +49,7 @@ test('уведомление о заявке в открытое окно нес
         ->and($fallback['button_payloads'])->toHaveCount(2);
 });
 
-test('30-дневный опрос в открытое окно несёт шаблонный фолбэк', function () {
+test('опрос актуальности в открытое окно несёт шаблонный фолбэк', function () {
     $template = WhatsappTemplate::factory()->approved()
         ->create(['name' => WhatsappTemplateLibrary::LISTING_RENEWAL]);
     $supplier = Contact::factory()->withOpenSessionWindow()->create();

@@ -10,7 +10,7 @@ use InvalidArgumentException;
 
 /**
  * Built-in catalog of the project's standard Template Messages — the ones
- * the business rules rely on (the 30-day relevance poll, the customer
+ * the business rules rely on (the relevance poll, the customer
  * request notification, the moderation verdicts). The operator adds them
  * to the registry in one click instead of typing the texts by hand; flows
  * reference them by the name constants.
@@ -19,7 +19,7 @@ use InvalidArgumentException;
  */
 class WhatsappTemplateLibrary
 {
-    /** The 30-day relevance poll sent a day before a listing expires. */
+    /** The relevance poll sent a day before a listing expires. */
     public const string LISTING_RENEWAL = 'listing_renewal';
 
     /**
@@ -53,7 +53,7 @@ class WhatsappTemplateLibrary
                 'name' => self::LISTING_RENEWAL,
                 'language' => 'ru',
                 'category' => WhatsappTemplateCategory::Utility,
-                'title' => '30-дневный опрос актуальности',
+                'title' => 'Опрос актуальности',
                 'purpose' => 'Уходит поставщику за сутки до окончания публикации: подтвердить актуальность или отправить объявление в архив.',
                 'body' => 'Ваше объявление «{{1}}» скоро перестанет показываться в поиске. Оно ещё актуально?',
                 'quick_replies' => ['Да, актуально', 'Нет, в архив'],
@@ -63,7 +63,7 @@ class WhatsappTemplateLibrary
                 'name' => self::SEVERAL_LISTINGS_RENEWAL,
                 'language' => 'ru',
                 'category' => WhatsappTemplateCategory::Utility,
-                'title' => '30-дневный опрос актуальности — сразу по нескольким объявлениям',
+                'title' => 'Опрос актуальности — сразу по нескольким объявлениям',
                 'purpose' => 'Уходит поставщику, у которого за сутки истекает сразу несколько публикаций: один вопрос на всю пачку вместо платного шаблона на каждое объявление.',
                 'body' => 'Ваше объявление «{{1}}» и ещё {{2}} скоро перестанут показываться в поиске. Они ещё актуальны?',
                 'quick_replies' => ['Все актуальны', 'Разобрать по одному', 'Все в архив'],

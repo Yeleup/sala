@@ -848,9 +848,9 @@
                 <div class="meta">
                     <strong>Срок показа</strong>
                 </div>
-                <p class="muted" style="margin: 0.25rem 0 0;">Каждое объявление показывается в поиске 30 дней. Продлите все разом — сроки сойдутся к одной дате, и напоминание придёт одним сообщением.</p>
+                <p class="muted" style="margin: 0.25rem 0 0;">Каждое объявление показывается в поиске {{ \App\Models\Listing::LIFETIME_DAYS }} дней. Продлите все разом — сроки сойдутся к одной дате, и напоминание придёт одним сообщением.</p>
                 <div class="actions">
-                    <button class="btn btn-primary">Продлить все на 30 дней</button>
+                    <button class="btn btn-primary">Продлить все на {{ \App\Models\Listing::LIFETIME_DAYS }} дней</button>
                 </div>
             </article>
 
@@ -864,7 +864,7 @@
                 <p class="muted" style="margin: 0.5rem 0 0;">г.Шымкент, центр · 20000 тг/ч</p>
                 <p class="muted" style="margin: 0.5rem 0 0;">Опубликовано до 21.08.2026</p>
                 <div class="actions">
-                    <button class="btn btn-secondary">Продлить на 30 дней</button>
+                    <button class="btn btn-secondary">Продлить на {{ \App\Models\Listing::LIFETIME_DAYS }} дней</button>
                     <button class="btn btn-danger">Снять с публикации</button>
                 </div>
             </article>
@@ -912,7 +912,7 @@
                 <p class="muted" style="margin: 0.5rem 0 0;">г.Шымкент · 5000 тг</p>
                 <p class="muted" style="margin: 0.5rem 0 0;">Опубликовано до 21.08.2026</p>
                 <div class="actions">
-                    <button class="btn btn-secondary">Продлить на 30 дней</button>
+                    <button class="btn btn-secondary">Продлить на {{ \App\Models\Listing::LIFETIME_DAYS }} дней</button>
                     <button class="btn btn-danger">Снять с публикации</button>
                 </div>
             </article>
@@ -1068,7 +1068,7 @@
                 </dl>
 
                 <div class="actions">
-                    <button class="btn btn-secondary">Продлить на 30 дней</button>
+                    <button class="btn btn-secondary">Продлить на {{ \App\Models\Listing::LIFETIME_DAYS }} дней</button>
                     <button class="btn btn-danger">Снять с публикации</button>
                 </div>
 

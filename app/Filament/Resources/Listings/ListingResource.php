@@ -236,7 +236,7 @@ class ListingResource extends Resource
 
     /**
      * A supplier who has never written to the bot cannot be reached for
-     * free, and the 30-day renewal poll will not get a confirmation out
+     * free, and the renewal poll will not get a confirmation out
      * of him — the operator has to know that before he publishes, not on
      * the day the listing silently archives itself.
      */
@@ -314,9 +314,9 @@ class ListingResource extends Resource
     /**
      * The same warning publicationNotes() gives, and for the same reason:
      * a supplier who has never written to the bot will not confirm the
-     * renewal poll, so in 30 days the listing archives itself again — by
+     * renewal poll, so at the end of the period the listing archives itself again — by
      * the very path it took the first time. Without the warning the
-     * operator would answer the same phone call every month, never
+     * operator would answer the same phone call every cycle, never
      * learning that the way out is «Продлить» by hand.
      */
     private static function restorationNotes(Listing $record): string

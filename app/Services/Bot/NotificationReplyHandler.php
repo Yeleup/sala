@@ -17,7 +17,7 @@ use Illuminate\Support\Str;
 /**
  * Handles button replies to proactive notifications — messages the bot
  * sent outside the scenario flow (the customer request notification, the
- * 30-day renewal poll, the moderation verdict). Such a reply can arrive
+ * renewal poll, the moderation verdict). Such a reply can arrive
  * days later, whatever step of the scenario the contact is on, so the
  * engine offers each inbound message here before scenario processing.
  */
@@ -208,7 +208,7 @@ class NotificationReplyHandler
     }
 
     /**
-     * The [Да, актуально]/[Нет, в архив] answer to the 30-day renewal
+     * The [Да, актуально]/[Нет, в архив] answer to the renewal
      * poll. A late answer after the auto-archive does not revive the
      * listing on its own — the return to the search is a deliberate act
      * in the cabinet, not a side effect of a stale button.

@@ -14,7 +14,7 @@ use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Log;
 
 /**
- * Undoes the «спросили» mark of a 30-day relevance poll whose message Meta
+ * Undoes the «спросили» mark of a relevance poll whose message Meta
  * rejected after Dereu had already accepted it (message_failed): a question
  * that never reached the supplier must not count as asked, or the next
  * daily cycle would silently archive the listing instead of spending the
@@ -99,7 +99,7 @@ class ListingRenewalPollFailureHandler
      * Whether the failed poll is the one the listing's current mark stands
      * for. A poll is only ever sent in the listing's last day or the grace
      * day after it, so a message older than that belongs to a superseded
-     * 30-day cycle — a stale redelivered failure must not unmark a fresh
+     * renewal cycle — a stale redelivered failure must not unmark a fresh
      * poll.
      */
     protected function pollBelongsToCurrentCycle(Listing $listing, ChannelMessage $failed): bool

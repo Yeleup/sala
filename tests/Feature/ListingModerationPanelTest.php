@@ -138,7 +138,7 @@ describe('вкладки списка объявлений', function () {
     });
 });
 
-test('approving from the table publishes the listing for 30 days', function () {
+test('approving from the table publishes the listing for 60 days', function () {
     $this->freezeTime();
     $listing = Listing::factory()->pendingModeration()->create();
 
@@ -148,7 +148,7 @@ test('approving from the table publishes the listing for 30 days', function () {
 
     $listing->refresh();
     expect($listing->status)->toBe(ListingStatus::Published)
-        ->and($listing->expires_at->toDateTimeString())->toBe(now()->addDays(30)->toDateTimeString());
+        ->and($listing->expires_at->toDateTimeString())->toBe(now()->addDays(60)->toDateTimeString());
 });
 
 test('rejecting from the table requires a reason', function () {
@@ -245,7 +245,7 @@ test('оператор продлевает объявление после зв
         ->callAction(TestAction::make('renew')->table($listing));
 
     $listing->refresh();
-    expect($listing->expires_at->toDateTimeString())->toBe(now()->addDays(30)->toDateTimeString())
+    expect($listing->expires_at->toDateTimeString())->toBe(now()->addDays(60)->toDateTimeString())
         ->and($listing->status)->toBe(ListingStatus::Published)
         // Следующий цикл должен спросить снова.
         ->and($listing->renewal_requested_at)->toBeNull();
@@ -264,7 +264,7 @@ test('оператор возвращает объявление из архив
 
     $listing->refresh();
     expect($listing->status)->toBe(ListingStatus::Published)
-        ->and($listing->expires_at->toDateTimeString())->toBe(now()->addDays(30)->toDateTimeString())
+        ->and($listing->expires_at->toDateTimeString())->toBe(now()->addDays(60)->toDateTimeString())
         // Отметка прежнего опроса не должна пережить возврат — иначе
         // следующий цикл промолчит и объявление снова тихо истечёт.
         ->and($listing->renewal_requested_at)->toBeNull();
@@ -313,7 +313,7 @@ test('возврат в поиск подтверждается и обещае�
 
     Livewire::test(ListListings::class)
         ->mountAction(TestAction::make('restore')->table($listing))
-        ->assertMountedActionModalSee('30 дней')
+        ->assertMountedActionModalSee('60 дней')
         ->assertMountedActionModalSee('повторную модерацию оно не проходит')
         ->assertMountedActionModalSee('Уведомление поставщику не отправляется');
 });
@@ -370,6 +370,7 @@ describe('уведомление поставщика о вердикте мод
             fn (Contact $contact, string $text, string $button, string $url): bool => $contact->is($listing->supplier)
                 && str_contains($text, 'Автокран')
                 && str_contains($text, 'опубликовано')
+                && str_contains($text, 'будет показываться в поиске 60 дней')
                 && $button === 'Открыть объявление'
                 && str_contains($url, "/supplier/listings/{$listing->id}/edit")
                 && str_contains($url, 'signature='),

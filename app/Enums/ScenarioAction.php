@@ -2,6 +2,8 @@
 
 namespace App\Enums;
 
+use App\Models\Listing;
+
 /**
  * What a «Действие» scenario block performs. Actions delegate to the
  * domain services/models, which keep their own invariants (status guards,
@@ -56,9 +58,9 @@ enum ScenarioAction: string
             self::AcceptRequest => 'Принять заявку',
             self::DeclineRequest => 'Отклонить заявку',
             self::ExpireRequest => 'Закрыть заявку без ответа',
-            self::RenewListing => 'Продлить объявление на 30 дней',
+            self::RenewListing => 'Продлить объявление на '.Listing::LIFETIME_DAYS.' дней',
             self::ArchiveListing => 'Архивировать объявление',
-            self::RenewBatchListings => 'Продлить все объявления пачки на 30 дней',
+            self::RenewBatchListings => 'Продлить все объявления пачки на '.Listing::LIFETIME_DAYS.' дней',
             self::ArchiveBatchListings => 'Архивировать все объявления пачки',
             self::SendCabinetCta => 'Отправить CTA-ссылку на кабинет',
             self::NotifyCustomer => 'Уведомить заказчика об исходе',

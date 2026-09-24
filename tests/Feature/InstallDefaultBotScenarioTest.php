@@ -1,9 +1,16 @@
 <?php
 
+use App\Enums\AiOutcome;
 use App\Enums\BotScenarioTrigger;
 use App\Models\BotScenario;
+use App\Models\BotSession;
+use App\Models\Contact;
+use App\Services\Bot\AiAssistant;
+use App\Services\Bot\BotEngine;
+use App\Services\Bot\InboundMessage;
 use App\Services\Bot\ScenarioDefinition;
 use App\Services\Bot\ScenarioValidator;
+use App\Services\DereuMessenger;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 
 uses(RefreshDatabase::class);
@@ -280,22 +287,34 @@ test('у каждого AI-блока типового диалога есть �
 test('«Назад» из анкеты типового диалога возвращает на экран раздела, а не в главное меню', function () {
     $this->artisan('bot:install-default-scenario')->assertSuccessful();
     $scenario = BotScenario::main();
-    $contact = \App\Models\Contact::factory()->create();
-    $session = \App\Models\BotSession::factory()->waitingAt('collect_repair')->create([
+    $contact = Contact::factory()->create();
+    $session = BotSession::factory()->waitingAt('collect_repair')->create([
         'contact_id' => $contact->id,
         'bot_scenario_id' => $scenario->id,
         'scenario_version' => $scenario->published_version,
     ]);
 
-    test()->mock(\App\Services\Bot\AiAssistant::class)
-        ->shouldReceive('resume')->once()->andReturn(\App\Enums\AiOutcome::Back);
-    $messenger = test()->mock(\App\Services\DereuMessenger::class);
+    test()->mock(AiAssistant::class)
+        ->shouldReceive('resume')->once()->andReturn(AiOutcome::Back);
+    $messenger = test()->mock(DereuMessenger::class);
     $messenger->shouldReceive('sendText')->never();
     $messenger->shouldReceive('sendButtons')->once()
         ->withArgs(fn ($to, string $text, array $buttons) => $text === 'Ремонт спецтехники. Вы мастер или ищете мастера?'
             && array_column($buttons, 'title') === ['Я мастер', 'Я ищу мастера', 'Мои объявления']);
 
-    app(\App\Services\Bot\BotEngine::class)->handle($contact, new \App\Services\Bot\InboundMessage(text: 'Назад', replyId: 'collect_back'));
+    app(BotEngine::class)->handle($contact, new InboundMessage(text: 'Назад', replyId: 'collect_back'));
 
     expect($session->fresh()->current_node_id)->toBe('menu_repair');
+});
+
+test('сценарии продления называют поставщику 60-дневный срок показа', function () {
+    $this->artisan('bot:install-default-scenario')->assertSuccessful();
+
+    $renewal = collect(BotScenario::publishedForTrigger(BotScenarioTrigger::ListingExpiring)->published_definition['nodes']);
+    $batch = collect(BotScenario::publishedForTrigger(BotScenarioTrigger::ListingsExpiringBatch)->published_definition['nodes']);
+
+    expect($renewal->firstWhere('id', 'renewed_text')['text'])
+        ->toBe('Продлили: объявление «{{listing.title}}» будет показываться ещё 60 дней.')
+        ->and($batch->firstWhere('id', 'renewed_text')['text'])
+        ->toBe('Продлили: эти объявления будут показываться ещё 60 дней.');
 });

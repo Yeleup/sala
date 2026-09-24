@@ -13,7 +13,7 @@
         @elseif ($listing->status === \App\Enums\ListingStatus::Published && $listing->expires_at)
             <p>Опубликовано до {{ $listing->expires_at->format('d.m.Y') }}.</p>
         @elseif ($listing->status === \App\Enums\ListingStatus::Archived)
-            <p>Объявление в архиве и не участвует в поиске. Кнопка ниже вернёт его в поиск на 30 дней.</p>
+            <p>Объявление в архиве и не участвует в поиске. Кнопка ниже вернёт его в поиск на {{ \App\Models\Listing::LIFETIME_DAYS }} дней.</p>
         @endif
     </header>
 
@@ -435,7 +435,7 @@
                 @if ($renewUrl)
                     <form method="POST" action="{{ $renewUrl }}">
                         @csrf
-                        <button type="submit" class="btn btn-secondary">Продлить на 30 дней</button>
+                        <button type="submit" class="btn btn-secondary">Продлить на {{ \App\Models\Listing::LIFETIME_DAYS }} дней</button>
                     </form>
                 @endif
 

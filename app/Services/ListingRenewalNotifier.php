@@ -10,7 +10,7 @@ use Illuminate\Support\Facades\Log;
 use Throwable;
 
 /**
- * Sends the 30-day relevance poll («Оно ещё актуально?» with the
+ * Sends the relevance poll («Оно ещё актуально?» with the
  * [Да, актуально]/[Нет, в архив] buttons): a session message while the
  * supplier's window is open, the listing_renewal template otherwise.
  *

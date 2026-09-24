@@ -14,7 +14,7 @@ use Illuminate\Console\Command;
 use Illuminate\Support\Collection;
 
 /**
- * The daily 30-day relevance cycle (docs/modules/listings-lifecycle.md):
+ * The daily relevance cycle (docs/modules/listings-lifecycle.md):
  * polls suppliers a day before their publication expires and archives
  * publications that ran out without a confirmation, so «мёртвые души»
  * leave the search.
@@ -45,7 +45,7 @@ use Illuminate\Support\Collection;
  * stays here either way.
  */
 #[Signature('listings:run-renewal-cycle')]
-#[Description('Отправить 30-дневные опросы актуальности и заархивировать истёкшие объявления')]
+#[Description('Отправить опросы актуальности и заархивировать истёкшие объявления')]
 class RunListingRenewalCycle extends Command
 {
     public function handle(ScenarioRunner $runner, ListingRenewalNotifier $notifier): int

@@ -216,7 +216,7 @@ test('an action of another trigger is an error', function () {
     $definition['nodes'][2]['action'] = 'renew_listing';
 
     expect(validateScenario($definition, BotScenarioTrigger::NewCustomerRequest)['errors'])
-        ->toContain('Действие «Продлить объявление на 30 дней» блока «do_accept» недоступно в сценарии с триггером «Новая заявка».');
+        ->toContain('Действие «Продлить объявление на 60 дней» блока «do_accept» недоступно в сценарии с триггером «Новая заявка».');
 });
 
 test('a condition without connected yes/no outputs is an error', function () {

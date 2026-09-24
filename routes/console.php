@@ -18,7 +18,7 @@ Artisan::command('inspire', function () {
 // registry (and alerted on) before the cycle starts paying per message.
 Schedule::command(SyncWhatsappTemplates::class)->dailyAt('03:30');
 
-// The 30-day relevance cycle: 04:00 UTC ≈ 10:00 по Астане, so the poll
+// The relevance cycle: 04:00 UTC ≈ 10:00 по Астане, so the poll
 // lands in the supplier's morning.
 Schedule::command(RunListingRenewalCycle::class)->dailyAt('04:00');
 

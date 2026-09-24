@@ -4,13 +4,26 @@ use App\Enums\BotScenarioTrigger;
 use App\Enums\ListingStatus;
 use App\Models\BotScenario;
 use App\Models\Listing;
+use Illuminate\Database\Migrations\Migration;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Schema;
 
 uses(RefreshDatabase::class);
 
+function sixtyDayListingShiftMigration(): Migration
+{
+    return require database_path('migrations/2026_09_24_100000_extend_published_listings_to_sixty_day_lifetime.php');
+}
+
+/**
+ * База тестов уже прогнала все миграции, и снимок сдвига в ней есть —
+ * пустой. Состояние «до миграции» — это база без снимка.
+ */
 function runSixtyDayListingShiftMigration(): void
 {
-    (require database_path('migrations/2026_09_24_100000_extend_published_listings_to_sixty_day_lifetime.php'))->up();
+    Schema::dropIfExists('listing_lifetime_extensions');
+
+    sixtyDayListingShiftMigration()->up();
 }
 
 function runSixtyDayScenarioTextMigration(): void
@@ -68,6 +81,50 @@ describe('сдвиг срока уже опубликованных объявл
 
         expect($listing->refresh()->expires_at->toDateTimeString())->toBe($expiresAt->toDateTimeString())
             ->and($listing->renewal_requested_at)->not->toBeNull();
+    });
+
+    test('повторный прогон тела миграции срок второй раз не сдвигает', function () {
+        // Laravel записывает миграцию в журнал уже после фиксации её
+        // транзакции: сбой между этими шагами повторяет up().
+        $expiresAt = now()->addHours(12)->startOfSecond();
+        $listing = Listing::factory()->published()->create(['expires_at' => $expiresAt, 'renewal_requested_at' => null]);
+
+        runSixtyDayListingShiftMigration();
+        sixtyDayListingShiftMigration()->up();
+
+        expect($listing->refresh()->expires_at->toDateTimeString())
+            ->toBe($expiresAt->copy()->addDays(30)->toDateTimeString());
+    });
+
+    test('повторный прогон не трогает публикацию, продлённую уже по новому сроку', function () {
+        $listing = Listing::factory()->published()->create(['expires_at' => now()->addDays(3)->startOfSecond(), 'renewal_requested_at' => null]);
+
+        runSixtyDayListingShiftMigration();
+
+        $this->travel(2)->days();
+        $listing->refresh()->renew();
+        $renewedUntil = $listing->refresh()->expires_at->toDateTimeString();
+
+        sixtyDayListingShiftMigration()->up();
+
+        expect($listing->refresh()->expires_at->toDateTimeString())->toBe($renewedUntil)
+            ->and($renewedUntil)->toBe(now()->addDays(60)->toDateTimeString());
+    });
+
+    test('откат возвращает прежний срок только ещё не продлённым публикациям', function () {
+        $expiresAt = now()->addDays(4)->startOfSecond();
+        $untouched = Listing::factory()->published()->create(['expires_at' => $expiresAt, 'renewal_requested_at' => null]);
+        $renewedLater = Listing::factory()->published()->create(['expires_at' => $expiresAt, 'renewal_requested_at' => null]);
+
+        runSixtyDayListingShiftMigration();
+        $renewedLater->refresh()->renew();
+        $renewedUntil = $renewedLater->refresh()->expires_at->toDateTimeString();
+
+        sixtyDayListingShiftMigration()->down();
+
+        expect($untouched->refresh()->expires_at->toDateTimeString())->toBe($expiresAt->toDateTimeString())
+            ->and($renewedLater->refresh()->expires_at->toDateTimeString())->toBe($renewedUntil)
+            ->and(Schema::hasTable('listing_lifetime_extensions'))->toBeFalse();
     });
 
     test('архив, черновики и объявления без срока не трогаются', function () {

@@ -138,7 +138,7 @@ describe('вкладки списка объявлений', function () {
     });
 });
 
-test('approving from the table publishes the listing for 30 days', function () {
+test('approving from the table publishes the listing for 60 days', function () {
     $this->freezeTime();
     $listing = Listing::factory()->pendingModeration()->create();
 

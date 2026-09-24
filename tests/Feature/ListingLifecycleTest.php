@@ -36,7 +36,7 @@ test('a published listing cannot be resubmitted for moderation', function () {
     Listing::factory()->published()->create()->submitForModeration();
 })->throws(LogicException::class);
 
-test('approving publishes the listing for 30 days and clears the old rejection reason', function () {
+test('approving publishes the listing for 60 days and clears the old rejection reason', function () {
     $this->freezeTime();
     $listing = Listing::factory()->pendingModeration()->create(['rejection_reason' => 'Не хватало цены.']);
 
@@ -195,7 +195,7 @@ test('a draft cannot be archived', function () {
     Listing::factory()->create()->archive();
 })->throws(LogicException::class);
 
-test('renewing prolongs a published listing for another 30 days', function () {
+test('renewing prolongs a published listing for another 60 days', function () {
     $this->freezeTime();
     $listing = Listing::factory()->published()->create(['expires_at' => now()->addDay()]);
 
@@ -205,7 +205,7 @@ test('renewing prolongs a published listing for another 30 days', function () {
         ->toBe(now()->addDays(60)->toDateTimeString());
 });
 
-test('an archived listing returns to the search for another 30 days', function () {
+test('an archived listing returns to the search for another 60 days', function () {
     $this->freezeTime();
     $listing = Listing::factory()->publishable()->archived()->create([
         'expires_at' => now()->subDay(),

@@ -13,7 +13,9 @@ use App\Models\BotSession;
  * start() fires when the flow enters an AI block; resume() — for every
  * following inbound message while the contact waits at that block. A
  * Completed outcome releases the contact through the block's "continue"
- * output. The session carries the contact and the assistant's working
+ * output — the branch ran to its own end; Menu releases them through its
+ * "menu" output — they asked for the menu; Back leads one level up (see
+ * AiOutcome). The session carries the contact and the assistant's working
  * memory (BotSession::$state).
  */
 interface AiAssistant

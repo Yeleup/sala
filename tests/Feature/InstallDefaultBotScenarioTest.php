@@ -80,9 +80,9 @@ test('типовое меню — два шага на кнопках: вид у
         'search_repair' => ['customer_search', 'repair'],
         'search_driver' => ['customer_search', 'driver'],
     ] as $id => [$task, $kind]) {
-        // У каждой ветки — своя пара задача+вид, и выход «Продолжить» подключен.
+        // У каждой ветки — своя пара задача+вид, и выход «В меню» подключён.
         expect($nodes->firstWhere('id', $id))->toMatchArray(['task' => $task, 'kind' => $kind])
-            ->and($definition->target($id, ScenarioDefinition::OUTPUT_CONTINUE))->not->toBeNull();
+            ->and($definition->target($id, ScenarioDefinition::OUTPUT_MENU))->not->toBeNull();
     }
 });
 
@@ -130,24 +130,59 @@ test('типовой главный диалог укладывается в л�
     }
 });
 
-test('завершение любой ветки главного диалога возвращает контакта в главное меню', function () {
+test('завершившаяся ветка главного диалога меню за собой не ведёт, а просьба о меню ведёт в главное меню', function () {
     $this->artisan('bot:install-default-scenario')->assertSuccessful();
 
     $definition = new ScenarioDefinition(BotScenario::main()->published_definition);
     $nodeIds = collect(BotScenario::main()->published_definition['nodes'])->pluck('id');
 
-    // Тупиковых текстовых узлов после веток больше нет — все шесть
-    // AI-узлов и «Мои объявления» ведут выходом «Продолжить» в меню.
+    // Выход «Продолжить» веток не подключён: диалог заканчивается
+    // завершающей репликой самой ветки, меню вслед за ней не уходит.
     foreach ([
         'collect_rental', 'collect_repair', 'collect_driver',
         'search_rental', 'search_repair', 'search_driver',
         'my_listings',
     ] as $branchNodeId) {
-        expect($definition->target($branchNodeId, ScenarioDefinition::OUTPUT_CONTINUE))->toBe('main_menu');
+        expect($definition->target($branchNodeId, ScenarioDefinition::OUTPUT_CONTINUE))->toBeNull();
     }
 
-    expect($nodeIds)->not->toContain('after_collect')
+    // Просьба о меню — отдельный выход AI-блоков, и он ведёт в главное меню.
+    foreach ([
+        'collect_rental', 'collect_repair', 'collect_driver',
+        'search_rental', 'search_repair', 'search_driver',
+    ] as $aiNodeId) {
+        expect($definition->target($aiNodeId, ScenarioDefinition::OUTPUT_MENU))->toBe('main_menu');
+    }
+
+    // «Мои объявления» просить меню не умеет — второго выхода у блока нет.
+    expect($definition->target('my_listings', ScenarioDefinition::OUTPUT_MENU))->toBeNull()
+        ->and($nodeIds)->not->toContain('after_collect')
         ->and($nodeIds)->not->toContain('after_search');
+});
+
+test('ветки типового диалога не наезжают друг на друга на холсте — у AI-блока теперь два выхода', function () {
+    $this->artisan('bot:install-default-scenario')->assertSuccessful();
+
+    $branches = collect(BotScenario::main()->published_definition['nodes'])
+        ->whereIn('type', ['ai', 'my_listings'])
+        ->sortBy('y')
+        ->values();
+
+    // Высота блока на холсте редактора: заголовок 32, текст 40 и по 28 на
+    // каждый выход. Второй выход сделал AI-блок выше, и при прежнем шаге
+    // раскладки соседние ветки перекрывали друг друга.
+    $height = fn (array $node): int => 32 + 40 + 28 * ($node['type'] === 'ai' ? 2 : 1);
+
+    expect($branches)->toHaveCount(7)
+        ->and($branches->pluck('x')->unique()->values()->all())->toBe([1000]);
+
+    foreach ($branches as $index => $node) {
+        $next = $branches->get($index + 1);
+
+        if ($next !== null) {
+            expect($next['y'])->toBeGreaterThanOrEqual($node['y'] + $height($node));
+        }
+    }
 });
 
 test('новые тексты узлов главного диалога и заявки — дословно из копирайт-таблицы', function () {

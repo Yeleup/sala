@@ -260,7 +260,7 @@ class SupplierListingCollector
     {
         $state = $this->normalizeState($session);
 
-        if (($movedOn = $this->completeIfDraftMovedOn($session, $state)) !== null) {
+        if (($movedOn = $this->completeIfDraftMovedOn($session, $state, $message)) !== null) {
             return $movedOn;
         }
 
@@ -347,14 +347,23 @@ class SupplierListingCollector
      * still the supplier's to edit. Null — the draft is where the
      * questionnaire left it, the turn proceeds as usual.
      *
+     * The status line is the branch's closing one, so the dialog ends on
+     * it — unless the message that ran into the guard asked for the menu,
+     * by one of the block's own exits or in words: that supplier gets the
+     * menu right after the status line. The request is settled before
+     * anything is sent, so the status line and the menu go out together.
+     *
      * @param  array<string, mixed>  $state
      */
-    private function completeIfDraftMovedOn(BotSession $session, array $state): ?AiOutcome
+    private function completeIfDraftMovedOn(BotSession $session, array $state, InboundMessage $message): ?AiOutcome
     {
         if (! self::draftMovedOn($state, $session->contact_id)) {
             return null;
         }
 
+        $released = $this->asksForMenu($state, $message) || $this->asksForMenuInWords($session, $state, $message)
+            ? AiOutcome::Menu
+            : AiOutcome::Completed;
         $draft = Listing::find($state['draft_id']);
 
         if ($draft === null) {
@@ -363,7 +372,7 @@ class SupplierListingCollector
                 'Этот черновик уже удалён. Если нужно, начните заново из меню.',
             );
 
-            return AiOutcome::Completed;
+            return $released;
         }
 
         // A draft handed to another supplier by the operator: its signed web
@@ -376,7 +385,7 @@ class SupplierListingCollector
                 'Этот черновик уже недоступен. Если нужно, начните заново из меню.',
             );
 
-            return AiOutcome::Completed;
+            return $released;
         }
 
         if ($draft->status === ListingStatus::PendingModeration) {
@@ -385,7 +394,7 @@ class SupplierListingCollector
                 'Это объявление уже ушло на проверку. Как только модератор решит — сразу напишем.',
             );
 
-            return AiOutcome::Completed;
+            return $released;
         }
 
         $this->messenger->sendCtaUrl(
@@ -397,7 +406,7 @@ class SupplierListingCollector
             $this->cta->myListingsUrl($session->contact),
         );
 
-        return AiOutcome::Completed;
+        return $released;
     }
 
     /**
@@ -924,7 +933,9 @@ class SupplierListingCollector
      * An explicit refusal releases the supplier through the block's own
      * «continue» output. Whatever was collected is kept as a draft, but no
      * CTA to the web form goes out: the person just said they do not want
-     * to continue, and a link would be nagging.
+     * to continue, and a link would be nagging. Nor does the menu: they
+     * refused the task, they did not ask where else to go — that is
+     * exitToMenu(), and the outcome is what tells the two apart.
      *
      * @param  array<string, mixed>  $state
      */
@@ -962,6 +973,10 @@ class SupplierListingCollector
      * typed «В меню», an older button or the worded intent: its own
      * button is «Назад», which leaves one level up without coming here.
      *
+     * The outcome is Menu, not Completed: the engine shows the menu to
+     * someone who asked for it, and only to them — a questionnaire that
+     * ran to its own end leaves the dialog on its closing line.
+     *
      * Whenever there is any progress to lose (hasProgress() — a broader
      * check than the draft/field content below, since a bare transcript
      * still counts), a snapshot of exactly where the dialog stood goes into
@@ -989,7 +1004,7 @@ class SupplierListingCollector
 
             $this->persist($session, $state);
 
-            return AiOutcome::Completed;
+            return AiOutcome::Menu;
         }
 
         $draft = $this->ensureDraft($session, $state);
@@ -1002,7 +1017,7 @@ class SupplierListingCollector
         $this->persist($session, $state);
         $this->messenger->sendText($session->contact, 'Черновик сохранили — он ждёт в кабинете.');
 
-        return AiOutcome::Completed;
+        return AiOutcome::Menu;
     }
 
     /**
@@ -2235,6 +2250,85 @@ class SupplierListingCollector
     private function matchesButton(InboundMessage $message, string $id, string $title): bool
     {
         return $message->replyId === $id || mb_strtolower(trim((string) $message->text)) === mb_strtolower($title);
+    }
+
+    /**
+     * Whether the message is one of the block's own exits to the menu:
+     * «В меню», an older «Назад», or the confirmation of an exit that is
+     * being asked about right now. Recognized the way every button is —
+     * by id or by its typed title — never by reading the wording.
+     *
+     * @param  array<string, mixed>  $state
+     */
+    private function asksForMenu(array $state, InboundMessage $message): bool
+    {
+        return $this->matchesButton($message, self::BUTTON_MENU, self::BUTTON_MENU_TITLE)
+            || $this->matchesButton($message, self::BUTTON_BACK, self::BUTTON_BACK_TITLE)
+            || ($state['exit_confirm'] === true
+                && $this->matchesButton($message, self::BUTTON_EXIT_CONFIRM, self::BUTTON_EXIT_CONFIRM_TITLE));
+    }
+
+    /**
+     * Whether a message that ran into a draft gone from under the
+     * questionnaire asks for the menu in words. The reading is the
+     * extractor's own structured intent — the very one an ordinary turn
+     * acts on — so the request is understood here exactly as it would
+     * have been a moment before the draft moved on, and no wording is
+     * checked by hand.
+     *
+     * Only the intent is taken from the answer. Nothing the extractor read
+     * reaches the listing, the state or the session: the message joins a
+     * copy of the transcript, and the draft itself stays out of the call —
+     * its photos and its id are no longer this questionnaire's to pass
+     * around, it may be another supplier's listing by now.
+     *
+     * A press and a typed button title say what they mean by themselves,
+     * and a message without words has nothing to read — none of them costs
+     * a call. An unavailable provider reads as «did not ask»: the status
+     * line is still the honest answer.
+     *
+     * @param  array<string, mixed>  $state
+     */
+    private function asksForMenuInWords(BotSession $session, array $state, InboundMessage $message): bool
+    {
+        if (filled($message->replyId) || $this->namesOwnButton($message)) {
+            return false;
+        }
+
+        $words = trim((string) $message->text) ?: trim((string) $message->transcription);
+
+        if ($words === '') {
+            return false;
+        }
+
+        $fields = $this->extract($session, [
+            ...$state,
+            'transcript' => [...$state['transcript'], $words],
+            'draft_id' => null,
+        ]);
+
+        return UserIntent::fromExtraction($fields['user_intent'] ?? null) === UserIntent::MenuRequested;
+    }
+
+    /**
+     * Whether the text is the title of one of the questionnaire's fixed
+     * buttons — typing a button's name equals pressing it, so such a
+     * message is an answer to the bot and not something to read an intent
+     * out of.
+     */
+    private function namesOwnButton(InboundMessage $message): bool
+    {
+        $typed = mb_strtolower(trim((string) $message->text));
+
+        return in_array($typed, array_map(mb_strtolower(...), [
+            self::BUTTON_SUBMIT_TITLE,
+            self::BUTTON_EDIT_TITLE,
+            self::BUTTON_MENU_TITLE,
+            self::BUTTON_BACK_TITLE,
+            self::BUTTON_EXIT_CONFIRM_TITLE,
+            self::BUTTON_EXIT_STAY_TITLE,
+            self::BUTTON_MACHINERY_UNLISTED_TITLE,
+        ]), true);
     }
 
     /**

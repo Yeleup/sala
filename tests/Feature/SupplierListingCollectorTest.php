@@ -640,14 +640,26 @@ test('the submit button on a draft handed to another supplier explains instead o
 test('extra details after an external publication never edit the published listing', function () {
     // Вторая половина той же гонки: дописанные после публикации уточнения
     // прогонялись через экстрактор и молча правили опубликованное объявление
-    // в обход модерации. Экстрактор не зафейкан нарочно: дойди сообщение до
-    // него — тест упал бы на реальном вызове провайдера.
-    $draft = Listing::factory()->published()->create(['title' => 'Ремонт автоэлектрики']);
+    // в обход модерации. Экстрактор здесь спрашивают об одном — не просьба
+    // ли это о меню, — и всё остальное из его ответа выбрасывается: ни одно
+    // разобранное поле до объявления не доходит, хотя ответ полон данных.
+    ListingExtractionAgent::fake([fullExtraction([
+        'title' => 'Совсем другой заголовок',
+        'description' => 'Ремонт моторов и ходовки',
+        'price' => '99000 тг',
+        'user_intent' => 'task',
+    ])]);
+    $draft = Listing::factory()->published()->create([
+        'title' => 'Ремонт автоэлектрики',
+        'description' => 'Чиню проводку',
+        'price' => '5000 тг',
+    ]);
     $session = collectorSession([
         'phase' => 'confirming',
         'draft_id' => $draft->id,
         'transcript' => ['Ремонтирую автоэлектрику в Алматы'],
     ]);
+    $stateBefore = $session->fresh()->state;
 
     fakeCollectorMessenger()->shouldReceive('sendCtaUrl')->once()
         ->withArgs(fn (Contact $to, string $text) => str_contains($text, 'уже проверено и опубликовано'));
@@ -656,7 +668,15 @@ test('extra details after an external publication never edit the published listi
         ->resume($session, supplierAiNode(), new InboundMessage(text: 'Ещё ремонт моторов и ходовки'));
 
     expect($outcome)->toBe(AiOutcome::Completed)
-        ->and($draft->fresh()->title)->toBe('Ремонт автоэлектрики');
+        ->and($draft->fresh())
+        ->title->toBe('Ремонт автоэлектрики')
+        ->description->toBe('Чиню проводку')
+        ->price->toBe('5000 тг')
+        ->status->toBe(ListingStatus::Published)
+        // Анкета тоже осталась как была: сообщение прочитано, но не записано.
+        ->and($session->fresh()->state)->toBe($stateBefore)
+        ->and(Listing::count())->toBe(1);
+    ListingExtractionAgent::assertPrompted(fn ($prompt): bool => $prompt->contains('Ещё ремонт моторов и ходовки'));
 });
 
 test('the menu button after an external publication does not save over the published listing', function () {
@@ -681,10 +701,11 @@ test('the menu button after an external publication does not save over the publi
         ->and($draft->fresh()->title)->toBe('Ремонт автоэлектрики');
 });
 
-test('a message that runs into a draft gone from under the questionnaire asks for the menu only by the block\'s own exits', function (InboundMessage $message, array $state, AiOutcome $expected) {
-    // Статус объявления — завершающая реплика ветки, и меню за ней не идёт.
-    // Исключение одно: сообщение само было выходом в меню. Распознаётся он
-    // как любая кнопка — по id или набранному названию, не по словам.
+test('a press or a typed button title into a draft gone from under the questionnaire is settled without the classifier', function (InboundMessage $message, array $state, AiOutcome $expected) {
+    // Статус объявления — завершающая реплика ветки, и меню за ней не идёт,
+    // если человек его не просил. Нажатие и набранное название кнопки
+    // говорят сами за себя: выход в меню распознаётся по id или названию,
+    // остальные кнопки меню не просят — и ни то, ни другое не стоит вызова.
     ListingExtractionAgent::fake()->preventStrayPrompts();
     $draft = Listing::factory()->pendingModeration()->create();
     $session = collectorSession(['phase' => 'confirming', 'draft_id' => $draft->id, ...$state]);
@@ -710,13 +731,186 @@ test('a message that runs into a draft gone from under the questionnaire asks fo
         [],
         AiOutcome::Completed,
     ],
-    'дописанные детали' => [new InboundMessage(text: 'Ещё ремонт моторов'), [], AiOutcome::Completed],
     'кнопка «Да, отправить»' => [
         new InboundMessage(text: 'Да, отправить', replyId: SupplierListingCollector::BUTTON_SUBMIT),
         [],
         AiOutcome::Completed,
     ],
+    'набранное «да, отправить»' => [new InboundMessage(text: ' да, отправить '), [], AiOutcome::Completed],
+    'набранное «исправить»' => [new InboundMessage(text: 'Исправить'), [], AiOutcome::Completed],
+    'набранное «продолжить анкету»' => [new InboundMessage(text: 'продолжить анкету'), [], AiOutcome::Completed],
+    'кнопка выбора, которой в анкете уже нет' => [new InboundMessage(text: 'С выездом', replyId: 'collect_choice:onsite'), [], AiOutcome::Completed],
 ]);
+
+test('a worded request for the menu into a draft gone from under the questionnaire gets the status and the menu', function (Closure $fate, string $reply) {
+    // Решение владельца: просьба о меню словами показывает меню сразу — и
+    // тогда, когда черновик анкеты уже ушёл из-под неё. Просьбу читает
+    // классификатор (структурное намерение «menu»), а не сверка фраз.
+    ListingExtractionAgent::fake([fullExtraction(['title' => 'Совсем другой заголовок', 'user_intent' => 'menu'])]);
+    $session = collectorSession([
+        'phase' => 'confirming',
+        'transcript' => ['Сдаю трактор в Шымкенте, 10000 тг/час'],
+        'fields' => ['description' => 'Трактор в аренду'],
+    ]);
+    $draft = $fate($session);
+    $before = $draft?->fresh()?->getAttributes();
+
+    $messenger = fakeCollectorMessenger();
+    $messenger->shouldReceive('sendText')->zeroOrMoreTimes()
+        ->withArgs(fn (Contact $to, string $text) => str_contains($text, $reply));
+    $messenger->shouldReceive('sendCtaUrl')->zeroOrMoreTimes()
+        ->withArgs(fn (Contact $to, string $text) => str_contains($text, $reply));
+
+    $outcome = app(SupplierListingCollector::class)
+        ->resume($session->fresh(), supplierAiNode(), new InboundMessage(text: 'покажите другие разделы'));
+
+    expect($outcome)->toBe(AiOutcome::Menu)
+        // Объявление осталось ровно тем, чем было: ни поля, ни статуса.
+        ->and($draft?->fresh()?->getAttributes())->toBe($before)
+        ->and(Listing::count())->toBe($draft === null ? 0 : 1)
+        ->and(ListingMedia::count())->toBe(0)
+        // Ни снимка прерванной анкеты, ни нового черновика уход не оставил.
+        ->and($session->fresh()->paused_state)->toBeNull();
+    ListingExtractionAgent::assertPrompted(fn ($prompt): bool => $prompt->contains('покажите другие разделы'));
+    $messenger->shouldHaveReceived($draft !== null && in_array($draft->status, [ListingStatus::Published, ListingStatus::Archived], true)
+        && $draft->contact_id === $session->contact_id ? 'sendCtaUrl' : 'sendText')->once();
+})->with([
+    'отправлен на проверку из кабинета' => [
+        fn (BotSession $session) => tap(
+            Listing::factory()->pendingModeration()->create(['contact_id' => $session->contact_id]),
+            fn (Listing $draft) => $session->update(['state' => [...$session->state, 'draft_id' => $draft->id]]),
+        ),
+        'уже ушло на проверку',
+    ],
+    'опубликован модератором' => [
+        fn (BotSession $session) => tap(
+            Listing::factory()->published()->create(['contact_id' => $session->contact_id]),
+            fn (Listing $draft) => $session->update(['state' => [...$session->state, 'draft_id' => $draft->id]]),
+        ),
+        'уже проверено и опубликовано',
+    ],
+    'ушёл в архив' => [
+        fn (BotSession $session) => tap(
+            Listing::factory()->archived()->create(['contact_id' => $session->contact_id]),
+            fn (Listing $draft) => $session->update(['state' => [...$session->state, 'draft_id' => $draft->id]]),
+        ),
+        'уже в архиве',
+    ],
+    'передан другому поставщику' => [
+        fn (BotSession $session) => tap(
+            Listing::factory()->create(),
+            fn (Listing $draft) => $session->update(['state' => [...$session->state, 'draft_id' => $draft->id]]),
+        ),
+        'уже недоступен',
+    ],
+    'удалён' => [
+        function (BotSession $session) {
+            $draft = Listing::factory()->create(['contact_id' => $session->contact_id]);
+            $session->update(['state' => [...$session->state, 'draft_id' => $draft->id]]);
+            $draft->delete();
+
+            return null;
+        },
+        'уже удалён',
+    ],
+]);
+
+test('words that do not ask for the menu leave a draft gone from under the questionnaire on the status line', function (array|Closure $answer) {
+    // Отказ, вопрос о сервисе и обычное дополнение меню не просят: ответ по
+    // статусу остаётся последним сообщением, без «Хорошо, остановимся.» и
+    // без ответа про сервис. Недоступный провайдер читается так же — честный
+    // статус человек получает в любом случае.
+    ListingExtractionAgent::fake([$answer]);
+    $draft = Listing::factory()->pendingModeration()->create(['title' => 'Аренда трактора']);
+    $session = collectorSession(['phase' => 'confirming', 'draft_id' => $draft->id]);
+
+    fakeCollectorMessenger()->shouldReceive('sendText')->once()
+        ->withArgs(fn (Contact $to, string $text) => str_contains($text, 'уже ушло на проверку'));
+
+    $outcome = app(SupplierListingCollector::class)
+        ->resume($session, supplierAiNode(), new InboundMessage(text: 'сообщение словами'));
+
+    expect($outcome)->toBe(AiOutcome::Completed)
+        ->and($draft->fresh())
+        ->title->toBe('Аренда трактора')
+        ->status->toBe(ListingStatus::PendingModeration);
+})->with([
+    'обычное дополнение' => [['user_intent' => 'task']],
+    'отказ' => [['user_intent' => 'abandoned']],
+    'вопрос о сервисе' => [['user_intent' => 'service_question']],
+    'намерение не названо' => [[]],
+    'провайдер недоступен' => [fn () => fn () => throw new RuntimeException('AI недоступен')],
+]);
+
+test('a message without words into a draft gone from under the questionnaire is not read at all', function () {
+    // Выход словами требует слов: фото без подписи классифицировать не по
+    // чему. Оно и не скачивается — прикреплять его уже некуда.
+    Storage::fake('public');
+    ListingExtractionAgent::fake()->preventStrayPrompts();
+    $draft = Listing::factory()->pendingModeration()->create();
+    $session = collectorSession(['phase' => 'confirming', 'draft_id' => $draft->id]);
+
+    test()->mock(DereuMediaDownloader::class)->shouldNotReceive('download');
+    fakeCollectorMessenger()->shouldReceive('sendText')->once()
+        ->withArgs(fn (Contact $to, string $text) => str_contains($text, 'уже ушло на проверку'));
+
+    $outcome = app(SupplierListingCollector::class)->resume($session, supplierAiNode(), new InboundMessage(
+        mediaType: ListingMediaType::Photo,
+        mediaId: 'photo-after-submit',
+    ));
+
+    expect($outcome)->toBe(AiOutcome::Completed)
+        ->and(ListingMedia::count())->toBe(0);
+    ListingExtractionAgent::assertNeverPrompted();
+});
+
+test('a spoken request for the menu into a draft gone from under the questionnaire is read by its transcription and stored nowhere', function () {
+    Storage::fake('public');
+    ListingExtractionAgent::fake([['user_intent' => 'menu']]);
+    $draft = Listing::factory()->published()->create();
+    $session = collectorSession(['phase' => 'confirming', 'draft_id' => $draft->id]);
+
+    fakeCollectorMessenger()->shouldReceive('sendCtaUrl')->once()
+        ->withArgs(fn (Contact $to, string $text) => str_contains($text, 'уже проверено и опубликовано'));
+
+    $outcome = app(SupplierListingCollector::class)->resume(
+        $session,
+        supplierAiNode(),
+        (new InboundMessage(mediaType: ListingMediaType::Audio, mediaId: 'voice-after-publication'))
+            ->withVoice('OGG-BYTES', 'верните меня в главное меню'),
+    );
+
+    expect($outcome)->toBe(AiOutcome::Menu)
+        // Запись к опубликованному объявлению не прикрепляется.
+        ->and(ListingMedia::count())->toBe(0)
+        ->and(Storage::disk('public')->allFiles())->toBe([]);
+    ListingExtractionAgent::assertPrompted(fn ($prompt): bool => $prompt->contains('верните меня в главное меню'));
+});
+
+test('reading the intent never shows the classifier a draft that is no longer the questionnaire\'s own', function () {
+    // Черновик передан другому поставщику вместе с фотографиями: ни они,
+    // ни само объявление в вызов разбора не попадают — читаются только
+    // слова прежнего владельца.
+    Storage::fake('public');
+    ListingExtractionAgent::fake([['user_intent' => 'menu']]);
+    $session = collectorSession(['phase' => 'confirming', 'transcript' => ['Сдаю трактор']]);
+    $foreign = Listing::factory()->create();
+    Storage::disk('public')->put("listings/{$foreign->id}/photos/one.jpg", 'JPEG-BYTES');
+    ListingMedia::create(['listing_id' => $foreign->id, 'type' => ListingMediaType::Photo, 'path' => "listings/{$foreign->id}/photos/one.jpg"]);
+    $session->update(['state' => [...$session->state, 'draft_id' => $foreign->id]]);
+
+    fakeCollectorMessenger()->shouldReceive('sendText')->once()
+        ->withArgs(fn (Contact $to, string $text) => str_contains($text, 'уже недоступен'));
+
+    $outcome = app(SupplierListingCollector::class)
+        ->resume($session->fresh(), supplierAiNode(), new InboundMessage(text: 'в другой раздел, пожалуйста'));
+
+    expect($outcome)->toBe(AiOutcome::Menu)
+        ->and(AiOperation::query()->where('operation', AiOperationType::ListingExtraction)->sole()->listing_id)->toBeNull();
+    ListingExtractionAgent::assertPrompted(fn ($prompt): bool => $prompt->attachments->count() === 0
+        && $prompt->contains('Сдаю трактор')
+        && $prompt->contains('в другой раздел, пожалуйста'));
+});
 
 test('a rejected draft stays in the questionnaire and resubmits for moderation', function () {
     // Отклонённый черновик — по-прежнему в руках поставщика: гвард статусов

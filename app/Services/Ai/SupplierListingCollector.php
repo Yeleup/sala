@@ -348,9 +348,10 @@ class SupplierListingCollector
      * questionnaire left it, the turn proceeds as usual.
      *
      * The status line is the branch's closing one, so the dialog ends on
-     * it — unless the message that ran into the guard was itself the
-     * block's exit to the menu: that supplier asked for the menu and gets
-     * it right after the status line.
+     * it — unless the message that ran into the guard asked for the menu,
+     * by one of the block's own exits or in words: that supplier gets the
+     * menu right after the status line. The request is settled before
+     * anything is sent, so the status line and the menu go out together.
      *
      * @param  array<string, mixed>  $state
      */
@@ -360,7 +361,9 @@ class SupplierListingCollector
             return null;
         }
 
-        $released = $this->asksForMenu($state, $message) ? AiOutcome::Menu : AiOutcome::Completed;
+        $released = $this->asksForMenu($state, $message) || $this->asksForMenuInWords($session, $state, $message)
+            ? AiOutcome::Menu
+            : AiOutcome::Completed;
         $draft = Listing::find($state['draft_id']);
 
         if ($draft === null) {
@@ -2263,6 +2266,69 @@ class SupplierListingCollector
             || $this->matchesButton($message, self::BUTTON_BACK, self::BUTTON_BACK_TITLE)
             || ($state['exit_confirm'] === true
                 && $this->matchesButton($message, self::BUTTON_EXIT_CONFIRM, self::BUTTON_EXIT_CONFIRM_TITLE));
+    }
+
+    /**
+     * Whether a message that ran into a draft gone from under the
+     * questionnaire asks for the menu in words. The reading is the
+     * extractor's own structured intent — the very one an ordinary turn
+     * acts on — so the request is understood here exactly as it would
+     * have been a moment before the draft moved on, and no wording is
+     * checked by hand.
+     *
+     * Only the intent is taken from the answer. Nothing the extractor read
+     * reaches the listing, the state or the session: the message joins a
+     * copy of the transcript, and the draft itself stays out of the call —
+     * its photos and its id are no longer this questionnaire's to pass
+     * around, it may be another supplier's listing by now.
+     *
+     * A press and a typed button title say what they mean by themselves,
+     * and a message without words has nothing to read — none of them costs
+     * a call. An unavailable provider reads as «did not ask»: the status
+     * line is still the honest answer.
+     *
+     * @param  array<string, mixed>  $state
+     */
+    private function asksForMenuInWords(BotSession $session, array $state, InboundMessage $message): bool
+    {
+        if (filled($message->replyId) || $this->namesOwnButton($message)) {
+            return false;
+        }
+
+        $words = trim((string) $message->text) ?: trim((string) $message->transcription);
+
+        if ($words === '') {
+            return false;
+        }
+
+        $fields = $this->extract($session, [
+            ...$state,
+            'transcript' => [...$state['transcript'], $words],
+            'draft_id' => null,
+        ]);
+
+        return UserIntent::fromExtraction($fields['user_intent'] ?? null) === UserIntent::MenuRequested;
+    }
+
+    /**
+     * Whether the text is the title of one of the questionnaire's fixed
+     * buttons — typing a button's name equals pressing it, so such a
+     * message is an answer to the bot and not something to read an intent
+     * out of.
+     */
+    private function namesOwnButton(InboundMessage $message): bool
+    {
+        $typed = mb_strtolower(trim((string) $message->text));
+
+        return in_array($typed, array_map(mb_strtolower(...), [
+            self::BUTTON_SUBMIT_TITLE,
+            self::BUTTON_EDIT_TITLE,
+            self::BUTTON_MENU_TITLE,
+            self::BUTTON_BACK_TITLE,
+            self::BUTTON_EXIT_CONFIRM_TITLE,
+            self::BUTTON_EXIT_STAY_TITLE,
+            self::BUTTON_MACHINERY_UNLISTED_TITLE,
+        ]), true);
     }
 
     /**

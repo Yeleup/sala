@@ -2,10 +2,12 @@
 
 use App\Ai\Agents\ListingExtractionAgent;
 use App\Ai\Agents\SearchQueryExtractionAgent;
+use App\Enums\AiOperationType;
 use App\Enums\AiOutcome;
 use App\Enums\BotScenarioTrigger;
 use App\Enums\ListingStatus;
 use App\Enums\RouteConfidence;
+use App\Models\AiOperation;
 use App\Models\BotScenario;
 use App\Models\BotSession;
 use App\Models\Contact;
@@ -472,6 +474,140 @@ describe('просьба о меню по-прежнему показывает 
             ['buttons', 'Аренда спецтехники. Вы предлагаете технику или ищете?'],
         ])
             ->and($session->fresh()->current_node_id)->toBe('menu_rental');
+    });
+});
+
+describe('черновик ушёл из-под анкеты, пока человек был в чате', function () {
+    /**
+     * Анкета на сводке, черновик которой поставщик тем временем отправил на
+     * проверку из веб-кабинета.
+     */
+    function branchSessionWithSubmittedDraft(BotScenario $scenario): BotSession
+    {
+        $session = branchSessionOnSummary($scenario);
+
+        Listing::findOrFail($session->state['draft_id'])->submitForModeration();
+
+        return $session;
+    }
+
+    /**
+     * Ответ разбора, полный данных: если бы хоть что-то из него дошло до
+     * объявления, оно изменилось бы.
+     *
+     * @return array<string, mixed>
+     */
+    function extractionWithIntent(string $intent): array
+    {
+        return [
+            'title' => 'Совсем другой заголовок',
+            'category' => categoryNamed('Экскаватор')->name,
+            'new_category' => null,
+            'brand' => null,
+            'description' => 'Совсем другое описание',
+            'location' => locationNamed('г.Алматы')->name,
+            'location_detail' => null,
+            'price' => '99000 тг/час',
+            'clarifying_question' => '',
+            'clarifying_field' => null,
+            'summary' => 'Экскаватор, Алматы, 99000 тг/ч',
+            'user_intent' => $intent,
+        ];
+    }
+
+    test('просьба о меню словами: ответ о статусе и ровно одно главное меню', function () {
+        ListingExtractionAgent::fake([extractionWithIntent('menu')]);
+        $scenario = typicalMainDialog();
+        $session = branchSessionWithSubmittedDraft($scenario);
+        $listingBefore = Listing::sole()->getAttributes();
+        $sent = recordOutbound();
+
+        pressInDialog($session, new InboundMessage(text: 'покажите другие разделы'));
+
+        expect(outboundTo($sent, $session->contact_id))->toBe([
+            ['text', 'Это объявление уже ушло на проверку. Как только модератор решит — сразу напишем.'],
+            ['buttons', MAIN_MENU_TEXT],
+        ])
+            ->and($sent[1]['buttons'])->toBe(['kind_rental', 'kind_repair', 'kind_driver'])
+            ->and($session->fresh())
+            ->current_node_id->toBe('main_menu')
+            ->state->toBeNull()
+            ->paused_state->toBeNull()
+            // Объявление не изменилось ни в одном поле и осталось одно.
+            ->and(Listing::sole()->getAttributes())->toBe($listingBefore)
+            ->and(Listing::sole()->status)->toBe(ListingStatus::PendingModeration);
+        ListingExtractionAgent::assertPrompted(fn ($prompt): bool => $prompt->contains('покажите другие разделы'));
+    });
+
+    test('обычное дополнение к анкете: только ответ о статусе, меню не приходит', function () {
+        ListingExtractionAgent::fake([extractionWithIntent('task')]);
+        $scenario = typicalMainDialog();
+        $session = branchSessionWithSubmittedDraft($scenario);
+        $listingBefore = Listing::sole()->getAttributes();
+        $sent = recordOutbound();
+
+        pressInDialog($session, new InboundMessage(text: 'цена теперь 99000 в час'));
+
+        expect(outboundTo($sent, $session->contact_id))->toBe([
+            ['text', 'Это объявление уже ушло на проверку. Как только модератор решит — сразу напишем.'],
+        ])
+            ->and($session->fresh())
+            ->current_node_id->toBeNull()
+            ->state->toBeNull()
+            ->and(Listing::sole()->getAttributes())->toBe($listingBefore);
+    });
+
+    test('кнопка «В меню»: ответ о статусе и меню, классификатор не спрошен', function () {
+        $scenario = typicalMainDialog();
+        $session = branchSessionWithSubmittedDraft($scenario);
+        $listingBefore = Listing::sole()->getAttributes();
+        $sent = recordOutbound();
+
+        pressInDialog($session, new InboundMessage(text: 'В меню', replyId: SupplierListingCollector::BUTTON_MENU));
+
+        expect(outboundTo($sent, $session->contact_id))->toBe([
+            ['text', 'Это объявление уже ушло на проверку. Как только модератор решит — сразу напишем.'],
+            ['buttons', MAIN_MENU_TEXT],
+        ])
+            ->and($session->fresh()->current_node_id)->toBe('main_menu')
+            ->and(Listing::sole()->getAttributes())->toBe($listingBefore);
+        ListingExtractionAgent::assertNeverPrompted();
+    });
+
+    test('классификатор недоступен: человек всё равно получает ответ о статусе', function () {
+        ListingExtractionAgent::fake([fn () => throw new RuntimeException('AI недоступен')]);
+        $scenario = typicalMainDialog();
+        $session = branchSessionWithSubmittedDraft($scenario);
+        $sent = recordOutbound();
+
+        pressInDialog($session, new InboundMessage(text: 'покажите другие разделы'));
+
+        expect(outboundTo($sent, $session->contact_id))->toBe([
+            ['text', 'Это объявление уже ушло на проверку. Как только модератор решит — сразу напишем.'],
+        ])
+            ->and($session->fresh()->current_node_id)->toBeNull();
+    });
+
+    test('после ответа о статусе следующее сообщение начинает новый диалог и классификатор анкеты больше не спрашивают', function () {
+        // Блок завершён первым же сообщением, так что лишний вызов разбора
+        // случается не чаще одного раза на такую анкету.
+        ListingExtractionAgent::fake([extractionWithIntent('task')]);
+        $scenario = typicalMainDialog();
+        $session = branchSessionWithSubmittedDraft($scenario);
+        silentNavigator();
+        $sent = recordOutbound();
+
+        pressInDialog($session, new InboundMessage(text: 'цена теперь 99000 в час'));
+        pressInDialog($session, new InboundMessage(text: 'и ещё фото пришлю'));
+
+        expect(outboundTo($sent, $session->contact_id))->toBe([
+            ['text', 'Это объявление уже ушло на проверку. Как только модератор решит — сразу напишем.'],
+            ['buttons', MAIN_MENU_TEXT],
+        ])
+            ->and($session->fresh()->current_node_id)->toBe('main_menu');
+        ListingExtractionAgent::assertNotPrompted(fn ($prompt): bool => $prompt->contains('и ещё фото пришлю'));
+
+        expect(AiOperation::query()->where('operation', AiOperationType::ListingExtraction)->count())->toBe(1);
     });
 });
 

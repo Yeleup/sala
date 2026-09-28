@@ -316,7 +316,7 @@ test('pressing «В меню» at a dead-end releases the contact from the searc
     $outcome = app(CustomerSearchAssistant::class)
         ->resume($session, customerAiNode(), new InboundMessage(text: 'В меню', replyId: CustomerSearchAssistant::BUTTON_MENU));
 
-    expect($outcome)->toBe(AiOutcome::Completed);
+    expect($outcome)->toBe(AiOutcome::Menu);
 });
 
 test('typing «в меню» equals pressing it, in every phase', function (string $phase, array $extraState) {
@@ -330,7 +330,7 @@ test('typing «в меню» equals pressing it, in every phase', function (stri
     // Набранное название кнопки — без регистра и с тримом — не запускает
     // поиск и не тратит попытку/уточнение: та же конвенция, что и у
     // matchesExpandButton/matchChoice.
-    expect($outcome)->toBe(AiOutcome::Completed);
+    expect($outcome)->toBe(AiOutcome::Menu);
 })->with([
     'searching' => ['searching', []],
     'choosing' => ['choosing', ['query' => 'кран', 'offered' => [999999]]],
@@ -1129,7 +1129,7 @@ test('pressing «В меню» while picking a place releases the contact', func
     $outcome = app(CustomerSearchAssistant::class)
         ->resume($session, customerAiNode(), new InboundMessage(text: 'В меню', replyId: CustomerSearchAssistant::BUTTON_MENU));
 
-    expect($outcome)->toBe(AiOutcome::Completed);
+    expect($outcome)->toBe(AiOutcome::Menu);
 });
 
 test('the pick list is offered even after the clarification limit is exhausted', function () {
@@ -1540,7 +1540,7 @@ test('a worded request for the menu releases the customer without a message, tra
     $outcome = app(CustomerSearchAssistant::class)
         ->resume($session, customerAiNode(), new InboundMessage(text: 'хочу в главное меню'));
 
-    expect($outcome)->toBe(AiOutcome::Completed)
+    expect($outcome)->toBe(AiOutcome::Menu)
         ->and($session->refresh()->state['transcript'])->toBe(['нужен кран']);
 });
 
@@ -1821,7 +1821,7 @@ test('an old «Назад» pressed after something was written ends the search 
     $outcome = app(CustomerSearchAssistant::class)
         ->resume($session, customerAiNode(), new InboundMessage(text: 'Назад', replyId: CustomerSearchAssistant::BUTTON_BACK));
 
-    expect($outcome)->toBe(AiOutcome::Completed);
+    expect($outcome)->toBe(AiOutcome::Menu);
 });
 
 test('через оркестратор «Назад» на нетронутом поиске обнуляет память блока', function () {

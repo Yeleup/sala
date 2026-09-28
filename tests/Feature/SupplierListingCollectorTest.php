@@ -675,9 +675,48 @@ test('the menu button after an external publication does not save over the publi
     $outcome = app(SupplierListingCollector::class)
         ->resume($session, supplierAiNode(), new InboundMessage(text: 'В меню', replyId: SupplierListingCollector::BUTTON_MENU));
 
-    expect($outcome)->toBe(AiOutcome::Completed)
+    // Человек просил меню — оно и придёт следом за честным статусом: исход
+    // «Menu», а не «Completed», после которого диалог просто закончился бы.
+    expect($outcome)->toBe(AiOutcome::Menu)
         ->and($draft->fresh()->title)->toBe('Ремонт автоэлектрики');
 });
+
+test('a message that runs into a draft gone from under the questionnaire asks for the menu only by the block\'s own exits', function (InboundMessage $message, array $state, AiOutcome $expected) {
+    // Статус объявления — завершающая реплика ветки, и меню за ней не идёт.
+    // Исключение одно: сообщение само было выходом в меню. Распознаётся он
+    // как любая кнопка — по id или набранному названию, не по словам.
+    ListingExtractionAgent::fake()->preventStrayPrompts();
+    $draft = Listing::factory()->pendingModeration()->create();
+    $session = collectorSession(['phase' => 'confirming', 'draft_id' => $draft->id, ...$state]);
+
+    fakeCollectorMessenger()->shouldReceive('sendText')->once()
+        ->withArgs(fn (Contact $to, string $text) => str_contains($text, 'уже ушло на проверку'));
+
+    $outcome = app(SupplierListingCollector::class)->resume($session, supplierAiNode(), $message);
+
+    expect($outcome)->toBe($expected);
+    ListingExtractionAgent::assertNeverPrompted();
+})->with([
+    'кнопка «В меню»' => [new InboundMessage(text: 'В меню', replyId: SupplierListingCollector::BUTTON_MENU), [], AiOutcome::Menu],
+    'набранное «в меню»' => [new InboundMessage(text: ' в меню '), [], AiOutcome::Menu],
+    'старая кнопка «Назад»' => [new InboundMessage(text: 'Назад', replyId: SupplierListingCollector::BUTTON_BACK), [], AiOutcome::Menu],
+    'подтверждение открытого выхода' => [
+        new InboundMessage(text: 'Да, в меню', replyId: SupplierListingCollector::BUTTON_EXIT_CONFIRM),
+        ['exit_confirm' => true],
+        AiOutcome::Menu,
+    ],
+    '«Да, в меню», о котором не спрашивали' => [
+        new InboundMessage(text: 'Да, в меню', replyId: SupplierListingCollector::BUTTON_EXIT_CONFIRM),
+        [],
+        AiOutcome::Completed,
+    ],
+    'дописанные детали' => [new InboundMessage(text: 'Ещё ремонт моторов'), [], AiOutcome::Completed],
+    'кнопка «Да, отправить»' => [
+        new InboundMessage(text: 'Да, отправить', replyId: SupplierListingCollector::BUTTON_SUBMIT),
+        [],
+        AiOutcome::Completed,
+    ],
+]);
 
 test('a rejected draft stays in the questionnaire and resubmits for moderation', function () {
     // Отклонённый черновик — по-прежнему в руках поставщика: гвард статусов
@@ -2490,7 +2529,7 @@ test('the «В меню» button asks to confirm, then saves the draft and ends 
         new InboundMessage(text: 'Да, в меню', replyId: SupplierListingCollector::BUTTON_EXIT_CONFIRM),
     );
 
-    expect($secondOutcome)->toBe(AiOutcome::Completed)
+    expect($secondOutcome)->toBe(AiOutcome::Menu)
         ->and(Listing::count())->toBe(1);
     ListingExtractionAgent::assertNeverPrompted();
 
@@ -2532,7 +2571,7 @@ test('the typed title of «В меню» equals pressing it — the scenario-wid
     // Тот же принцип и на кнопке подтверждения: набранный титул тоже работает.
     $secondOutcome = $collector->resume($session->fresh(), supplierAiNode(), new InboundMessage(text: '  Да, В МЕНЮ  '));
 
-    expect($secondOutcome)->toBe(AiOutcome::Completed);
+    expect($secondOutcome)->toBe(AiOutcome::Menu);
     ListingExtractionAgent::assertNeverPrompted();
 });
 
@@ -2551,7 +2590,7 @@ test('«В меню» with nothing collected releases the supplier silently — 
         new InboundMessage(text: 'В меню', replyId: SupplierListingCollector::BUTTON_MENU),
     );
 
-    expect($outcome)->toBe(AiOutcome::Completed)
+    expect($outcome)->toBe(AiOutcome::Menu)
         ->and(Listing::count())->toBe(0)
         ->and($session->fresh()->paused_state)->toBeNull();
 });
@@ -2576,7 +2615,7 @@ test('a pre-filled name is not progress: the master who taps «В меню» str
         new InboundMessage(text: 'В меню', replyId: SupplierListingCollector::BUTTON_MENU),
     );
 
-    expect($outcome)->toBe(AiOutcome::Completed)
+    expect($outcome)->toBe(AiOutcome::Menu)
         ->and(Listing::count())->toBe(0)
         ->and($session->fresh()->paused_state)->toBeNull()
         ->and($session->fresh()->state['exit_confirm'])->toBeFalse();
@@ -2665,7 +2704,7 @@ test('a second «В меню» while the exit confirmation is open exits instead
         new InboundMessage(text: 'В меню', replyId: SupplierListingCollector::BUTTON_MENU),
     );
 
-    expect($outcome)->toBe(AiOutcome::Completed)
+    expect($outcome)->toBe(AiOutcome::Menu)
         ->and(Listing::count())->toBe(1);
     ListingExtractionAgent::assertNeverPrompted();
 });
@@ -2698,7 +2737,7 @@ test('progress made only of an undictated transcript still asks to confirm; the 
         new InboundMessage(text: 'Да, в меню', replyId: SupplierListingCollector::BUTTON_EXIT_CONFIRM),
     );
 
-    expect($secondOutcome)->toBe(AiOutcome::Completed)
+    expect($secondOutcome)->toBe(AiOutcome::Menu)
         ->and(Listing::count())->toBe(0);
 
     $paused = $session->fresh()->paused_state;
@@ -2729,7 +2768,7 @@ test('a worded request for the menu (user_intent «menu») exits the block exact
     $outcome = app(SupplierListingCollector::class)
         ->resume($session, supplierAiNode(), new InboundMessage(text: 'хочу в другой раздел'));
 
-    expect($outcome)->toBe(AiOutcome::Completed)
+    expect($outcome)->toBe(AiOutcome::Menu)
         ->and(Listing::sole())
         ->status->toBe(ListingStatus::Draft)
         ->category->name->toBe('Трактор')
@@ -3109,7 +3148,7 @@ test('«Назад» while the exit confirmation is open exits like a second «�
         new InboundMessage(text: 'Назад', replyId: SupplierListingCollector::BUTTON_BACK),
     );
 
-    expect($outcome)->toBe(AiOutcome::Completed)
+    expect($outcome)->toBe(AiOutcome::Menu)
         ->and($session->fresh()->paused_state)->not->toBeNull();
 });
 

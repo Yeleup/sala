@@ -218,6 +218,66 @@ test('every publication leaves an immutable version snapshot', function () {
 });
 
 /**
+ * Главный диалог с AI-блоком под меню: «Продолжить» блока не подключён —
+ * завершившаяся ветка никуда не ведёт, — а «В меню» ведёт обратно в меню.
+ */
+function publishableAiDefinition(): array
+{
+    return [
+        'nodes' => [
+            ['id' => 'start', 'type' => 'start', 'x' => 0, 'y' => 0],
+            ['id' => 'menu', 'type' => 'buttons', 'text' => 'Кто вы?', 'x' => 300, 'y' => 0, 'options' => [
+                ['id' => 'supplier', 'title' => 'Поставщик'],
+            ]],
+            ['id' => 'collect', 'type' => 'ai', 'task' => 'collect_listing', 'kind' => 'rental', 'x' => 600, 'y' => 0],
+        ],
+        'edges' => [
+            ['from' => 'start', 'output' => 'continue', 'to' => 'menu'],
+            ['from' => 'menu', 'output' => 'option:supplier', 'to' => 'collect'],
+            ['from' => 'collect', 'output' => 'menu', 'to' => 'menu'],
+        ],
+    ];
+}
+
+test('связь с выхода «В меню» AI-блока переживает сохранение и публикацию', function () {
+    BotScenario::factory()->create();
+
+    Livewire::test(BotScenarioEditor::class)
+        ->call('publish', publishableAiDefinition())
+        ->assertNotified('Сценарий опубликован');
+
+    $definition = BotScenario::sole()->publishedDefinition();
+
+    expect($definition->target('collect', ScenarioDefinition::OUTPUT_MENU))->toBe('menu')
+        ->and($definition->target('collect', ScenarioDefinition::OUTPUT_CONTINUE))->toBeNull();
+});
+
+test('оба выхода AI-блока необязательны — без связей сценарий публикуется и проверка чиста', function () {
+    BotScenario::factory()->create();
+
+    $definition = publishableAiDefinition();
+    $definition['edges'] = array_slice($definition['edges'], 0, 2);
+
+    $editor = Livewire::test(BotScenarioEditor::class);
+
+    expect($editor->instance()->check($definition))->toBe(['errors' => [], 'warnings' => []]);
+
+    $editor->call('publish', $definition)->assertNotified('Сценарий опубликован');
+
+    expect(BotScenario::sole()->published_version)->toBe(1);
+});
+
+test('холст предлагает AI-блоку два выхода: «Продолжить» и «В меню»', function () {
+    BotScenario::factory()->published(publishableAiDefinition())->create();
+
+    $this->get(BotScenarioEditor::getUrl())
+        ->assertSuccessful()
+        ->assertSee("{ key: 'menu', label: 'В меню' }", escape: false)
+        ->assertSee('Выход «В меню» — человек попросил меню кнопкой или словами. Без связи диалог начинается заново со «Старта».', escape: false)
+        ->assertSee('Выход «Продолжить» — ветка завершилась сама.', escape: false);
+});
+
+/**
  * Публикуемый run-based граф: Старт → сообщение с кнопкой → действие → конец.
  */
 function publishableRunDefinition(): array

@@ -91,9 +91,10 @@ class ScenarioAiAssistant implements AiAssistant
     }
 
     /**
-     * Any release of the contact — through «continue» or one level up on
-     * «Назад» — leaves no working memory behind: the next block starts
-     * from nothing, whichever way this one ended.
+     * Any release of the contact — through «continue», to the menu they
+     * asked for or one level up on «Назад» — leaves no working memory
+     * behind: the next block starts from nothing, whichever way this one
+     * ended.
      */
     private function settle(BotSession $session, AiOutcome $outcome): AiOutcome
     {

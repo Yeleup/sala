@@ -190,8 +190,10 @@
                         <template x-if="selected.type === 'ai'">
                             <div class="bse-field">
                                 <p class="bse-note" x-text="selected.task === 'customer_search'
-                                    ? 'Управление передаётся AI-ассистенту: он спрашивает, что нужно заказчику, подбирает опубликованные объявления и отправляет заявку выбранному поставщику. После завершения пользователь идёт по выходу «Продолжить».'
-                                    : 'Управление передаётся AI-ассистенту: он собирает объявление из текста, аудио и фото поставщика, задаёт уточняющие вопросы и создаёт черновик. После завершения пользователь идёт по выходу «Продолжить».'"></p>
+                                    ? 'Управление передаётся AI-ассистенту: он спрашивает, что нужно заказчику, подбирает опубликованные объявления и отправляет заявку выбранному поставщику.'
+                                    : 'Управление передаётся AI-ассистенту: он собирает объявление из текста, аудио и фото поставщика, задаёт уточняющие вопросы и создаёт черновик.'"></p>
+                                <p class="bse-note">Выход «Продолжить» — ветка завершилась сама. Его можно не подключать: диалог закончится последней репликой ассистента, а меню человек получит, когда напишет снова.</p>
+                                <p class="bse-note">Выход «В меню» — человек попросил меню кнопкой или словами. Без связи диалог начинается заново со «Старта».</p>
                                 <span>Задача AI</span>
                                 <select class="bse-input" x-model="selected.task">
                                     <option value="collect_listing">Сбор объявления поставщика</option>
@@ -535,6 +537,15 @@
                             ]
                         }
 
+                        if (node.type === 'ai') {
+                            // «Продолжить» — ветка завершилась сама, «В меню» —
+                            // человек попросил меню. Оба выхода необязательны.
+                            return [
+                                { key: 'continue', label: 'Продолжить' },
+                                { key: 'menu', label: 'В меню' },
+                            ]
+                        }
+
                         return [{ key: 'continue', label: 'Продолжить' }]
                     },
 
@@ -682,7 +693,7 @@
                     edgeGroup(output) {
                         if (output.startsWith('option:')) return 'option'
 
-                        return ['yes', 'no', 'timeout', 'fallback', 'returning', 'skipped'].includes(output) ? output : 'continue'
+                        return ['yes', 'no', 'timeout', 'fallback', 'returning', 'skipped', 'menu'].includes(output) ? output : 'continue'
                     },
 
                     edgeClasses(edge) {
@@ -1199,8 +1210,9 @@
             .bse-edge--option .bse-arrow, .bse-edge--option .bse-edge-label { fill: rgb(59 130 246); }
             .bse-edge--fallback .bse-edge { stroke: rgb(107 114 128); stroke-dasharray: 5 4; }
             .bse-edge--fallback .bse-arrow, .bse-edge--fallback .bse-edge-label { fill: rgb(107 114 128); }
-            .bse-edge--returning .bse-edge { stroke: rgb(8 145 178); }
-            .bse-edge--returning .bse-arrow, .bse-edge--returning .bse-edge-label { fill: rgb(8 145 178); }
+            .bse-edge--returning .bse-edge, .bse-edge--menu .bse-edge { stroke: rgb(8 145 178); }
+            .bse-edge--returning .bse-arrow, .bse-edge--returning .bse-edge-label,
+            .bse-edge--menu .bse-arrow, .bse-edge--menu .bse-edge-label { fill: rgb(8 145 178); }
 
             .bse-edge-active .bse-edge { stroke-width: 3.5; }
             .bse-edge-active .bse-edge-label { font-weight: 700; }
@@ -1292,8 +1304,8 @@
             .bse-port--option.bse-port-connected { background: rgb(59 130 246); }
             .bse-port--fallback { border-color: rgb(107 114 128); }
             .bse-port--fallback.bse-port-connected { background: rgb(107 114 128); }
-            .bse-port--returning { border-color: rgb(8 145 178); }
-            .bse-port--returning.bse-port-connected { background: rgb(8 145 178); }
+            .bse-port--returning, .bse-port--menu { border-color: rgb(8 145 178); }
+            .bse-port--returning.bse-port-connected, .bse-port--menu.bse-port-connected { background: rgb(8 145 178); }
             .bse-link-target { outline: 2px dashed rgb(217 119 6); outline-offset: 3px; cursor: pointer; }
 
             .bse-panel {

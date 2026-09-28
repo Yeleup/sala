@@ -31,8 +31,9 @@ use App\Enums\ListingKind;
  * ]
  *
  * Outputs: one per option ("option:{id}"), "continue" (default transition
- * of Start/Text/AI blocks; «Выполнено» of an action), "fallback"
- * («Любая другая фраза»), "yes"/"no", "timeout" and "skipped".
+ * of Start/Text/AI blocks; «Выполнено» of an action), "menu" («В меню» of
+ * an AI block), "fallback" («Любая другая фраза»), "yes"/"no", "timeout"
+ * and "skipped".
  */
 class ScenarioDefinition
 {
@@ -49,6 +50,16 @@ class ScenarioDefinition
     public const string OUTPUT_RETURNING = 'returning';
 
     public const string OUTPUT_FALLBACK = 'fallback';
+
+    /**
+     * The AI block's second output, «В меню»: taken when the contact asked
+     * for the menu, as opposed to "continue", which is taken when the
+     * branch ran to its own end. Kept apart so that leaving "continue"
+     * unwired — the dialog ends on the branch's closing line — does not
+     * take the menu away from someone who asked for it. Optional: not
+     * wired, the request starts the dialog over from «Старт».
+     */
+    public const string OUTPUT_MENU = 'menu';
 
     /** The branches of a «Условие» block. */
     public const string OUTPUT_YES = 'yes';
@@ -242,7 +253,7 @@ class ScenarioDefinition
      * leads into it — through blocks that wait for nothing on the way,
      * the same walk the navigator relies on (resolveTarget()). This is
      * where «Назад» from the block's first message goes: one level up,
-     * not the root its «continue» output points at. Options are unique
+     * not the root its «menu» output points at. Options are unique
      * graph-wide, but nothing stops an operator from wiring two menus
      * into one block — the first in graph order wins. Null for a block
      * no menu option leads into.

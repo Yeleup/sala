@@ -174,15 +174,17 @@ class CustomerSearchAssistant
         // be an old button from an earlier message, and then it means what
         // «В меню» means: the search asks no confirmation, so it just ends.
         if ($this->matchesBackButton($message)) {
-            return $this->hasProgress($state) ? AiOutcome::Completed : AiOutcome::Back;
+            return $this->hasProgress($state) ? AiOutcome::Menu : AiOutcome::Back;
         }
 
         // «В меню» — by button tap or its typed name — releases the contact
         // to the main dialog regardless of the phase. On an untouched search
         // the button is no longer shown (see exitButton()) — this branch
-        // then serves a typed title or an older button only.
+        // then serves a typed title or an older button only. The outcome
+        // is Menu, not Completed: the menu is what they asked for, while a
+        // search that ran to its own end leaves the dialog on its last line.
         if ($this->matchesMenuButton($message)) {
-            return AiOutcome::Completed;
+            return AiOutcome::Menu;
         }
 
         if ($state['phase'] === 'locating') {
@@ -289,13 +291,13 @@ class CustomerSearchAssistant
         }
 
         // A worded request for the menu is the same exit as the «В меню»
-        // button, just spelled out instead of tapped — the graph carries
+        // button, just spelled out instead of tapped — the engine carries
         // the contact to the main dialog, so no message goes out here.
         if ($intent === UserIntent::MenuRequested) {
             $state['transcript'] = array_slice($state['transcript'], 0, $intakeMark);
             $this->persist($session, $state);
 
-            return AiOutcome::Completed;
+            return AiOutcome::Menu;
         }
 
         // The free answer is bounded like every other exit of the block.

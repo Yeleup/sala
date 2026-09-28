@@ -1028,20 +1028,36 @@ class BotEngine
     }
 
     /**
-     * Where a released contact goes next. «Назад» from the block's first
-     * message leads one level up — to the menu whose option brought them
-     * into the block — and only a block no menu leads into falls through
-     * its «continue» output the way a completed block does.
+     * Where a released contact goes next — which depends on who ended the
+     * block.
+     *
+     * A branch that ran to its own end follows «continue», and nothing
+     * wired there ends the dialog on the branch's closing line: the menu
+     * is not pushed at someone who has just been told «Готово!».
+     *
+     * A contact who asked for the menu follows «menu», and that request
+     * is answered whatever the graph looks like: not wired, it starts the
+     * dialog over from «Старт» — the very walk their next message would
+     * have taken, so they land where a returning contact lands.
+     *
+     * «Назад» from the block's first message leads one level up — to the
+     * menu whose option brought them into the block; a block no menu
+     * leads into answers it the way it answers a request for the menu.
      *
      * @param  array<string, mixed>  $node
      */
     private function nodeAfterAi(ScenarioDefinition $definition, array $node, AiOutcome $outcome): ?string
     {
-        $continue = $definition->target($node['id'], ScenarioDefinition::OUTPUT_CONTINUE);
+        $nodeId = (string) $node['id'];
 
-        return $outcome === AiOutcome::Back
-            ? ($definition->parentMenuOf((string) $node['id']) ?? $continue)
-            : $continue;
+        $menu = fn (): ?string => $definition->target($nodeId, ScenarioDefinition::OUTPUT_MENU)
+            ?? $definition->startNodeId();
+
+        return match ($outcome) {
+            AiOutcome::Menu => $menu(),
+            AiOutcome::Back => $definition->parentMenuOf($nodeId) ?? $menu(),
+            default => $definition->target($nodeId, ScenarioDefinition::OUTPUT_CONTINUE),
+        };
     }
 
     /**

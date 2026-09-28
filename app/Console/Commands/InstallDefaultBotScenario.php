@@ -145,9 +145,15 @@ class InstallDefaultBotScenario extends Command
      * WhatsApp — три reply-кнопки. Прежние id вариантов сохранены, чтобы
      * кнопки прежней версии сценария, висящие в чатах, продолжали
      * работать. Текст AI-блокам не задаётся: приветствие подставляется
-     * из выбранного вида. Завершение любой ветки (сбор объявления, поиск,
-     * «Мои объявления») выходом «Продолжить» возвращает контакта в
-     * главное меню — тупиковых узлов в графе нет.
+     * из выбранного вида.
+     *
+     * Завершившаяся ветка (сбор объявления, поиск, «Мои объявления»)
+     * меню за собой не ведёт: выход «Продолжить» у неё не подключён, и
+     * диалог заканчивается её последней репликой — «Готово! Объявление
+     * ушло на проверку…» не должно сопровождаться вопросом «Что вас
+     * интересует?». Меню придёт на следующее сообщение человека. Просьба
+     * о меню — другое дело: у AI-блоков подключён выход «В меню», и по
+     * нему главное меню приходит сразу.
      *
      * @return array{nodes: list<array<string, mixed>>, edges: list<array<string, mixed>>}
      */
@@ -186,13 +192,15 @@ class InstallDefaultBotScenario extends Command
                         ['id' => 'driver_seek', 'title' => 'Я ищу водителя'],
                         ['id' => 'my_driver', 'title' => 'Мои объявления'],
                     ]],
+                // Шаг по вертикали — 140: у AI-блока два выхода, и при
+                // прежних 120 соседние блоки наезжали друг на друга.
                 ['id' => 'collect_rental', 'type' => 'ai', 'task' => 'collect_listing', 'kind' => 'rental', 'x' => 1000, 'y' => 40],
-                ['id' => 'search_rental', 'type' => 'ai', 'task' => 'customer_search', 'kind' => 'rental', 'x' => 1000, 'y' => 160],
-                ['id' => 'collect_repair', 'type' => 'ai', 'task' => 'collect_listing', 'kind' => 'repair', 'x' => 1000, 'y' => 300],
-                ['id' => 'search_repair', 'type' => 'ai', 'task' => 'customer_search', 'kind' => 'repair', 'x' => 1000, 'y' => 420],
-                ['id' => 'collect_driver', 'type' => 'ai', 'task' => 'collect_listing', 'kind' => 'driver', 'x' => 1000, 'y' => 560],
-                ['id' => 'search_driver', 'type' => 'ai', 'task' => 'customer_search', 'kind' => 'driver', 'x' => 1000, 'y' => 680],
-                ['id' => 'my_listings', 'type' => 'my_listings', 'x' => 1000, 'y' => 820,
+                ['id' => 'search_rental', 'type' => 'ai', 'task' => 'customer_search', 'kind' => 'rental', 'x' => 1000, 'y' => 180],
+                ['id' => 'collect_repair', 'type' => 'ai', 'task' => 'collect_listing', 'kind' => 'repair', 'x' => 1000, 'y' => 320],
+                ['id' => 'search_repair', 'type' => 'ai', 'task' => 'customer_search', 'kind' => 'repair', 'x' => 1000, 'y' => 460],
+                ['id' => 'collect_driver', 'type' => 'ai', 'task' => 'collect_listing', 'kind' => 'driver', 'x' => 1000, 'y' => 600],
+                ['id' => 'search_driver', 'type' => 'ai', 'task' => 'customer_search', 'kind' => 'driver', 'x' => 1000, 'y' => 740],
+                ['id' => 'my_listings', 'type' => 'my_listings', 'x' => 1000, 'y' => 880,
                     'text' => 'Ваши объявления собраны в кабинете: статусы, причины отклонения, снятие с публикации. Кнопка ниже откроет его без пароля.'],
             ],
             'edges' => [
@@ -212,14 +220,14 @@ class InstallDefaultBotScenario extends Command
                 ['from' => 'menu_driver', 'output' => 'option:driver', 'to' => 'collect_driver'],
                 ['from' => 'menu_driver', 'output' => 'option:driver_seek', 'to' => 'search_driver'],
                 ['from' => 'menu_driver', 'output' => 'option:my_driver', 'to' => 'my_listings'],
-                // Завершение любой ветки возвращает в главное меню — тупиковых узлов нет.
-                ['from' => 'collect_rental', 'output' => 'continue', 'to' => 'main_menu'],
-                ['from' => 'collect_repair', 'output' => 'continue', 'to' => 'main_menu'],
-                ['from' => 'collect_driver', 'output' => 'continue', 'to' => 'main_menu'],
-                ['from' => 'search_rental', 'output' => 'continue', 'to' => 'main_menu'],
-                ['from' => 'search_repair', 'output' => 'continue', 'to' => 'main_menu'],
-                ['from' => 'search_driver', 'output' => 'continue', 'to' => 'main_menu'],
-                ['from' => 'my_listings', 'output' => 'continue', 'to' => 'main_menu'],
+                // Просьба о меню ведёт в главное меню; выход «Продолжить»
+                // веток не подключён — завершившаяся ветка меню не шлёт.
+                ['from' => 'collect_rental', 'output' => 'menu', 'to' => 'main_menu'],
+                ['from' => 'collect_repair', 'output' => 'menu', 'to' => 'main_menu'],
+                ['from' => 'collect_driver', 'output' => 'menu', 'to' => 'main_menu'],
+                ['from' => 'search_rental', 'output' => 'menu', 'to' => 'main_menu'],
+                ['from' => 'search_repair', 'output' => 'menu', 'to' => 'main_menu'],
+                ['from' => 'search_driver', 'output' => 'menu', 'to' => 'main_menu'],
             ],
         ];
     }

@@ -612,12 +612,213 @@ test('a runtime button unknown to the graph still reaches the AI block that owns
     $assistant = test()->mock(AiAssistant::class);
     $assistant->shouldReceive('resume')->once()
         ->withArgs(fn (BotSession $session, array $node, InboundMessage $message) => $message->replyId === 'search_to_menu')
-        ->andReturn(AiOutcome::Completed);
+        ->andReturn(AiOutcome::Menu);
 
-    fakeBotMessenger()->shouldReceive('sendText')->once()
-        ->withArgs(fn (Contact $to, string $text) => $text === 'Спасибо!');
+    // Выход «В меню» у блока не подключён — диалог начинается заново со
+    // «Старта»; «Продолжить» («Спасибо!») при просьбе о меню не срабатывает.
+    $messenger = fakeBotMessenger();
+    $messenger->shouldReceive('sendText')->once()
+        ->withArgs(fn (Contact $to, string $text) => $text === 'Привет!');
+    $messenger->shouldReceive('sendButtons')->once()
+        ->withArgs(fn (Contact $to, string $text) => $text === 'Кто вы?');
 
     app(BotEngine::class)->handle($contact, new InboundMessage(text: 'В меню', replyId: 'search_to_menu'));
+
+    expect(BotSession::sole()->current_node_id)->toBe('menu');
+});
+
+/**
+ * Главное меню, раздел и анкета под ним. Выход «Продолжить» анкеты не
+ * подключён: так выглядит типовой диалог, где завершившаяся ветка меню за
+ * собой не ведёт.
+ */
+function botBranchDefinition(bool $connectMenuOutput = true, bool $connectReturning = true): array
+{
+    $definition = [
+        'nodes' => [
+            ['id' => 'start', 'type' => 'start'],
+            ['id' => 'greeting', 'type' => 'text', 'text' => 'Здравствуйте, это сервис!'],
+            ['id' => 'main_menu', 'type' => 'buttons', 'text' => 'Что вас интересует?', 'options' => [
+                ['id' => 'kind_rental', 'title' => 'Аренда'],
+            ]],
+            ['id' => 'menu_rental', 'type' => 'buttons', 'text' => 'Аренда. Сдаёте или ищете?', 'options' => [
+                ['id' => 'rent_out', 'title' => 'Я сдаю'],
+                ['id' => 'my', 'title' => 'Мои объявления'],
+            ]],
+            ['id' => 'collect', 'type' => 'ai', 'task' => 'collect_listing'],
+            ['id' => 'my_listings', 'type' => 'my_listings', 'text' => 'Откройте кабинет.'],
+        ],
+        'edges' => [
+            ['from' => 'start', 'output' => 'continue', 'to' => 'greeting'],
+            ['from' => 'greeting', 'output' => 'continue', 'to' => 'main_menu'],
+            ['from' => 'main_menu', 'output' => 'option:kind_rental', 'to' => 'menu_rental'],
+            ['from' => 'menu_rental', 'output' => 'option:rent_out', 'to' => 'collect'],
+            ['from' => 'menu_rental', 'output' => 'option:my', 'to' => 'my_listings'],
+        ],
+    ];
+
+    if ($connectReturning) {
+        $definition['edges'][] = ['from' => 'start', 'output' => 'returning', 'to' => 'main_menu'];
+    }
+
+    if ($connectMenuOutput) {
+        $definition['edges'][] = ['from' => 'collect', 'output' => 'menu', 'to' => 'main_menu'];
+    }
+
+    return $definition;
+}
+
+test('a branch that ran to its own end leaves the dialog on its closing line — no menu follows', function () {
+    $scenario = BotScenario::factory()->published(botBranchDefinition())->create();
+    $contact = Contact::factory()->create();
+    $session = botSessionWaitingAt($scenario, $contact, 'collect');
+    $session->update(['state' => ['phase' => 'confirming']]);
+
+    test()->mock(AiAssistant::class)->shouldReceive('resume')->once()->andReturn(AiOutcome::Completed);
+
+    // Завершающую реплику отправляет сам ассистент (здесь он подменён), а
+    // движок вслед за ней не шлёт ничего: ни меню, ни текста.
+    fakeBotMessenger()->shouldNotReceive('sendText', 'sendButtons', 'sendList', 'sendCtaUrl');
+
+    app(BotEngine::class)->handle($contact, new InboundMessage(text: 'Да, отправить', replyId: 'collect_submit'));
+
+    expect($session->fresh())
+        ->current_node_id->toBeNull()
+        ->current_node_fingerprint->toBeNull()
+        ->last_dialog_ended_at->not->toBeNull();
+});
+
+test('after a branch that has just ended the next message brings the menu, without the greeting', function () {
+    $scenario = BotScenario::factory()->published(botBranchDefinition())->create();
+    $contact = Contact::factory()->create();
+    $session = botSessionWaitingAt($scenario, $contact, 'collect');
+
+    test()->mock(AiAssistant::class)->shouldReceive('resume')->once()->andReturn(AiOutcome::Completed);
+
+    $messenger = fakeBotMessenger();
+    $messenger->shouldReceive('sendText')->never();
+    $messenger->shouldReceive('sendButtons')->once()
+        ->withArgs(fn (Contact $to, string $text, array $buttons) => $text === 'Что вас интересует?'
+            && array_column($buttons, 'id') === ['kind_rental']);
+
+    app(BotEngine::class)->handle($contact, new InboundMessage(text: 'Да, отправить', replyId: 'collect_submit'));
+
+    expect($session->fresh()->current_node_id)->toBeNull();
+
+    // Меню приходит не само, а в ответ на следующее сообщение человека —
+    // тем же путём, каким его получает вернувшийся контакт.
+    app(BotEngine::class)->handle($contact, new InboundMessage(text: 'Здравствуйте'));
+
+    expect($session->fresh()->current_node_id)->toBe('main_menu');
+});
+
+test('a button from an earlier message pressed after the branch ended brings the menu once', function (InboundMessage $press) {
+    // Диалог завершён, и нажатие начинает новый — как у вернувшегося
+    // контакта: одно меню, без «кнопка устарела», без приветствия и без
+    // дублей. Ассистента нажатие не достигает: блока, которому оно
+    // принадлежало, человек уже не ждёт.
+    $scenario = BotScenario::factory()->published(botBranchDefinition())->create();
+    $contact = Contact::factory()->create();
+    $session = botSessionWaitingAt($scenario, $contact, 'collect');
+
+    $assistant = test()->mock(AiAssistant::class);
+    $assistant->shouldReceive('resume')->once()->andReturn(AiOutcome::Completed);
+    $assistant->shouldNotReceive('start');
+
+    $messenger = fakeBotMessenger();
+    $messenger->shouldReceive('sendText')->never();
+    $messenger->shouldReceive('sendButtons')->once()
+        ->withArgs(fn (Contact $to, string $text) => $text === 'Что вас интересует?');
+
+    app(BotEngine::class)->handle($contact, new InboundMessage(text: 'Да, отправить', replyId: 'collect_submit'));
+    app(BotEngine::class)->handle($contact, $press);
+
+    expect($session->fresh()->current_node_id)->toBe('main_menu');
+})->with([
+    '«В меню» из сообщения ассистента' => [new InboundMessage(text: 'В меню', replyId: 'collect_to_menu')],
+    'кнопка раздела из прежнего меню' => [new InboundMessage(text: 'Аренда', replyId: 'kind_rental')],
+    'кнопка роли с экрана раздела' => [new InboundMessage(text: 'Я сдаю', replyId: 'rent_out')],
+    'кнопка прежней версии сценария' => [new InboundMessage(text: 'Устаревшая', replyId: 'ghost_from_old_version')],
+]);
+
+test('a request for the menu follows the menu output and shows the menu at once', function () {
+    $definition = botBranchDefinition();
+    // «Продолжить» оператор подключил к своему блоку — просьбу о меню это
+    // не уводит: у неё свой выход.
+    $definition['nodes'][] = ['id' => 'thanks', 'type' => 'text', 'text' => 'Спасибо за объявление!'];
+    $definition['edges'][] = ['from' => 'collect', 'output' => 'continue', 'to' => 'thanks'];
+    $scenario = BotScenario::factory()->published($definition)->create();
+    $contact = Contact::factory()->create();
+    $session = botSessionWaitingAt($scenario, $contact, 'collect');
+
+    test()->mock(AiAssistant::class)->shouldReceive('resume')->once()
+        ->withArgs(fn (BotSession $session, array $node, InboundMessage $message) => $message->replyId === 'collect_to_menu')
+        ->andReturn(AiOutcome::Menu);
+
+    $messenger = fakeBotMessenger();
+    $messenger->shouldReceive('sendText')->never();
+    $messenger->shouldReceive('sendButtons')->once()
+        ->withArgs(fn (Contact $to, string $text) => $text === 'Что вас интересует?');
+
+    app(BotEngine::class)->handle($contact, new InboundMessage(text: 'В меню', replyId: 'collect_to_menu'));
+
+    expect($session->fresh()->current_node_id)->toBe('main_menu');
+});
+
+test('a request for the menu is answered even when the menu output is not wired', function () {
+    // Запасной путь: диалог начинается заново со «Старта». Контакт уже
+    // доходил до шага диалога, поэтому идёт по «Повторному обращению» —
+    // сразу к меню, без приветствия.
+    $scenario = BotScenario::factory()->published(botBranchDefinition(connectMenuOutput: false))->create();
+    $contact = Contact::factory()->create();
+    $session = botSessionWaitingAt($scenario, $contact, 'collect');
+    $session->update(['last_dialog_ended_at' => now()->subMinute()]);
+
+    test()->mock(AiAssistant::class)->shouldReceive('resume')->once()->andReturn(AiOutcome::Menu);
+
+    $messenger = fakeBotMessenger();
+    $messenger->shouldReceive('sendText')->never();
+    $messenger->shouldReceive('sendButtons')->once()
+        ->withArgs(fn (Contact $to, string $text) => $text === 'Что вас интересует?');
+
+    app(BotEngine::class)->handle($contact, new InboundMessage(text: 'В меню', replyId: 'collect_to_menu'));
+
+    expect($session->fresh()->current_node_id)->toBe('main_menu');
+});
+
+test('a completed branch follows a continue output the operator wired themselves', function () {
+    $definition = botBranchDefinition();
+    $definition['nodes'][] = ['id' => 'thanks', 'type' => 'text', 'text' => 'Спасибо за объявление!'];
+    $definition['edges'][] = ['from' => 'collect', 'output' => 'continue', 'to' => 'thanks'];
+    $scenario = BotScenario::factory()->published($definition)->create();
+    $contact = Contact::factory()->create();
+    $session = botSessionWaitingAt($scenario, $contact, 'collect');
+
+    test()->mock(AiAssistant::class)->shouldReceive('resume')->once()->andReturn(AiOutcome::Completed);
+
+    $messenger = fakeBotMessenger();
+    $messenger->shouldReceive('sendText')->once()
+        ->withArgs(fn (Contact $to, string $text) => $text === 'Спасибо за объявление!');
+    $messenger->shouldNotReceive('sendButtons');
+
+    app(BotEngine::class)->handle($contact, new InboundMessage(text: 'Да, отправить', replyId: 'collect_submit'));
+
+    expect($session->fresh()->current_node_id)->toBeNull();
+});
+
+test('the my_listings block of the main dialog sends the link and no menu after it', function () {
+    $scenario = BotScenario::factory()->published(botBranchDefinition())->create();
+    $contact = Contact::factory()->create();
+    $session = botSessionWaitingAt($scenario, $contact, 'menu_rental');
+
+    $messenger = fakeBotMessenger();
+    $messenger->shouldReceive('sendCtaUrl')->once()
+        ->withArgs(fn (Contact $to, string $text, string $button) => $text === 'Откройте кабинет.' && $button === 'Открыть кабинет');
+    $messenger->shouldNotReceive('sendText', 'sendButtons', 'sendList');
+
+    app(BotEngine::class)->handle($contact, new InboundMessage(text: 'Мои объявления', replyId: 'my'));
+
+    expect($session->fresh()->current_node_id)->toBeNull();
 });
 
 /**
@@ -830,7 +1031,9 @@ test('a contact who only reached the first waiting step still returns straight t
         ->scenario_version->toBe($scenario->published_version);
 });
 
-test('AI block completion returns the contact to the menu within the same turn', function () {
+test('a wired continue output still carries a completed AI block on within the same turn', function () {
+    // Оператор вправе сам подключить «Продолжить» завершившейся ветки к
+    // своему блоку — хоть к меню, как здесь: схема остаётся источником истины.
     BotScenario::factory()->published([
         'nodes' => [
             ['id' => 'start', 'type' => 'start'],
@@ -887,7 +1090,7 @@ test('a cycle of auto-advancing blocks is capped and the dialog is parked', func
 
 test('a Back outcome parks the contact on the menu whose option leads into the AI block', function () {
     // «Назад» на первом сообщении блока — на один уровень вверх: экран
-    // раздела с его кнопками, а не главное меню по выходу «Продолжить».
+    // раздела с его кнопками, а не главное меню по выходу «В меню».
     $scenario = BotScenario::factory()->published(botMenuWithAiDefinition())->create();
     $contact = Contact::factory()->create();
     $session = botSessionWaitingAt($scenario, $contact, 'search');
@@ -908,7 +1111,48 @@ test('a Back outcome parks the contact on the menu whose option leads into the A
     expect($session->fresh()->current_node_id)->toBe('menu');
 });
 
-test('a Back outcome from an AI block no menu leads into falls through the continue output', function () {
+test('a Back outcome from an AI block no menu leads into is answered like a request for the menu', function () {
+    // Экрана раздела над блоком нет, и «Назад» ведёт туда же, куда «В меню»:
+    // по выходу «В меню», а не по «Продолжить» — тот для ветки, которая
+    // завершилась сама, и человек его не просил.
+    BotScenario::factory()->published([
+        'nodes' => [
+            ['id' => 'start', 'type' => 'start'],
+            ['id' => 'collect', 'type' => 'ai'],
+            ['id' => 'done', 'type' => 'text', 'text' => 'Готово'],
+            ['id' => 'menu', 'type' => 'buttons', 'text' => 'Что вас интересует?', 'options' => [
+                ['id' => 'kind_rental', 'title' => 'Аренда'],
+            ]],
+            ['id' => 'rental', 'type' => 'text', 'text' => 'Аренда'],
+        ],
+        'edges' => [
+            ['from' => 'start', 'output' => 'continue', 'to' => 'collect'],
+            ['from' => 'collect', 'output' => 'continue', 'to' => 'done'],
+            ['from' => 'collect', 'output' => 'menu', 'to' => 'menu'],
+            ['from' => 'menu', 'output' => 'option:kind_rental', 'to' => 'rental'],
+        ],
+    ])->create();
+    $contact = Contact::factory()->create();
+
+    $assistant = test()->mock(AiAssistant::class);
+    $assistant->shouldReceive('start')->once()->andReturn(AiOutcome::InProgress);
+    $assistant->shouldReceive('resume')->once()->andReturn(AiOutcome::Back);
+
+    $messenger = fakeBotMessenger();
+    $messenger->shouldReceive('sendText')->never();
+    $messenger->shouldReceive('sendButtons')->once()
+        ->withArgs(fn (Contact $to, string $text) => $text === 'Что вас интересует?');
+
+    app(BotEngine::class)->handle($contact, new InboundMessage(text: 'Привет'));
+    app(BotEngine::class)->handle($contact, new InboundMessage(text: 'Назад'));
+
+    expect(BotSession::sole()->current_node_id)->toBe('menu');
+});
+
+test('a Back outcome with neither a parent menu nor a wired menu output starts the dialog over', function () {
+    // Ни экрана раздела, ни выхода «В меню»: диалог начинается заново со
+    // «Старта» — тем же путём, каким пошло бы следующее сообщение человека.
+    // «Продолжить» при этом не срабатывает, хотя и подключён.
     BotScenario::factory()->published([
         'nodes' => [
             ['id' => 'start', 'type' => 'start'],
@@ -923,16 +1167,15 @@ test('a Back outcome from an AI block no menu leads into falls through the conti
     $contact = Contact::factory()->create();
 
     $assistant = test()->mock(AiAssistant::class);
-    $assistant->shouldReceive('start')->once()->andReturn(AiOutcome::InProgress);
+    $assistant->shouldReceive('start')->twice()->andReturn(AiOutcome::InProgress);
     $assistant->shouldReceive('resume')->once()->andReturn(AiOutcome::Back);
 
-    fakeBotMessenger()->shouldReceive('sendText')->once()
-        ->withArgs(fn (Contact $to, string $text) => $text === 'Готово');
+    fakeBotMessenger()->shouldReceive('sendText')->never();
 
     app(BotEngine::class)->handle($contact, new InboundMessage(text: 'Привет'));
     app(BotEngine::class)->handle($contact, new InboundMessage(text: 'Назад'));
 
-    expect(BotSession::sole()->current_node_id)->toBeNull();
+    expect(BotSession::sole()->current_node_id)->toBe('collect');
 });
 
 test('a Back outcome on entering the AI block returns to the menu the same turn', function () {

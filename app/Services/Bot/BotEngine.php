@@ -319,14 +319,37 @@ class BotEngine
         return $node === null;
     }
 
+    /**
+     * Whether the dialog being replaced is over rather than missing or
+     * reset: it ran to its end (or was closed) with nothing awaited, or
+     * went silent for 24 hours. Asked before the new dialog touches the
+     * session.
+     *
+     * A republication that reshaped the awaited step is not that: the
+     * contact is still mid-dialog, and a press there answers a question
+     * the new schema no longer asks — the soft reset stands. Nor is a
+     * contact with no session of this scenario at all.
+     */
+    private function previousDialogEnded(BotSession $session, BotScenario $scenario): bool
+    {
+        return $session->exists
+            && $session->bot_scenario_id === $scenario->id
+            && ($session->current_node_id === null || $session->isExpired());
+    }
+
     private function restart(BotSession $session, Contact $contact, BotScenario $scenario, ScenarioDefinition $definition): void
+    {
+        $this->beginDialog($session, $scenario);
+
+        $this->advance($session, $contact, $definition, $definition->startNodeId());
+    }
+
+    private function beginDialog(BotSession $session, BotScenario $scenario): void
     {
         $this->clearMenuStreak($session);
         $session->bot_scenario_id = $scenario->id;
         $session->scenario_version = $scenario->published_version;
         $session->updated_at = now();
-
-        $this->advance($session, $contact, $definition, $definition->startNodeId());
     }
 
     /**
@@ -338,14 +361,25 @@ class BotEngine
      * message as a destination, so the menu would be a question the bot
      * answers itself three seconds later.
      *
+     * $holdAtWait stops the walk before the first block that waits for
+     * input, neither showing nor starting it, and parks nothing: the
+     * dialog is opening on a press whose destination is already known,
+     * and the caller walks on from there. What goes out before that block
+     * still goes out; a walk that ends before reaching any ends the dialog
+     * as usual.
+     *
      * $carried is the message that brought the contact here; the first AI
      * block on the way answers by it instead of introducing itself. It is
      * spent on that block: a second AI block further along the walk did
      * not receive it and still needs to say what it wants.
      *
+     * Returns false when the step cap cut the walk off and parked the
+     * dialog: nothing more is walked this turn, or the cap would only
+     * start counting again.
+     *
      * @param  array<string, mixed>|null  $node
      */
-    private function advance(BotSession $session, Contact $contact, ScenarioDefinition $definition, ?string $nodeId, ?string $silentMenuAt = null, ?InboundMessage $carried = null): void
+    private function advance(BotSession $session, Contact $contact, ScenarioDefinition $definition, ?string $nodeId, ?string $silentMenuAt = null, ?InboundMessage $carried = null, bool $holdAtWait = false): bool
     {
         for ($steps = 0; $steps < self::MAX_STEPS; $steps++) {
             $node = $definition->node($nodeId);
@@ -354,7 +388,11 @@ class BotEngine
             if ($node === null || $type === null) {
                 $this->endDialog($session);
 
-                return;
+                return true;
+            }
+
+            if ($holdAtWait && $type->waitsForInput()) {
+                return true;
             }
 
             switch ($type) {
@@ -391,7 +429,7 @@ class BotEngine
 
                     $this->waitAt($session, $node['id'], $definition->nodeFingerprint($node));
 
-                    return;
+                    return true;
 
                 case BotNodeType::AiInput:
                     $this->waitAt($session, $node['id'], $definition->nodeFingerprint($node));
@@ -402,7 +440,7 @@ class BotEngine
                     $outcome = $this->aiAssistant->start($session, $node, $entering);
 
                     if ($outcome === AiOutcome::InProgress) {
-                        return;
+                        return true;
                     }
 
                     $nodeId = $this->nodeAfterAi($definition, $node, $outcome);
@@ -414,12 +452,14 @@ class BotEngine
                     // into the main dialog — validation forbids them.
                     $this->endDialog($session);
 
-                    return;
+                    return true;
             }
         }
 
         // Step cap reached — a cycle of auto-advancing blocks; park the dialog.
         $this->endDialog($session);
+
+        return false;
     }
 
     /**
@@ -469,14 +509,39 @@ class BotEngine
      * should learn where they landed. Only the menu is held back, and only
      * until it is clear whether it is needed at all.
      *
-     * Where the graph answers by itself the navigator is not asked and the
-     * walk is the ordinary one: a press is a destination in its own right,
-     * voice is left to the ordinary menu turn, an entry block that is not
-     * a menu has no options to route into, and a text matching an option
-     * or a wired «Любая другая фраза» output is the graph's own business.
+     * Once the previous dialog is over, a press of a button the published
+     * graph owns — an earlier menu still in the chat — is a destination in
+     * its own right and needs neither the navigator nor the step the dialog
+     * would stop at first: whatever that is — the menu, an entry
+     * questionnaire, nothing at all — it asks what the press has already
+     * answered. Only what goes out before it is sent, and the press is
+     * followed exactly as routeButton() follows it inside a running dialog.
+     *
+     * Everything else is the ordinary walk: a press the graph does not own
+     * (an older version's button, an AI block's runtime button) has nowhere
+     * to lead, voice is left to the ordinary menu turn, an entry block that
+     * is not a menu has no options to route into, and a text matching an
+     * option or a wired «Любая другая фраза» output is the graph's own
+     * business.
      */
     private function openDialog(BotSession $session, Contact $contact, BotScenario $scenario, ScenarioDefinition $definition, InboundMessage $message): void
     {
+        $pressed = filled($message->replyId) && $this->previousDialogEnded($session, $scenario)
+            ? $definition->optionOwner((string) $message->replyId)
+            : null;
+
+        if ($pressed !== null) {
+            $this->beginDialog($session, $scenario);
+
+            // The greeting and any other blocks before the first step go
+            // out by «Старт»'s own rule; that step itself is skipped.
+            if ($this->advance($session, $contact, $definition, $definition->startNodeId(), holdAtWait: true)) {
+                $this->routeToOption($session, $contact, $definition, $pressed);
+            }
+
+            return;
+        }
+
         $entry = $this->routableEntry($session, $contact, $definition, $message);
 
         if ($entry === null) {
@@ -485,10 +550,7 @@ class BotEngine
             return;
         }
 
-        $this->clearMenuStreak($session);
-        $session->bot_scenario_id = $scenario->id;
-        $session->scenario_version = $scenario->published_version;
-        $session->updated_at = now();
+        $this->beginDialog($session, $scenario);
 
         // Everything before the menu — the greeting, any other text blocks
         // the operator put there — goes out now; the menu itself waits.

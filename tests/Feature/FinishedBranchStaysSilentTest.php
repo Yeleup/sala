@@ -331,7 +331,7 @@ describe('после завершившейся ветки меню приход
             ->and($session->fresh()->current_node_id)->toBe('main_menu');
     });
 
-    test('кнопка из более раннего сообщения даёт меню один раз — без «кнопка устарела» и без дублей', function (InboundMessage $press) {
+    test('кнопка ассистента из более раннего сообщения даёт меню один раз — без «кнопка устарела» и без дублей', function (InboundMessage $press) {
         $scenario = typicalMainDialog();
         $session = branchSessionOnSummary($scenario);
         silentNavigator()->shouldNotReceive('route');
@@ -351,10 +351,65 @@ describe('после завершившейся ветки меню приход
         '«В меню» под прежним вопросом анкеты' => [new InboundMessage(text: 'В меню', replyId: SupplierListingCollector::BUTTON_MENU)],
         '«В меню» под заголовком выдачи поиска' => [new InboundMessage(text: 'В меню', replyId: CustomerSearchAssistant::BUTTON_MENU)],
         '«Назад» под приглашением блока' => [new InboundMessage(text: 'Назад', replyId: SupplierListingCollector::BUTTON_BACK)],
-        'раздел из прежнего главного меню' => [new InboundMessage(text: 'Ремонт спецтехники', replyId: 'kind_repair')],
-        'роль с прежнего экрана раздела' => [new InboundMessage(text: 'Я ищу спецтехнику', replyId: 'rent_seek')],
         '«Да, отправить» той же сводки ещё раз' => [new InboundMessage(text: 'Да, отправить', replyId: SupplierListingCollector::BUTTON_SUBMIT)],
+        'кнопка прежней версии сценария' => [new InboundMessage(text: 'Устаревшая', replyId: 'kind_from_old_version')],
     ]);
+
+    test('кнопка схемы из более раннего сообщения ведёт сразу в свою ветку — без главного меню', function (InboundMessage $press, array $expected, ?string $node) {
+        $scenario = typicalMainDialog();
+        $session = branchSessionOnSummary($scenario);
+        silentNavigator()->shouldNotReceive('route');
+        $sent = recordOutbound();
+
+        pressInDialog($session, new InboundMessage(text: 'Да, отправить', replyId: SupplierListingCollector::BUTTON_SUBMIT));
+        pressInDialog($session, $press);
+
+        // Знакомому контакту приветствие не приходит, главное меню — тоже:
+        // ответом на нажатие сразу идёт то, что дала бы кнопка на только
+        // что показанном меню.
+        expect(outboundTo($sent, $session->contact_id))->toBe([
+            ['text', 'Готово! Объявление ушло на проверку. Как только модератор решит — сразу напишем.'],
+            ...$expected,
+        ])
+            ->and($session->fresh()->current_node_id)->toBe($node);
+    })->with([
+        'раздел из прежнего главного меню' => [
+            new InboundMessage(text: 'Ремонт спецтехники', replyId: 'kind_repair'),
+            [['buttons', 'Ремонт спецтехники. Вы мастер или ищете мастера?']],
+            'menu_repair',
+        ],
+        'роль с прежнего экрана раздела' => [
+            new InboundMessage(text: 'Я ищу спецтехнику', replyId: 'rent_seek'),
+            [['buttons', 'Расскажите, что нужно и в каком городе — можно голосом. Например: «нужен кран 25 тонн, Шымкент».']],
+            'search_rental',
+        ],
+        'анкета с прежнего экрана раздела' => [
+            new InboundMessage(text: 'Я водитель', replyId: 'driver'),
+            [['buttons', 'Расскажите о себе: на какой технике работаете, какое удостоверение, сколько лет стажа, в каком городе, готовы ли выезжать. Напишите или наговорите голосом.']],
+            'collect_driver',
+        ],
+        '«Мои объявления» с прежнего экрана раздела' => [
+            new InboundMessage(text: 'Мои объявления', replyId: 'my_repair'),
+            [['cta', 'Ваши объявления собраны в кабинете: статусы, причины отклонения, снятие с публикации. Кнопка ниже откроет его без пароля.']],
+            null,
+        ],
+    ]);
+
+    test('кнопка раздела из более раннего сообщения через сутки тишины — тоже сразу в раздел', function () {
+        $scenario = typicalMainDialog();
+        $session = branchSessionAt($scenario, 'main_menu');
+        $session->forceFill(['updated_at' => now()->subHours(30)])->saveQuietly();
+        silentNavigator()->shouldNotReceive('route');
+        $sent = recordOutbound();
+
+        pressInDialog($session, new InboundMessage(text: 'Водитель / машинист', replyId: 'kind_driver'));
+
+        expect(outboundTo($sent, $session->contact_id))->toBe([
+            ['buttons', 'Водители и машинисты. Вы водитель или ищете водителя?'],
+        ])
+            ->and($sent[0]['buttons'])->toBe(['driver', 'driver_seek', 'my_driver'])
+            ->and($session->fresh()->current_node_id)->toBe('menu_driver');
+    });
 
     test('содержательное сообщение ведёт сразу в ветку — меню не показывается', function () {
         $scenario = typicalMainDialog();
@@ -711,4 +766,186 @@ describe('прерванная анкета', function () {
             ->and($fresh->state['draft_id'])->toBe($draftId)
             ->and(Listing::count())->toBe(1);
     });
+
+    test('кнопка раздела после закончившегося диалога ведёт в раздел, а вернуться к анкете оттуда можно', function () {
+        ListingExtractionAgent::fake([[
+            'title' => 'Аренда трактора',
+            'category' => categoryNamed('Трактор')->name,
+            'new_category' => null,
+            'brand' => null,
+            'description' => 'Трактор в аренду с водителем',
+            'location' => locationNamed('г.Шымкент')->name,
+            'location_detail' => null,
+            'price' => '12000 тг/час',
+            'clarifying_question' => '',
+            'clarifying_field' => null,
+            'summary' => 'Трактор, Шымкент, 12000 тг/ч',
+        ]]);
+        $scenario = typicalMainDialog();
+        $session = branchSessionOnSummary($scenario);
+        $draftId = $session->state['draft_id'];
+        silentNavigator()->shouldNotReceive('route');
+        $sent = recordOutbound();
+
+        pressInDialog($session, new InboundMessage(text: 'В меню', replyId: SupplierListingCollector::BUTTON_MENU));
+        pressInDialog($session, new InboundMessage(text: 'Да, в меню', replyId: SupplierListingCollector::BUTTON_EXIT_CONFIRM));
+
+        // Сутки тишины: диалог закончился, а анкета ещё ждёт возврата.
+        $this->travel(25)->hours();
+        $before = count($sent);
+
+        pressInDialog($session, new InboundMessage(text: 'Аренда спецтехники', replyId: 'kind_rental'));
+
+        expect(array_slice(outboundTo($sent, $session->contact_id), $before))->toBe([
+            ['buttons', 'Аренда спецтехники. Вы предлагаете технику или ищете?'],
+        ])
+            ->and($session->fresh())
+            ->current_node_id->toBe('menu_rental')
+            ->and($session->fresh()->paused_state['node_id'])->toBe('collect_rental');
+
+        test()->mock(MenuRouter::class)->shouldReceive('route')->once()
+            ->withArgs(fn (BotSession $s, $definition, array $node, InboundMessage $m): bool => $node['id'] === 'menu_rental'
+                && $m->text === 'цена 12000 в час')
+            ->andReturn(MenuRoute::toResume(RouteConfidence::High));
+
+        pressInDialog($session, new InboundMessage(text: 'цена 12000 в час'));
+
+        $fresh = $session->fresh();
+
+        expect(array_column(array_slice(outboundTo($sent, $session->contact_id), $before), 1))
+            ->toHaveCount(3)
+            ->sequence(
+                fn ($text) => $text->toBe('Аренда спецтехники. Вы предлагаете технику или ищете?'),
+                fn ($text) => $text->toBe('Возвращаемся к анкете — всё написанное на месте.'),
+                fn ($text) => $text->toContain('12000'),
+            )
+            ->and($fresh)
+            ->current_node_id->toBe('collect_rental')
+            ->paused_state->toBeNull()
+            ->and($fresh->state['draft_id'])->toBe($draftId)
+            ->and(Listing::count())->toBe(1);
+    });
+
+    test('кнопка самой анкеты после закончившегося диалога — то же, что на только что показанном меню', function (bool $dialogEnded) {
+        $scenario = typicalMainDialog();
+        $session = branchSessionOnSummary($scenario);
+        silentNavigator()->shouldNotReceive('route');
+        $sent = recordOutbound();
+
+        pressInDialog($session, new InboundMessage(text: 'В меню', replyId: SupplierListingCollector::BUTTON_MENU));
+        pressInDialog($session, new InboundMessage(text: 'Да, в меню', replyId: SupplierListingCollector::BUTTON_EXIT_CONFIRM));
+        pressInDialog($session, new InboundMessage(text: 'Аренда спецтехники', replyId: 'kind_rental'));
+
+        expect($session->fresh()->paused_state['node_id'])->toBe('collect_rental');
+
+        if ($dialogEnded) {
+            $this->travel(25)->hours();
+        }
+
+        $before = count($sent);
+
+        pressInDialog($session, new InboundMessage(text: 'Я сдаю спецтехнику', replyId: 'rent_out'));
+
+        // Нажатая кнопка — явное начало новой анкеты: приходит её
+        // приглашение, а сохранённая обесценивается — в обоих случаях
+        // одинаково.
+        expect(array_slice(outboundTo($sent, $session->contact_id), $before))->toBe([
+            ['buttons', 'Расскажите, что вы предлагаете: пришлите фото, голосовое или напишите текстом — что это, в каком городе и по какой цене.'],
+        ])
+            ->and($session->fresh())
+            ->current_node_id->toBe('collect_rental')
+            ->paused_state->toBeNull()
+            ->and($session->fresh()->state['draft_id'])->toBeNull();
+    })->with([
+        'на только что показанном экране раздела' => [false],
+        'после суток тишины' => [true],
+    ]);
+});
+
+describe('«Старт» ведёт в анкету, а меню открывается из неё', function () {
+    /**
+     * Схема, которую публикация пропускает: от «Старта» — приветствие и
+     * сразу анкета аренды, а разделы открывает её выход «В меню». Меню, на
+     * котором можно встать молча, на пути от «Старта» нет вовсе.
+     */
+    function entryQuestionnaireDialog(): BotScenario
+    {
+        return BotScenario::factory()->published([
+            'nodes' => [
+                ['id' => 'start', 'type' => 'start'],
+                ['id' => 'greeting', 'type' => 'text', 'text' => 'Здравствуйте! Это сервис спецтехники.'],
+                ['id' => 'collect_rental', 'type' => 'ai', 'task' => 'collect_listing', 'kind' => 'rental'],
+                ['id' => 'main_menu', 'type' => 'buttons', 'text' => MAIN_MENU_TEXT, 'options' => [
+                    ['id' => 'kind_rental', 'title' => 'Аренда спецтехники'],
+                ]],
+                ['id' => 'menu_rental', 'type' => 'buttons', 'text' => 'Аренда спецтехники. Вы предлагаете технику или ищете?', 'options' => [
+                    ['id' => 'rent_out', 'title' => 'Я сдаю спецтехнику'],
+                    ['id' => 'rent_seek', 'title' => 'Я ищу спецтехнику'],
+                    ['id' => 'my', 'title' => 'Мои объявления'],
+                ]],
+                ['id' => 'search_rental', 'type' => 'ai', 'task' => 'customer_search', 'kind' => 'rental'],
+                ['id' => 'my_listings', 'type' => 'my_listings', 'text' => 'Ваши объявления — в кабинете.'],
+            ],
+            'edges' => [
+                ['from' => 'start', 'output' => 'continue', 'to' => 'greeting'],
+                ['from' => 'start', 'output' => 'returning', 'to' => 'collect_rental'],
+                ['from' => 'greeting', 'output' => 'continue', 'to' => 'collect_rental'],
+                ['from' => 'collect_rental', 'output' => 'menu', 'to' => 'main_menu'],
+                ['from' => 'main_menu', 'output' => 'option:kind_rental', 'to' => 'menu_rental'],
+                ['from' => 'menu_rental', 'output' => 'option:rent_out', 'to' => 'collect_rental'],
+                ['from' => 'menu_rental', 'output' => 'option:rent_seek', 'to' => 'search_rental'],
+                ['from' => 'menu_rental', 'output' => 'option:my', 'to' => 'my_listings'],
+                ['from' => 'search_rental', 'output' => 'menu', 'to' => 'main_menu'],
+            ],
+        ])->create();
+    }
+
+    test('кнопка из более раннего сообщения ведёт в свою ветку, не начиная анкету от «Старта»', function (bool $silentForADay, InboundMessage $press, array $expected, string $node) {
+        $scenario = entryQuestionnaireDialog();
+        $session = branchSessionOnSummary($scenario);
+        $draftId = $session->state['draft_id'];
+        silentNavigator()->shouldNotReceive('route');
+        $sent = recordOutbound();
+
+        // Поставщик вышел из анкеты с прогрессом и дошёл до экрана раздела.
+        pressInDialog($session, new InboundMessage(text: 'В меню', replyId: SupplierListingCollector::BUTTON_MENU));
+        pressInDialog($session, new InboundMessage(text: 'Да, в меню', replyId: SupplierListingCollector::BUTTON_EXIT_CONFIRM));
+        pressInDialog($session, new InboundMessage(text: 'Аренда спецтехники', replyId: 'kind_rental'));
+
+        // Диалог закончился: веткой «Мои объявления» или сутками тишины.
+        if ($silentForADay) {
+            $this->travel(25)->hours();
+        } else {
+            pressInDialog($session, new InboundMessage(text: 'Мои объявления', replyId: 'my'));
+            expect($session->fresh()->current_node_id)->toBeNull();
+        }
+
+        $before = count($sent);
+
+        pressInDialog($session, $press);
+
+        // Ровно ветка нажатой кнопки: ни приветствия знакомому контакту,
+        // ни приглашения анкеты, к которой ведёт «Старт».
+        expect(array_slice(outboundTo($sent, $session->contact_id), $before))->toBe($expected)
+            ->and($session->fresh())
+            ->current_node_id->toBe($node)
+            // Прерванная анкета осталась — как после нажатия на показанном меню.
+            ->and($session->fresh()->paused_state['node_id'])->toBe('collect_rental')
+            ->and($session->fresh()->paused_state['state']['draft_id'])->toBe($draftId)
+            ->and(Listing::count())->toBe(1);
+    })->with([
+        'ветка завершилась' => [false],
+        'сутки тишины' => [true],
+    ])->with([
+        'кнопка главного меню' => [
+            new InboundMessage(text: 'Аренда спецтехники', replyId: 'kind_rental'),
+            [['buttons', 'Аренда спецтехники. Вы предлагаете технику или ищете?']],
+            'menu_rental',
+        ],
+        'кнопка поиска с экрана раздела' => [
+            new InboundMessage(text: 'Я ищу спецтехнику', replyId: 'rent_seek'),
+            [['buttons', 'Расскажите, что нужно и в каком городе — можно голосом. Например: «нужен кран 25 тонн, Шымкент».']],
+            'search_rental',
+        ],
+    ]);
 });

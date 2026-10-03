@@ -23,13 +23,21 @@ class CustomerRequestNotifier
 
     public const string BUTTON_DECLINE_TITLE = 'Отказаться';
 
-    public function __construct(private readonly DereuMessenger $messenger) {}
+    public function __construct(
+        private readonly DereuMessenger $messenger,
+        private readonly WhatsappReplyBuffer $reply,
+    ) {}
 
     public function notifySupplier(CustomerRequest $request): bool
     {
         $supplier = $request->listing->supplier;
         $acceptId = NotificationReplyHandler::requestAcceptId($request);
         $declineId = NotificationReplyHandler::requestDeclineId($request);
+
+        // A text the customer's reply holds back is not this notification:
+        // sent from inside it, its failure would read as «the supplier was
+        // not reached» and close the request.
+        $this->reply->flush();
 
         try {
             $template = WhatsappTemplate::query()

@@ -9,6 +9,7 @@ use App\Services\Ai\ScenarioAiAssistant;
 use App\Services\Bot\AiAssistant;
 use App\Services\Bot\MenuRouter;
 use App\Services\DereuConnect;
+use App\Services\WhatsappReplyBuffer;
 use App\Support\DereuOutboundGuard;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Http;
@@ -27,6 +28,10 @@ class AppServiceProvider extends ServiceProvider
         // Scoped, not singleton: the audit state is per request/job and
         // must never leak across Octane requests or queued jobs.
         $this->app->scoped(AiAuditState::class);
+
+        // The same for the bot's reply being collected: the text it holds
+        // back belongs to one job or request (see WhatsappReplyBuffer).
+        $this->app->scoped(WhatsappReplyBuffer::class);
 
         $this->app->singleton(DereuConnect::class, function (): DereuConnect {
             return new DereuConnect(

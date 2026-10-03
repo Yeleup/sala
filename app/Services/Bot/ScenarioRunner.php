@@ -16,6 +16,7 @@ use App\Models\WhatsappTemplate;
 use App\Services\Ai\CtaLinkBuilder;
 use App\Services\DereuMessenger;
 use App\Services\TemplateFallback;
+use App\Services\WhatsappReplyBuffer;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Facades\Log;
 use RuntimeException;
@@ -31,6 +32,12 @@ use Throwable;
  *
  * Runs never touch the contact's main dialog session, so a supplier can
  * simultaneously await answers about several requests and listings.
+ *
+ * A run answers for its own messages: when it advances inside a bot reply
+ * (the button reply of a run), the text the reply holds back is sent
+ * before the run starts and after it stops, so a failed send marks the
+ * run that made it — not a run that merely happened to send next. Inside
+ * the run a text block followed by buttons still goes out as one message.
  */
 class ScenarioRunner
 {
@@ -43,6 +50,7 @@ class ScenarioRunner
         private readonly ScenarioConditionEvaluator $conditions,
         private readonly ScenarioActionExecutor $actions,
         private readonly CtaLinkBuilder $links,
+        private readonly WhatsappReplyBuffer $reply,
     ) {}
 
     /**
@@ -57,6 +65,8 @@ class ScenarioRunner
         if ($definition === null) {
             return null;
         }
+
+        $this->reply->flush();
 
         $run = new ScenarioRun([
             'token' => ScenarioRun::generateToken(),
@@ -75,6 +85,7 @@ class ScenarioRunner
 
         try {
             $this->advance($run, $definition, $definition->startNodeId());
+            $this->reply->flush();
         } catch (OutboundRequestBlocked $e) {
             // The channel is barred on this machine, so nothing was
             // attempted: recording a terminal failure would put a local
@@ -112,8 +123,11 @@ class ScenarioRunner
             return;
         }
 
+        $this->reply->flush();
+
         try {
             $this->advance($run, $definition, $definition->target($node['id'], ScenarioDefinition::optionOutput($optionId)));
+            $this->reply->flush();
         } catch (OutboundRequestBlocked $e) {
             // The channel is barred on this machine, so nothing was
             // attempted: recording a terminal failure would put a local
@@ -147,8 +161,11 @@ class ScenarioRunner
             return;
         }
 
+        $this->reply->flush();
+
         try {
             $this->advance($run, $definition, $target);
+            $this->reply->flush();
         } catch (OutboundRequestBlocked $e) {
             // The channel is barred on this machine, so nothing was
             // attempted: recording a terminal failure would put a local

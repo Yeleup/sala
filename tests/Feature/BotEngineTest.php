@@ -920,27 +920,92 @@ test('a scenario button pressed with no dialog of this scenario behind it opens 
     'сессия другого сценария' => [true, ['Что вас интересует?']],
 ]);
 
-test('a scenario button pressed after the dialog ended while «Старт» leads to no menu starts the dialog over', function () {
-    // Нажатие исполняется после того, как новый диалог молча встал на меню
-    // от «Старта». Если «Старт» ведёт не в меню (здесь — сразу в анкету),
-    // встать молча не на что: диалог начинается заново, как раньше.
+/**
+ * «Старт» → приветствие → анкета; меню разделов открывается только из
+ * анкеты по её выходу «В меню». Публикацию такая схема проходит: от
+ * «Старта» требуется лишь подключённый выход, а не меню.
+ */
+function botEntryQuestionnaireDefinition(): array
+{
+    return [
+        'nodes' => [
+            ['id' => 'start', 'type' => 'start'],
+            ['id' => 'greeting', 'type' => 'text', 'text' => 'Здравствуйте, это сервис!'],
+            ['id' => 'collect', 'type' => 'ai', 'task' => 'collect_listing'],
+            ['id' => 'main_menu', 'type' => 'buttons', 'text' => 'Что вас интересует?', 'options' => [
+                ['id' => 'kind_rental', 'title' => 'Аренда'],
+            ]],
+            ['id' => 'menu_rental', 'type' => 'buttons', 'text' => 'Аренда. Сдаёте или ищете?', 'options' => [
+                ['id' => 'my', 'title' => 'Мои объявления'],
+            ]],
+            ['id' => 'my_listings', 'type' => 'my_listings', 'text' => 'Откройте кабинет.'],
+        ],
+        'edges' => [
+            ['from' => 'start', 'output' => 'continue', 'to' => 'greeting'],
+            ['from' => 'start', 'output' => 'returning', 'to' => 'collect'],
+            ['from' => 'greeting', 'output' => 'continue', 'to' => 'collect'],
+            ['from' => 'collect', 'output' => 'menu', 'to' => 'main_menu'],
+            ['from' => 'main_menu', 'output' => 'option:kind_rental', 'to' => 'menu_rental'],
+            ['from' => 'menu_rental', 'output' => 'option:my', 'to' => 'my_listings'],
+        ],
+    ];
+}
+
+test('a scenario button pressed after the dialog ended skips the questionnaire «Старт» leads to and goes straight into its branch', function (bool $silentForADay) {
+    // Анкета, в которую ведёт «Старт», — такой же первый шаг, как меню:
+    // нажатие уже ответило, куда идти, и начинать её незачем.
+    $scenario = BotScenario::factory()->published(botEntryQuestionnaireDefinition())->create();
+    $contact = Contact::factory()->create();
+    $session = $silentForADay
+        ? botSessionWaitingAt($scenario, $contact, 'main_menu')
+        : BotSession::factory()->create([
+            'contact_id' => $contact->id,
+            'bot_scenario_id' => $scenario->id,
+            'scenario_version' => $scenario->published_version,
+            'current_node_id' => null,
+        ]);
+    $session->update(['last_dialog_ended_at' => now()->subHours(30)]);
+
+    if ($silentForADay) {
+        $session->forceFill(['updated_at' => now()->subHours(30)])->saveQuietly();
+    }
+
+    test()->mock(AiAssistant::class)->shouldNotReceive('start', 'resume');
+
+    $messenger = fakeBotMessenger();
+    $messenger->shouldNotReceive('sendText');
+    $messenger->shouldReceive('sendButtons')->once()
+        ->withArgs(fn (Contact $to, string $text) => $text === 'Аренда. Сдаёте или ищете?');
+
+    app(BotEngine::class)->handle($contact, new InboundMessage(text: 'Аренда', replyId: 'kind_rental'));
+
+    expect($session->fresh())
+        ->current_node_id->toBe('menu_rental')
+        ->state->toBeNull();
+})->with([
+    'ветка завершилась' => [false],
+    'сутки тишины' => [true],
+]);
+
+test('a scenario button pressed after the dialog ended goes into its branch even when the walk from «Старт» waits nowhere', function () {
+    // От «Старта» — только текст, и диалог кончается, ничего не спросив.
+    // Текст положен любому новому диалогу и уходит; дальше — ветка кнопки.
     $scenario = BotScenario::factory()->published([
         'nodes' => [
             ['id' => 'start', 'type' => 'start'],
-            ['id' => 'collect', 'type' => 'ai', 'task' => 'collect_listing'],
+            ['id' => 'notice', 'type' => 'text', 'text' => 'Бот на обновлении.'],
             ['id' => 'main_menu', 'type' => 'buttons', 'text' => 'Что вас интересует?', 'options' => [
                 ['id' => 'kind_rental', 'title' => 'Аренда'],
             ]],
             ['id' => 'rental_text', 'type' => 'text', 'text' => 'Раздел аренды'],
         ],
         'edges' => [
-            ['from' => 'start', 'output' => 'continue', 'to' => 'collect'],
-            ['from' => 'collect', 'output' => 'menu', 'to' => 'main_menu'],
+            ['from' => 'start', 'output' => 'continue', 'to' => 'notice'],
             ['from' => 'main_menu', 'output' => 'option:kind_rental', 'to' => 'rental_text'],
         ],
     ])->create();
     $contact = Contact::factory()->create();
-    BotSession::factory()->create([
+    $session = BotSession::factory()->create([
         'contact_id' => $contact->id,
         'bot_scenario_id' => $scenario->id,
         'scenario_version' => $scenario->published_version,
@@ -948,14 +1013,17 @@ test('a scenario button pressed after the dialog ended while «Старт» lead
         'last_dialog_ended_at' => now()->subHour(),
     ]);
 
-    test()->mock(AiAssistant::class)->shouldReceive('start')->once()
-        ->withArgs(fn (BotSession $session, array $node, ?InboundMessage $carried) => $node['id'] === 'collect' && $carried === null)
-        ->andReturn(AiOutcome::InProgress);
-    fakeBotMessenger()->shouldNotReceive('sendText', 'sendButtons');
+    $sent = [];
+    $messenger = fakeBotMessenger();
+    $messenger->shouldReceive('sendText')->andReturnUsing(function (Contact $to, string $text) use (&$sent): void {
+        $sent[] = $text;
+    });
+    $messenger->shouldNotReceive('sendButtons');
 
     app(BotEngine::class)->handle($contact, new InboundMessage(text: 'Аренда', replyId: 'kind_rental'));
 
-    expect(BotSession::sole()->current_node_id)->toBe('collect');
+    expect($sent)->toBe(['Бот на обновлении.', 'Раздел аренды'])
+        ->and($session->fresh()->current_node_id)->toBeNull();
 });
 
 test('a button of a scenario run pressed after the dialog ended goes to its run and starts no dialog', function () {

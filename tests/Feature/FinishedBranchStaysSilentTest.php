@@ -861,3 +861,91 @@ describe('прерванная анкета', function () {
         'после суток тишины' => [true],
     ]);
 });
+
+describe('«Старт» ведёт в анкету, а меню открывается из неё', function () {
+    /**
+     * Схема, которую публикация пропускает: от «Старта» — приветствие и
+     * сразу анкета аренды, а разделы открывает её выход «В меню». Меню, на
+     * котором можно встать молча, на пути от «Старта» нет вовсе.
+     */
+    function entryQuestionnaireDialog(): BotScenario
+    {
+        return BotScenario::factory()->published([
+            'nodes' => [
+                ['id' => 'start', 'type' => 'start'],
+                ['id' => 'greeting', 'type' => 'text', 'text' => 'Здравствуйте! Это сервис спецтехники.'],
+                ['id' => 'collect_rental', 'type' => 'ai', 'task' => 'collect_listing', 'kind' => 'rental'],
+                ['id' => 'main_menu', 'type' => 'buttons', 'text' => MAIN_MENU_TEXT, 'options' => [
+                    ['id' => 'kind_rental', 'title' => 'Аренда спецтехники'],
+                ]],
+                ['id' => 'menu_rental', 'type' => 'buttons', 'text' => 'Аренда спецтехники. Вы предлагаете технику или ищете?', 'options' => [
+                    ['id' => 'rent_out', 'title' => 'Я сдаю спецтехнику'],
+                    ['id' => 'rent_seek', 'title' => 'Я ищу спецтехнику'],
+                    ['id' => 'my', 'title' => 'Мои объявления'],
+                ]],
+                ['id' => 'search_rental', 'type' => 'ai', 'task' => 'customer_search', 'kind' => 'rental'],
+                ['id' => 'my_listings', 'type' => 'my_listings', 'text' => 'Ваши объявления — в кабинете.'],
+            ],
+            'edges' => [
+                ['from' => 'start', 'output' => 'continue', 'to' => 'greeting'],
+                ['from' => 'start', 'output' => 'returning', 'to' => 'collect_rental'],
+                ['from' => 'greeting', 'output' => 'continue', 'to' => 'collect_rental'],
+                ['from' => 'collect_rental', 'output' => 'menu', 'to' => 'main_menu'],
+                ['from' => 'main_menu', 'output' => 'option:kind_rental', 'to' => 'menu_rental'],
+                ['from' => 'menu_rental', 'output' => 'option:rent_out', 'to' => 'collect_rental'],
+                ['from' => 'menu_rental', 'output' => 'option:rent_seek', 'to' => 'search_rental'],
+                ['from' => 'menu_rental', 'output' => 'option:my', 'to' => 'my_listings'],
+                ['from' => 'search_rental', 'output' => 'menu', 'to' => 'main_menu'],
+            ],
+        ])->create();
+    }
+
+    test('кнопка из более раннего сообщения ведёт в свою ветку, не начиная анкету от «Старта»', function (bool $silentForADay, InboundMessage $press, array $expected, string $node) {
+        $scenario = entryQuestionnaireDialog();
+        $session = branchSessionOnSummary($scenario);
+        $draftId = $session->state['draft_id'];
+        silentNavigator()->shouldNotReceive('route');
+        $sent = recordOutbound();
+
+        // Поставщик вышел из анкеты с прогрессом и дошёл до экрана раздела.
+        pressInDialog($session, new InboundMessage(text: 'В меню', replyId: SupplierListingCollector::BUTTON_MENU));
+        pressInDialog($session, new InboundMessage(text: 'Да, в меню', replyId: SupplierListingCollector::BUTTON_EXIT_CONFIRM));
+        pressInDialog($session, new InboundMessage(text: 'Аренда спецтехники', replyId: 'kind_rental'));
+
+        // Диалог закончился: веткой «Мои объявления» или сутками тишины.
+        if ($silentForADay) {
+            $this->travel(25)->hours();
+        } else {
+            pressInDialog($session, new InboundMessage(text: 'Мои объявления', replyId: 'my'));
+            expect($session->fresh()->current_node_id)->toBeNull();
+        }
+
+        $before = count($sent);
+
+        pressInDialog($session, $press);
+
+        // Ровно ветка нажатой кнопки: ни приветствия знакомому контакту,
+        // ни приглашения анкеты, к которой ведёт «Старт».
+        expect(array_slice(outboundTo($sent, $session->contact_id), $before))->toBe($expected)
+            ->and($session->fresh())
+            ->current_node_id->toBe($node)
+            // Прерванная анкета осталась — как после нажатия на показанном меню.
+            ->and($session->fresh()->paused_state['node_id'])->toBe('collect_rental')
+            ->and($session->fresh()->paused_state['state']['draft_id'])->toBe($draftId)
+            ->and(Listing::count())->toBe(1);
+    })->with([
+        'ветка завершилась' => [false],
+        'сутки тишины' => [true],
+    ])->with([
+        'кнопка главного меню' => [
+            new InboundMessage(text: 'Аренда спецтехники', replyId: 'kind_rental'),
+            [['buttons', 'Аренда спецтехники. Вы предлагаете технику или ищете?']],
+            'menu_rental',
+        ],
+        'кнопка поиска с экрана раздела' => [
+            new InboundMessage(text: 'Я ищу спецтехнику', replyId: 'rent_seek'),
+            [['buttons', 'Расскажите, что нужно и в каком городе — можно голосом. Например: «нужен кран 25 тонн, Шымкент».']],
+            'search_rental',
+        ],
+    ]);
+});

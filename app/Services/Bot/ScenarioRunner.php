@@ -33,11 +33,15 @@ use Throwable;
  * Runs never touch the contact's main dialog session, so a supplier can
  * simultaneously await answers about several requests and listings.
  *
- * A run answers for its own messages: when it advances inside a bot reply
- * (the button reply of a run), the text the reply holds back is sent
- * before the run starts and after it stops, so a failed send marks the
- * run that made it — not a run that merely happened to send next. Inside
- * the run a text block followed by buttons still goes out as one message.
+ * A launch and a timeout are notifications by an event, not an answer to
+ * anybody: they send straight away even when they happen in the middle of
+ * a bot reply (a customer's pick launching «Новая заявка» for the
+ * supplier). A button reply of the run is an answer to the person who
+ * pressed it — there a text block followed by buttons goes out as one
+ * message — and the run answers for its own messages: the text held
+ * before it is sent first, and whatever it holds is sent before the run
+ * is left, on success and on failure alike, so a failed send marks the
+ * run that made it.
  */
 class ScenarioRunner
 {
@@ -66,38 +70,24 @@ class ScenarioRunner
             return null;
         }
 
-        $this->reply->flush();
+        return $this->reply->outside(function () use ($scenario, $contact, $subject, $definition): ?ScenarioRun {
+            $run = new ScenarioRun([
+                'token' => ScenarioRun::generateToken(),
+                'bot_scenario_id' => $scenario->id,
+                'scenario_version' => $scenario->published_version,
+                'contact_id' => $contact->id,
+                'status' => ScenarioRunStatus::Active,
+            ]);
 
-        $run = new ScenarioRun([
-            'token' => ScenarioRun::generateToken(),
-            'bot_scenario_id' => $scenario->id,
-            'scenario_version' => $scenario->published_version,
-            'contact_id' => $contact->id,
-            'status' => ScenarioRunStatus::Active,
-        ]);
+            if ($subject !== null) {
+                $run->subject()->associate($subject);
+            }
 
-        if ($subject !== null) {
-            $run->subject()->associate($subject);
-        }
+            $run->save();
+            $run->setRelation('contact', $contact);
 
-        $run->save();
-        $run->setRelation('contact', $contact);
-
-        try {
-            $this->advance($run, $definition, $definition->startNodeId());
-            $this->reply->flush();
-        } catch (OutboundRequestBlocked $e) {
-            // The channel is barred on this machine, so nothing was
-            // attempted: recording a terminal failure would put a local
-            // block into the journal of a real supplier's run.
-            throw $e;
-        } catch (Throwable $e) {
-            $this->fail($run, $e);
-
-            return null;
-        }
-
-        return $run;
+            return $this->advanceOwnMessages($run, $definition, $definition->startNodeId()) ? $run : null;
+        });
     }
 
     /**
@@ -123,19 +113,10 @@ class ScenarioRunner
             return;
         }
 
+        // A text the reply held before the run is the dialog's, not the run's.
         $this->reply->flush();
 
-        try {
-            $this->advance($run, $definition, $definition->target($node['id'], ScenarioDefinition::optionOutput($optionId)));
-            $this->reply->flush();
-        } catch (OutboundRequestBlocked $e) {
-            // The channel is barred on this machine, so nothing was
-            // attempted: recording a terminal failure would put a local
-            // block into the journal of a real supplier's run.
-            throw $e;
-        } catch (Throwable $e) {
-            $this->fail($run, $e);
-        }
+        $this->advanceOwnMessages($run, $definition, $definition->target($node['id'], ScenarioDefinition::optionOutput($optionId)));
     }
 
     /**
@@ -161,18 +142,34 @@ class ScenarioRunner
             return;
         }
 
-        $this->reply->flush();
+        $this->reply->outside(fn (): bool => $this->advanceOwnMessages($run, $definition, $target));
+    }
 
+    /**
+     * Advance the run, answering for its own messages: whatever text it
+     * still holds goes out before the run is left — also when advancing
+     * failed, because that text was written before the failure — and a
+     * failed send of it fails this run, never the next sender. A failure
+     * of that last send does not replace the one already being handled.
+     * False when the run failed.
+     */
+    private function advanceOwnMessages(ScenarioRun $run, ScenarioDefinition $definition, ?string $nodeId): bool
+    {
         try {
-            $this->advance($run, $definition, $target);
+            $this->advance($run, $definition, $nodeId);
             $this->reply->flush();
+
+            return true;
         } catch (OutboundRequestBlocked $e) {
             // The channel is barred on this machine, so nothing was
             // attempted: recording a terminal failure would put a local
             // block into the journal of a real supplier's run.
             throw $e;
         } catch (Throwable $e) {
+            $this->reply->flushAfter($e);
             $this->fail($run, $e);
+
+            return false;
         }
     }
 

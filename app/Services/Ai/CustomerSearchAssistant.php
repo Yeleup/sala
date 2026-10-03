@@ -507,6 +507,11 @@ class CustomerSearchAssistant
      * former behaviour, and the restart after a stale row refreshes a
      * выдача that went stale under the customer, not a repeated query.
      *
+     * Every outcome is sent first and recorded after: a reply that did not
+     * go out leaves the search where it stood, so the retry of the same
+     * message answers it again — and a line the bot said just before (the
+     * stale-row notice) can still open the outcome's own message.
+     *
      * @param  array<string, mixed>  $state
      */
     protected function runSearch(BotSession $session, array $state, string $query, ?Location $location = null, bool $countAttempt = true, bool $rerun = false): AiOutcome
@@ -531,13 +536,13 @@ class CustomerSearchAssistant
             }
 
             if ($state['attempts'] >= self::MAX_FRUITLESS_SEARCHES) {
-                $this->persist($session, $state);
                 $this->sendCatalogCta(
                     $session,
                     'Подходящего сейчас не нашлось — так бывает, база пополняется каждый день. Загляните в каталог: вдруг что-то уже появилось.',
                     self::CATALOG_BUTTON_DEAD_END,
                     kind: $this->kind($state),
                 );
+                $this->persist($session, $state);
 
                 return AiOutcome::Completed;
             }

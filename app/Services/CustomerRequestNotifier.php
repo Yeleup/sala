@@ -28,16 +28,22 @@ class CustomerRequestNotifier
         private readonly WhatsappReplyBuffer $reply,
     ) {}
 
+    /**
+     * The notification is not part of the customer's reply even when their
+     * pick in the chat triggers it: it goes out at once, and a text the
+     * reply holds is sent before it — its failure would otherwise read as
+     * «the supplier was not reached» and close the request.
+     */
     public function notifySupplier(CustomerRequest $request): bool
+    {
+        return $this->reply->outside(fn (): bool => $this->notify($request));
+    }
+
+    private function notify(CustomerRequest $request): bool
     {
         $supplier = $request->listing->supplier;
         $acceptId = NotificationReplyHandler::requestAcceptId($request);
         $declineId = NotificationReplyHandler::requestDeclineId($request);
-
-        // A text the customer's reply holds back is not this notification:
-        // sent from inside it, its failure would read as «the supplier was
-        // not reached» and close the request.
-        $this->reply->flush();
 
         try {
             $template = WhatsappTemplate::query()

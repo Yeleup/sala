@@ -425,10 +425,19 @@ class BotEngine
 
                 case BotNodeType::ButtonMenu:
                 case BotNodeType::ListMenu:
-                    if ($node['id'] !== $silentMenuAt) {
-                        $this->sendMenu($contact, $definition, $node);
+                    if ($node['id'] === $silentMenuAt) {
+                        // Parked, not saved yet: the answer to the opening
+                        // message comes next and saves the session with
+                        // it. Saved now, a failed send of the greeting
+                        // would leave the dialog already opened, and the
+                        // retry of the same message would skip the
+                        // greeting.
+                        $this->park($session, $node['id'], $definition->nodeFingerprint($node));
+
+                        return true;
                     }
 
+                    $this->sendMenu($contact, $definition, $node);
                     $this->waitAt($session, $node['id'], $definition->nodeFingerprint($node));
 
                     return true;
@@ -553,6 +562,13 @@ class BotEngine
         }
 
         $this->beginDialog($session, $scenario);
+
+        // A first-time contact gets the session row before anything is
+        // said — still on no step, so a retry opens the dialog all over
+        // again — and the navigator's audit can name it.
+        if (! $session->exists) {
+            $session->save();
+        }
 
         // Everything before the menu — the greeting, any other text blocks
         // the operator put there — goes out now; the menu itself waits.
@@ -1253,6 +1269,12 @@ class BotEngine
      */
     private function waitAt(BotSession $session, string $nodeId, string $fingerprint): void
     {
+        $this->park($session, $nodeId, $fingerprint);
+        $session->save();
+    }
+
+    private function park(BotSession $session, string $nodeId, string $fingerprint): void
+    {
         // Parking somewhere else is progress: whatever the contact could
         // not get past, they are past it now.
         if ($session->menuStreak($nodeId) === null) {
@@ -1262,7 +1284,6 @@ class BotEngine
         $session->current_node_id = $nodeId;
         $session->current_node_fingerprint = $fingerprint;
         $session->last_dialog_ended_at = now();
-        $session->save();
     }
 
     private function endDialog(BotSession $session): void

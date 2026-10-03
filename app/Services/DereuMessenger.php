@@ -32,12 +32,13 @@ use Throwable;
  * session messages by the service rate once the month's free tier is
  * used up (see WhatsappCostEstimator).
  *
- * Inside a bot reply (WhatsappReplyBuffer::collect) a plain text and the
- * interactive message right after it go out as one message: the text is
- * held back and opens the body of the interactive one when the joined
- * body fits its WhatsApp limit. A text or an interactive message that
- * carries a paid template plan B is never joined — the re-send through
- * the template would carry only its own wording.
+ * Inside a bot reply (WhatsappReplyBuffer::collect) a plain text to the
+ * person being answered and the interactive message right after it go out
+ * as one message: the text is held back and opens the body of the
+ * interactive one when the joined body fits its WhatsApp limit. A text or
+ * an interactive message that carries a paid template plan B is never
+ * joined — the re-send through the template would carry only its own
+ * wording.
  */
 class DereuMessenger
 {
@@ -63,7 +64,7 @@ class DereuMessenger
 
     public function sendText(Contact $contact, string $text, ?TemplateFallback $fallback = null): void
     {
-        if ($fallback !== null || ! $this->reply->isCollecting()) {
+        if ($fallback !== null || ! $this->reply->isCollectingFor($contact)) {
             $this->send($contact, 'text', ['body' => $text], fallback: $fallback);
 
             return;
@@ -74,7 +75,7 @@ class DereuMessenger
         // reaching Dereu (closed window, number not connected) still come
         // from here, exactly when the caller expects them.
         $this->connectedCompany($contact, 'text');
-        $this->reply->flush();
+        $this->reply->flushFor($contact);
         $this->reply->hold($contact, $text, fn () => $this->send($contact, 'text', ['body' => $text]));
     }
 
@@ -236,8 +237,18 @@ class DereuMessenger
 
         // The held text travels inside this message: one bubble for the
         // person, one row in the journal, one session message on the bill.
-        $this->reply->forget();
-        $this->deliver($company, $contact, 'interactive', $payload($joined));
+        $held = $this->reply->take();
+
+        try {
+            $this->deliver($company, $contact, 'interactive', $payload($joined));
+        } catch (Throwable $e) {
+            // Nothing reached the person, so the text is still owed: it goes
+            // out on its own or inside the next message — even when the
+            // caller swallows the failure of this one (a best-effort link).
+            $this->reply->putBack($held);
+
+            throw $e;
+        }
     }
 
     /**
@@ -265,9 +276,9 @@ class DereuMessenger
     {
         $company = $this->connectedCompany($contact, $type);
 
-        // A text the reply held back was written before this message, so
-        // it goes out first, on its own.
-        $this->reply->flush();
+        // A text held back for this person was written before this
+        // message, so it goes out first, on its own.
+        $this->reply->flushFor($contact);
 
         $this->deliver($company, $contact, $type, $payload, $template, $fallback);
     }

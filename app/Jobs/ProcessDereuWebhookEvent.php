@@ -131,6 +131,7 @@ class ProcessDereuWebhookEvent implements ShouldQueue
             // text followed by buttons reaches the person as one message
             // (scoped state, like the audit above).
             app(WhatsappReplyBuffer::class)->collect(
+                $contact,
                 fn () => $engine->handle($contact, InboundMessage::fromWebhookEvent($event)),
             );
         } catch (OutboundRequestBlocked $e) {

@@ -11,6 +11,7 @@ use App\Services\Bot\MenuRouter;
 use App\Services\DereuConnect;
 use App\Services\WhatsappReplyBuffer;
 use App\Support\DereuOutboundGuard;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\ServiceProvider;
@@ -53,5 +54,9 @@ class AppServiceProvider extends ServiceProvider
         // DereuOutboundGuard. Registered unconditionally: the guard itself
         // decides, so there is one place holding the rule.
         Http::globalRequestMiddleware(new DereuOutboundGuard);
+
+        // A text the bot has written goes out before anything it persists
+        // after it — see WhatsappReplyBuffer::beforeQuery().
+        DB::beforeExecuting(fn (string $query) => app(WhatsappReplyBuffer::class)->beforeQuery($query));
     }
 }

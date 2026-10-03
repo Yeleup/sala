@@ -1026,6 +1026,57 @@ test('a scenario button pressed after the dialog ended goes into its branch even
         ->and($session->fresh()->current_node_id)->toBeNull();
 });
 
+test('a scenario button pressed after the dialog ended is not walked on once the walk from «Старт» hit the step cap', function () {
+    // «Повторное обращение» уводит в цикл текстов. Потолок шагов за одно
+    // входящее завершает диалог — и нажатие поверх него уже не исполняется,
+    // иначе ветка кнопки начала бы новый счёт шагов тем же ходом.
+    $scenario = BotScenario::factory()->published([
+        'nodes' => [
+            ['id' => 'start', 'type' => 'start'],
+            ['id' => 'main_menu', 'type' => 'buttons', 'text' => 'Что вас интересует?', 'options' => [
+                ['id' => 'kind_rental', 'title' => 'Аренда'],
+            ]],
+            ['id' => 'menu_rental', 'type' => 'buttons', 'text' => 'Аренда. Сдаёте или ищете?', 'options' => [
+                ['id' => 'rent_out', 'title' => 'Я сдаю'],
+            ]],
+            ['id' => 'loop_a', 'type' => 'text', 'text' => 'Цикл А'],
+            ['id' => 'loop_b', 'type' => 'text', 'text' => 'Цикл Б'],
+            ['id' => 'rent_text', 'type' => 'text', 'text' => 'Сдаёте'],
+        ],
+        'edges' => [
+            ['from' => 'start', 'output' => 'continue', 'to' => 'main_menu'],
+            ['from' => 'start', 'output' => 'returning', 'to' => 'loop_a'],
+            ['from' => 'loop_a', 'output' => 'continue', 'to' => 'loop_b'],
+            ['from' => 'loop_b', 'output' => 'continue', 'to' => 'loop_a'],
+            ['from' => 'main_menu', 'output' => 'option:kind_rental', 'to' => 'menu_rental'],
+            ['from' => 'menu_rental', 'output' => 'option:rent_out', 'to' => 'rent_text'],
+        ],
+    ])->create();
+    $contact = Contact::factory()->create();
+    $session = BotSession::factory()->create([
+        'contact_id' => $contact->id,
+        'bot_scenario_id' => $scenario->id,
+        'scenario_version' => $scenario->published_version,
+        'current_node_id' => null,
+        'last_dialog_ended_at' => now()->subHour(),
+    ]);
+
+    $sent = [];
+    $messenger = fakeBotMessenger();
+    $messenger->shouldReceive('sendText')->andReturnUsing(function (Contact $to, string $text) use (&$sent): void {
+        $sent[] = $text;
+    });
+    $messenger->shouldNotReceive('sendButtons');
+
+    app(BotEngine::class)->handle($contact, new InboundMessage(text: 'Аренда', replyId: 'kind_rental'));
+
+    // Двадцать шагов — «Старт» и девятнадцать текстов цикла, ни одного
+    // сообщения ветки кнопки.
+    expect($sent)->toHaveCount(19)
+        ->each->toBeIn(['Цикл А', 'Цикл Б'])
+        ->and($session->fresh()->current_node_id)->toBeNull();
+});
+
 test('a button of a scenario run pressed after the dialog ended goes to its run and starts no dialog', function () {
     $scenario = BotScenario::factory()->published(botBranchDefinition())->create();
     $contact = Contact::factory()->create();

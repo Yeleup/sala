@@ -373,9 +373,13 @@ class BotEngine
      * spent on that block: a second AI block further along the walk did
      * not receive it and still needs to say what it wants.
      *
+     * Returns false when the step cap cut the walk off and parked the
+     * dialog: nothing more is walked this turn, or the cap would only
+     * start counting again.
+     *
      * @param  array<string, mixed>|null  $node
      */
-    private function advance(BotSession $session, Contact $contact, ScenarioDefinition $definition, ?string $nodeId, ?string $silentMenuAt = null, ?InboundMessage $carried = null, bool $holdAtWait = false): void
+    private function advance(BotSession $session, Contact $contact, ScenarioDefinition $definition, ?string $nodeId, ?string $silentMenuAt = null, ?InboundMessage $carried = null, bool $holdAtWait = false): bool
     {
         for ($steps = 0; $steps < self::MAX_STEPS; $steps++) {
             $node = $definition->node($nodeId);
@@ -384,11 +388,11 @@ class BotEngine
             if ($node === null || $type === null) {
                 $this->endDialog($session);
 
-                return;
+                return true;
             }
 
             if ($holdAtWait && $type->waitsForInput()) {
-                return;
+                return true;
             }
 
             switch ($type) {
@@ -425,7 +429,7 @@ class BotEngine
 
                     $this->waitAt($session, $node['id'], $definition->nodeFingerprint($node));
 
-                    return;
+                    return true;
 
                 case BotNodeType::AiInput:
                     $this->waitAt($session, $node['id'], $definition->nodeFingerprint($node));
@@ -436,7 +440,7 @@ class BotEngine
                     $outcome = $this->aiAssistant->start($session, $node, $entering);
 
                     if ($outcome === AiOutcome::InProgress) {
-                        return;
+                        return true;
                     }
 
                     $nodeId = $this->nodeAfterAi($definition, $node, $outcome);
@@ -448,12 +452,14 @@ class BotEngine
                     // into the main dialog — validation forbids them.
                     $this->endDialog($session);
 
-                    return;
+                    return true;
             }
         }
 
         // Step cap reached — a cycle of auto-advancing blocks; park the dialog.
         $this->endDialog($session);
+
+        return false;
     }
 
     /**
@@ -529,8 +535,9 @@ class BotEngine
 
             // The greeting and any other blocks before the first step go
             // out by «Старт»'s own rule; that step itself is skipped.
-            $this->advance($session, $contact, $definition, $definition->startNodeId(), holdAtWait: true);
-            $this->routeToOption($session, $contact, $definition, $pressed);
+            if ($this->advance($session, $contact, $definition, $definition->startNodeId(), holdAtWait: true)) {
+                $this->routeToOption($session, $contact, $definition, $pressed);
+            }
 
             return;
         }

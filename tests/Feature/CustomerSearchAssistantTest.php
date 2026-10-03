@@ -15,6 +15,7 @@ use App\Models\CustomerRequest;
 use App\Models\Listing;
 use App\Models\Location;
 use App\Models\WhatsappTemplate;
+use App\Services\Ai\CtaLinkBuilder;
 use App\Services\Ai\CustomerSearchAssistant;
 use App\Services\Ai\ScenarioAiAssistant;
 use App\Services\Bot\InboundMessage;
@@ -23,6 +24,7 @@ use App\Services\DereuMessenger;
 use App\Services\WhatsappTemplateLibrary;
 use App\Support\WhatsappText;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Log;
 use Laravel\Ai\Embeddings;
 use Laravel\Ai\Prompts\TranscriptionPrompt;
 use Laravel\Ai\Transcription;
@@ -58,39 +60,74 @@ function fakeSearchMessenger(): MockInterface
 }
 
 /**
- * Каждая выдача и каждый нетерминальный тупик сопровождаются CTA-кнопкой
- * в веб-каталог — персональной подписанной ссылкой на страницу каталога
- * контакта; открытые вопросы (уточнения, списки мест, «Поискать шире?»)
- * кнопкой не сопровождаются — это гарантируют строгие моки без этого
- * ожидания. Текст CTA пиннуется байт-в-байт (по умолчанию — CTA выдачи);
- * `$text` переопределяется для тупиковых сценариев (DEAD_END_CTA_TEXT).
+ * Вторая половина текста выдачи — то, что раньше было отдельным сообщением
+ * с кнопкой каталога: где смотреть варианты, что запрос уже подставлен и
+ * что выбор там же отправляет заявку.
  */
-function expectCatalogCta(MockInterface $messenger, ?string $urlContains = null, string $text = 'Весь каталог с поиском и фильтрами по месту и категории — по кнопке ниже, ваш запрос уже подставлен.'): void
+const SEARCH_RESULTS_CTA_TAIL = ' Смотрите их в каталоге по кнопке ниже — запрос уже подставлен, там же поиск и фильтры. Выберите подходящий — заявка сразу уйдёт поставщику.';
+
+/**
+ * Вторая половина текста тупика: каталог целиком, без обещания
+ * подставленного запроса — именно он только что дал пусто.
+ */
+const SEARCH_DEAD_END_CTA_TAIL = ' Или загляните в каталог по кнопке ниже — там все объявления, база пополняется каждый день.';
+
+/**
+ * Исход поиска — выдача, тупик, «посмотрите шире» — приходит ОДНИМ
+ * сообщением: текст исхода с URL-кнопкой в веб-каталог (персональная
+ * подписанная ссылка на страницу каталога контакта). Кнопки «В меню» при
+ * нём нет — WhatsApp не совмещает reply-кнопки и URL-кнопку, — и отдельного
+ * сообщения с ней тоже нет: строгий мок падает на любом sendButtons,
+ * которого тест не ждёт. Открытые вопросы (уточнения, списки мест) кнопкой
+ * каталога не сопровождаются — это гарантируют те же строгие моки.
+ */
+function expectSearchOutcome(MockInterface $messenger, string $text, string $button, ?string $urlContains = null): void
 {
     $messenger->shouldReceive('sendCtaUrl')->once()->withArgs(
-        fn (Contact $contact, string $sentText, string $button, string $url): bool => $sentText === $text
+        fn (Contact $contact, string $sentText, string $sentButton, string $url): bool => $sentText === $text
+            && $sentButton === $button
             && str_contains($url, "/customer/{$contact->id}/listings")
             && str_contains($url, 'signature=')
-            && mb_strlen($button) <= 20
             && ($urlContains === null || str_contains(urldecode($url), $urlContains)),
     );
 }
 
 /**
- * Выдача не приходит списком в чат: заказчику уходит сообщение-заголовок
- * с кнопкой «В меню» (reply-кнопки и URL-кнопка не совмещаются в одном
- * сообщении WhatsApp), следом — CTA «Все варианты» в веб-каталог, где и
- * происходит выбор объявления. Без `$exactText` пиннуется только зачин
- * заголовка.
+ * Выдача не приходит списком в чат: заказчику уходит одно сообщение —
+ * заголовок выдачи с URL-кнопкой «Все варианты» в веб-каталог, где и
+ * происходит выбор объявления. Без `$header` пиннуются только зачин
+ * заголовка и хвост про каталог.
  */
-function expectResultsHeader(MockInterface $messenger, ?string $exactText = null): void
+function expectResultsCta(MockInterface $messenger, ?string $header = null, ?string $urlContains = null): void
 {
-    $messenger->shouldReceive('sendButtons')->once()->withArgs(
-        fn (Contact $contact, string $text, array $buttons): bool => ($exactText === null
-            ? str_starts_with($text, 'Нашлись варианты по запросу')
-            : $text === $exactText)
-            && $buttons[0]['id'] === CustomerSearchAssistant::BUTTON_MENU
-            && $buttons[0]['title'] === CustomerSearchAssistant::BUTTON_MENU_TITLE,
+    if ($header !== null) {
+        expectSearchOutcome($messenger, $header.SEARCH_RESULTS_CTA_TAIL, CustomerSearchAssistant::CATALOG_BUTTON_RESULTS, $urlContains);
+
+        return;
+    }
+
+    $messenger->shouldReceive('sendCtaUrl')->once()->withArgs(
+        fn (Contact $contact, string $text, string $button, string $url): bool => str_starts_with($text, 'Нашлись варианты по запросу')
+            && str_ends_with($text, SEARCH_RESULTS_CTA_TAIL)
+            && $button === CustomerSearchAssistant::CATALOG_BUTTON_RESULTS
+            && str_contains($url, "/customer/{$contact->id}/listings")
+            && str_contains($url, 'signature=')
+            && ($urlContains === null || str_contains(urldecode($url), $urlContains)),
+    );
+}
+
+/**
+ * Тупик поиска — одно сообщение: просьба переформулировать и URL-кнопка
+ * «Открыть каталог» без подставленного запроса.
+ */
+function expectDeadEndCta(MockInterface $messenger, string $lead): void
+{
+    $messenger->shouldReceive('sendCtaUrl')->once()->withArgs(
+        fn (Contact $contact, string $text, string $button, string $url): bool => $text === $lead.SEARCH_DEAD_END_CTA_TAIL
+            && $button === CustomerSearchAssistant::CATALOG_BUTTON_DEAD_END
+            && str_contains($url, "/customer/{$contact->id}/listings")
+            && str_contains($url, 'signature=')
+            && ! str_contains($url, '&q='),
     );
 }
 
@@ -145,17 +182,27 @@ test('a complete query hands the ranked results off to the web catalog', functio
     ]);
 
     $messenger = fakeSearchMessenger();
-    expectResultsHeader($messenger, 'Нашлись варианты по запросу «кран 25 тонн» в г.Шымкент. Выбирайте в каталоге — заявка сразу уйдёт поставщику.');
-    expectCatalogCta($messenger, 'кран 25 тонн');
+    // Одно сообщение вместо пары «заголовок с «В меню» + кнопка каталога»:
+    // с 01.10.2026 сессионные сообщения сверх бесплатной квоты платные.
+    $messenger->shouldReceive('sendCtaUrl')->once()->withArgs(
+        fn (Contact $contact, string $text, string $button, string $url): bool => $text === 'Нашлись варианты по запросу «кран 25 тонн» в г.Шымкент. Смотрите их в каталоге по кнопке ниже — запрос уже подставлен, там же поиск и фильтры. Выберите подходящий — заявка сразу уйдёт поставщику.'
+            && $button === 'Все варианты'
+            && str_contains($url, "/customer/{$contact->id}/listings")
+            && str_contains(urldecode($url), 'q=кран 25 тонн')
+            && str_contains($url, "location_id={$shymkent->id}")
+            && str_contains($url, 'kind=rental'),
+    );
+    $messenger->shouldNotReceive('sendButtons', 'sendText', 'sendList');
 
     $session = searchSession();
     $outcome = app(CustomerSearchAssistant::class)
         ->resume($session, customerAiNode(), new InboundMessage(text: 'нужен кран 25 тонн, Шымкент'));
 
     // Список в чат не отправляется: выбор объявления происходит в
-    // каталоге, а диалог ждёт уточнение запроса или «В меню».
+    // каталоге, а диалог ждёт уточнение запроса или просьбу о меню.
     expect($outcome)->toBe(AiOutcome::InProgress)
         ->and($session->refresh()->state['phase'])->toBe('searching')
+        ->and($session->state['query'])->toBe('кран 25 тонн, Шымкент')
         ->and($session->state['offered'])->toBe([]);
 });
 
@@ -168,11 +215,36 @@ test('the results header falls back to the raw query as the subject when it was 
     $messenger = fakeSearchMessenger();
     // Место не встречается в справочнике внутри самого запроса — заголовок
     // остаётся без «в …», предмет — вся сырая фраза.
-    expectResultsHeader($messenger, 'Нашлись варианты по запросу «нужен кран». Выбирайте в каталоге — заявка сразу уйдёт поставщику.');
-    expectCatalogCta($messenger);
+    expectResultsCta($messenger, 'Нашлись варианты по запросу «нужен кран».');
 
     $outcome = app(CustomerSearchAssistant::class)
         ->resume(searchSession(), customerAiNode(), new InboundMessage(text: 'нужен кран'));
+
+    expect($outcome)->toBe(AiOutcome::InProgress);
+});
+
+test('a very long query is clamped inside the header so the catalog sentence survives the body limit', function () {
+    // Сбой разбора: предметом становится весь сырой текст — сколько бы
+    // заказчик ни написал. Обрезается цитата запроса, а не конец
+    // сообщения: иначе WhatsApp-лимит тела (1024) срезал бы именно
+    // предложение про кнопку каталога.
+    SearchQueryExtractionAgent::fake([fn () => throw new RuntimeException('AI недоступен')]);
+    Listing::factory()->published()->create([
+        'category_id' => categoryNamed('Автокран')->id, 'description' => 'Кран 25 тонн', 'location_id' => locationNamed('г.Астана')->id, 'price' => '15000 тг/ч',
+    ]);
+    $query = 'нужен кран '.str_repeat('очень срочно ', 120);
+
+    $messenger = fakeSearchMessenger();
+    $messenger->shouldReceive('sendCtaUrl')->once()->withArgs(
+        fn (Contact $contact, string $text, string $button, string $url): bool => mb_strlen($text) <= 1024
+            && str_starts_with($text, 'Нашлись варианты по запросу «нужен кран очень срочно')
+            && str_contains($text, '…».')
+            && str_ends_with($text, SEARCH_RESULTS_CTA_TAIL)
+            && $button === CustomerSearchAssistant::CATALOG_BUTTON_RESULTS,
+    );
+
+    $outcome = app(CustomerSearchAssistant::class)
+        ->resume(searchSession(), customerAiNode(), new InboundMessage(text: $query));
 
     expect($outcome)->toBe(AiOutcome::InProgress);
 });
@@ -210,8 +282,7 @@ test('the query words match the listing title alone', function () {
     $messenger = fakeSearchMessenger();
     // Совпадение только по названию: без него выдача была бы пуста и
     // пришёл бы тупик — заголовок выдачи доказывает матч.
-    expectResultsHeader($messenger);
-    expectCatalogCta($messenger);
+    expectResultsCta($messenger);
 
     $outcome = app(CustomerSearchAssistant::class)
         ->resume(searchSession(), customerAiNode(), new InboundMessage(text: 'нужен манипулятор'));
@@ -233,8 +304,7 @@ test('a voice message is transcribed and used as the search query', function () 
         ->andReturn(['contents' => 'OGG-BYTES', 'mime_type' => 'audio/ogg']);
 
     $messenger = fakeSearchMessenger();
-    expectResultsHeader($messenger);
-    expectCatalogCta($messenger);
+    expectResultsCta($messenger);
 
     $session = searchSession();
     $outcome = app(ScenarioAiAssistant::class)
@@ -290,22 +360,27 @@ test('a silent voice message asks to type the query', function () {
     expect($outcome)->toBe(AiOutcome::InProgress);
 });
 
-test('a fruitless search asks to rephrase with a way back to the menu', function () {
+test('a fruitless search asks to rephrase in one message with the catalog button', function () {
     SearchQueryExtractionAgent::fake([fullSearchIntake(['subject' => 'вертолёт', 'location' => null, 'location_any' => true])]);
     $messenger = fakeSearchMessenger();
-    $messenger->shouldReceive('sendButtons')->once()->withArgs(
-        fn (Contact $contact, string $text, array $buttons): bool => str_contains($text, 'Пока по такому запросу пусто')
-            && $buttons[0]['id'] === CustomerSearchAssistant::BUTTON_MENU
-            && $buttons[0]['title'] === CustomerSearchAssistant::BUTTON_MENU_TITLE,
+    // Без подстановки запроса: именно он только что дал пусто. Кнопки
+    // «В меню» нет — выход в меню словами, а новый текст уточняет поиск.
+    $messenger->shouldReceive('sendCtaUrl')->once()->withArgs(
+        fn (Contact $contact, string $text, string $button, string $url): bool => $text === 'Пока по такому запросу пусто. Попробуйте сказать иначе — вид техники и город, например: «кран 25 тонн, Шымкент». Или загляните в каталог по кнопке ниже — там все объявления, база пополняется каждый день.'
+            && $button === 'Открыть каталог'
+            && str_contains($url, "/customer/{$contact->id}/listings")
+            && ! str_contains($url, '&q=')
+            && str_contains($url, 'kind=rental'),
     );
-    expectCatalogCta($messenger, text: 'Или загляните в каталог — там все объявления, база пополняется каждый день.');
+    $messenger->shouldNotReceive('sendButtons', 'sendText', 'sendList');
 
     $session = searchSession();
     $outcome = app(CustomerSearchAssistant::class)
         ->resume($session, customerAiNode(), new InboundMessage(text: 'вертолёт'));
 
     expect($outcome)->toBe(AiOutcome::InProgress)
-        ->and($session->refresh()->state['attempts'])->toBe(1);
+        ->and($session->refresh()->state['attempts'])->toBe(1)
+        ->and($session->state['phase'])->toBe('searching');
 });
 
 test('pressing «В меню» at a dead-end releases the contact from the search block', function () {
@@ -505,8 +580,7 @@ test('any other text while choosing is treated as a refined search', function ()
     Listing::factory()->published()->create(['category_id' => categoryNamed('Экскаватор')->id, 'description' => 'Гусеничный экскаватор']);
 
     $messenger = fakeSearchMessenger();
-    expectResultsHeader($messenger, 'Нашлись варианты по запросу «экскаватор». Выбирайте в каталоге — заявка сразу уйдёт поставщику.');
-    expectCatalogCta($messenger, 'экскаватор');
+    expectResultsCta($messenger, 'Нашлись варианты по запросу «экскаватор».', 'экскаватор');
 
     $session = searchSession(['phase' => 'choosing', 'query' => 'кран', 'offered' => [$crane->id]]);
     $outcome = app(CustomerSearchAssistant::class)
@@ -532,8 +606,7 @@ test('a city query covers listings in the city districts', function () {
     $messenger = fakeSearchMessenger();
     // Единственное объявление лежит в районе города: непустая выдача
     // доказывает, что запрос по городу накрыл поддерево.
-    expectResultsHeader($messenger, 'Нашлись варианты по запросу «кран» в г.Шымкент. Выбирайте в каталоге — заявка сразу уйдёт поставщику.');
-    expectCatalogCta($messenger, "location_id={$city->id}");
+    expectResultsCta($messenger, 'Нашлись варианты по запросу «кран» в г.Шымкент.', "location_id={$city->id}");
 
     $session = searchSession();
     $outcome = app(CustomerSearchAssistant::class)
@@ -552,11 +625,7 @@ test('a listing outside the requested location subtree is not offered', function
     ]);
 
     $messenger = fakeSearchMessenger();
-    $messenger->shouldReceive('sendButtons')->once()->withArgs(
-        fn (Contact $contact, string $text, array $buttons): bool => str_contains($text, 'Пока по такому запросу пусто')
-            && $buttons[0]['id'] === CustomerSearchAssistant::BUTTON_MENU,
-    );
-    expectCatalogCta($messenger, text: 'Или загляните в каталог — там все объявления, база пополняется каждый день.');
+    expectDeadEndCta($messenger, 'Пока по такому запросу пусто. Попробуйте сказать иначе — вид техники и город, например: «кран 25 тонн, Шымкент».');
 
     $session = searchSession();
     $outcome = app(CustomerSearchAssistant::class)
@@ -573,20 +642,16 @@ test('пустое поддерево места присылает ссылку
     locationNamed('с.Карааул', $district);
 
     $messenger = fakeSearchMessenger();
-    // WhatsApp не смешивает reply-кнопки и URL-кнопку: выход «В меню»
-    // едет отдельным сообщением перед CTA в каталог.
-    $messenger->shouldReceive('sendButtons')->once()->withArgs(
-        fn (Contact $contact, string $text, array $buttons): bool => $text === 'В «с.Карааул» пока пусто. Посмотрите шире: в каталоге уже подставлены ваш запрос и «Абайский район».'
-            && $buttons[0]['id'] === CustomerSearchAssistant::BUTTON_MENU
-            && $buttons[0]['title'] === CustomerSearchAssistant::BUTTON_MENU_TITLE,
-    );
+    // Одно сообщение: WhatsApp не смешивает reply-кнопки и URL-кнопку,
+    // поэтому «В меню» здесь нет — только кнопка каталога.
     $messenger->shouldReceive('sendCtaUrl')->once()->withArgs(
-        fn (Contact $contact, string $text, string $button, string $url): bool => $text === 'Или загляните в каталог — там все объявления, база пополняется каждый день.'
-            && $button === CustomerSearchAssistant::CATALOG_BUTTON_DEAD_END
+        fn (Contact $contact, string $text, string $button, string $url): bool => $text === 'В «с.Карааул» пока пусто, но база пополняется каждый день. Посмотрите шире: в каталоге по кнопке ниже уже подставлены ваш запрос и «Абайский район».'
+            && $button === 'Открыть каталог'
             && str_contains($url, "location_id={$district->id}")
-            && str_contains(urldecode($url), 'кран')
+            && str_contains(urldecode($url), 'q=кран')
             && ! str_contains(urldecode($url), 'Карааул'),
     );
+    $messenger->shouldNotReceive('sendButtons', 'sendText', 'sendList');
 
     $session = searchSession();
     $outcome = app(CustomerSearchAssistant::class)
@@ -611,8 +676,7 @@ test('нажатие старой кнопки «Искать шире» из п
     ]);
 
     $messenger = fakeSearchMessenger();
-    expectResultsHeader($messenger);
-    expectCatalogCta($messenger, "location_id={$district->id}");
+    expectResultsCta($messenger, null, "location_id={$district->id}");
 
     // Сессия, ждущая на кнопке прежней версии (фаза expanding).
     $session = searchSession([
@@ -637,13 +701,11 @@ test('старая кнопка при пустом уровне выше при
     $district = locationNamed('Абайский район', $region);
 
     $messenger = fakeSearchMessenger();
-    $messenger->shouldReceive('sendButtons')->once()->withArgs(
-        fn (Contact $contact, string $text, array $buttons): bool => $text === 'В «Абайский район» пока пусто. Посмотрите шире: в каталоге уже подставлены ваш запрос и «область Абай».'
-            && $buttons[0]['id'] === CustomerSearchAssistant::BUTTON_MENU,
-    );
-    $messenger->shouldReceive('sendCtaUrl')->once()->withArgs(
-        fn (Contact $contact, string $text, string $button, string $url): bool => $text === 'Или загляните в каталог — там все объявления, база пополняется каждый день.'
-            && str_contains($url, "location_id={$region->id}"),
+    expectSearchOutcome(
+        $messenger,
+        'В «Абайский район» пока пусто, но база пополняется каждый день. Посмотрите шире: в каталоге по кнопке ниже уже подставлены ваш запрос и «область Абай».',
+        CustomerSearchAssistant::CATALOG_BUTTON_DEAD_END,
+        "location_id={$region->id}",
     );
 
     $session = searchSession([
@@ -659,15 +721,11 @@ test('старая кнопка при пустом уровне выше при
         ->and($session->refresh()->state['phase'])->toBe('searching');
 });
 
-test('when there is nowhere wider to search the dead-end offers a way back to the menu', function () {
+test('when there is nowhere wider to search the dead-end comes as one message with the catalog button', function () {
     $region = locationNamed('область Абай'); // верхний уровень дерева локаций
 
     $messenger = fakeSearchMessenger();
-    $messenger->shouldReceive('sendButtons')->once()->withArgs(
-        fn (Contact $contact, string $text, array $buttons): bool => str_contains($text, 'шире уже некуда')
-            && $buttons[0]['id'] === CustomerSearchAssistant::BUTTON_MENU,
-    );
-    expectCatalogCta($messenger, text: 'Или загляните в каталог — там все объявления, база пополняется каждый день.');
+    expectDeadEndCta($messenger, 'По всей стране пока пусто — шире уже некуда. Попробуйте сказать иначе, например: «кран 25 тонн, Шымкент».');
 
     $session = searchSession([
         'phase' => 'expanding',
@@ -690,11 +748,7 @@ test('a tap on a listing that expired after the search sends an honest stale-row
     // честное сообщение, потом перезапуск сохранённого запроса.
     $messenger->shouldReceive('sendText')->once()
         ->withArgs(fn (Contact $to, string $text) => $text === 'Этот вариант уже сняли с публикации. Сейчас поищем свежие.');
-    $messenger->shouldReceive('sendButtons')->once()->withArgs(
-        fn (Contact $contact, string $text, array $buttons): bool => str_contains($text, 'Пока по такому запросу пусто')
-            && $buttons[0]['id'] === CustomerSearchAssistant::BUTTON_MENU,
-    );
-    expectCatalogCta($messenger, text: 'Или загляните в каталог — там все объявления, база пополняется каждый день.');
+    expectDeadEndCta($messenger, 'Пока по такому запросу пусто. Попробуйте сказать иначе — вид техники и город, например: «кран 25 тонн, Шымкент».');
 
     $session = searchSession(['phase' => 'choosing', 'query' => 'кран', 'offered' => [$listing->id]]);
     $outcome = app(CustomerSearchAssistant::class)
@@ -759,8 +813,7 @@ test('the answer to the clarifying question completes the intake and hands the r
     ]);
 
     $messenger = fakeSearchMessenger();
-    expectResultsHeader($messenger);
-    expectCatalogCta($messenger);
+    expectResultsCta($messenger);
 
     $session = searchSession(['transcript' => ['нужен кран 25 тонн'], 'clarifications' => 1]);
     $outcome = app(CustomerSearchAssistant::class)
@@ -810,8 +863,7 @@ test('a voice-distorted place name is corrected to the dictionary and filters th
     $messenger = fakeSearchMessenger();
     // Заголовок и префилл каталога называют исправленное место из
     // справочника, а не искажённое «Сарагаш».
-    expectResultsHeader($messenger, 'Нашлись варианты по запросу «погрузчик» в г.Сарыагаш. Выбирайте в каталоге — заявка сразу уйдёт поставщику.');
-    expectCatalogCta($messenger, "location_id={$city->id}");
+    expectResultsCta($messenger, 'Нашлись варианты по запросу «погрузчик» в г.Сарыагаш.', "location_id={$city->id}");
 
     $session = searchSession();
     $outcome = app(CustomerSearchAssistant::class)
@@ -827,13 +879,15 @@ test('the exhausted clarification limit searches without the place and labels th
     ]);
 
     $messenger = fakeSearchMessenger();
-    expectResultsHeader($messenger, 'Место «Сарыагаш» не нашлось в справочнике, поэтому подобрали варианты без учёта места. Выбирайте в каталоге — заявка сразу уйдёт поставщику.');
     // Место так и не разрешилось — CTA приходит без префилла места, слово
     // остаётся в строке поиска ссылки.
     $messenger->shouldReceive('sendCtaUrl')->once()->withArgs(
-        fn (Contact $contact, string $text, string $button, string $url): bool => $button === CustomerSearchAssistant::CATALOG_BUTTON_RESULTS
+        fn (Contact $contact, string $text, string $button, string $url): bool => $text === 'Место «Сарыагаш» не нашлось в справочнике, поэтому подобрали варианты без учёта места. Смотрите их в каталоге по кнопке ниже — запрос уже подставлен, там же поиск и фильтры. Выберите подходящий — заявка сразу уйдёт поставщику.'
+            && $button === 'Все варианты'
+            && str_contains(urldecode($url), 'q=погрузчик, Сарыагаш')
             && ! str_contains($url, 'location_id='),
     );
+    $messenger->shouldNotReceive('sendButtons', 'sendText', 'sendList');
 
     $session = searchSession(['transcript' => ['нужен погрузчик', 'Сарыагаш'], 'clarifications' => 3]);
     $outcome = app(CustomerSearchAssistant::class)
@@ -890,9 +944,8 @@ test('picking a place from the list searches inside the picked subtree', functio
     ]);
 
     $messenger = fakeSearchMessenger();
-    expectResultsHeader($messenger);
     // Каталог открывается с фильтром по выбранному месту.
-    expectCatalogCta($messenger, "location_id={$districtA->id}");
+    expectResultsCta($messenger, null, "location_id={$districtA->id}");
 
     $session = searchSession([
         'phase' => 'locating',
@@ -918,14 +971,11 @@ test('picking a place with an empty subtree sends the wider catalog link', funct
     $districtB = locationNamed('Абайский район', locationNamed('г.Шымкент'));
 
     $messenger = fakeSearchMessenger();
-    $messenger->shouldReceive('sendButtons')->once()->withArgs(
-        fn (Contact $contact, string $text, array $buttons): bool => $text === 'В «Абайский район» пока пусто. Посмотрите шире: в каталоге уже подставлены ваш запрос и «Карагандинская область».'
-            && $buttons[0]['id'] === CustomerSearchAssistant::BUTTON_MENU,
-    );
-    $messenger->shouldReceive('sendCtaUrl')->once()->withArgs(
-        fn (Contact $contact, string $text, string $button, string $url): bool => $text === 'Или загляните в каталог — там все объявления, база пополняется каждый день.'
-            && $button === CustomerSearchAssistant::CATALOG_BUTTON_DEAD_END
-            && str_contains($url, "location_id={$regionA->id}"),
+    expectSearchOutcome(
+        $messenger,
+        'В «Абайский район» пока пусто, но база пополняется каждый день. Посмотрите шире: в каталоге по кнопке ниже уже подставлены ваш запрос и «Карагандинская область».',
+        CustomerSearchAssistant::CATALOG_BUTTON_DEAD_END,
+        "location_id={$regionA->id}",
     );
 
     $session = searchSession([
@@ -979,8 +1029,7 @@ test('typing the exact name of one distinct candidate equals picking it', functi
     ]);
 
     $messenger = fakeSearchMessenger();
-    expectResultsHeader($messenger);
-    expectCatalogCta($messenger, "location_id={$bulan->id}");
+    expectResultsCta($messenger, null, "location_id={$bulan->id}");
 
     $session = searchSession([
         'phase' => 'locating',
@@ -1007,8 +1056,7 @@ test('an ordinal digit picks the N-th place candidate while picking a place', fu
     ]);
 
     $messenger = fakeSearchMessenger();
-    expectResultsHeader($messenger);
-    expectCatalogCta($messenger, "location_id={$districtA->id}");
+    expectResultsCta($messenger, null, "location_id={$districtA->id}");
 
     $session = searchSession([
         'phase' => 'locating',
@@ -1040,8 +1088,7 @@ test('an ordinal at the last displayed row picks it, even with a tenth hidden ca
     ]);
 
     $messenger = fakeSearchMessenger();
-    expectResultsHeader($messenger);
-    expectCatalogCta($messenger, "location_id={$ninth->id}");
+    expectResultsCta($messenger, null, "location_id={$ninth->id}");
 
     $session = searchSession([
         'phase' => 'locating',
@@ -1099,8 +1146,7 @@ test('any other text while picking a place is treated as a refined search', func
     ]);
 
     $messenger = fakeSearchMessenger();
-    expectResultsHeader($messenger);
-    expectCatalogCta($messenger, "location_id={$astana->id}");
+    expectResultsCta($messenger, null, "location_id={$astana->id}");
 
     $session = searchSession([
         'phase' => 'locating',
@@ -1305,8 +1351,7 @@ test('a refinement after the pick keeps the picked place without re-offering the
     ]);
 
     $messenger = fakeSearchMessenger();
-    expectResultsHeader($messenger);
-    expectCatalogCta($messenger, "location_id={$districtA->id}");
+    expectResultsCta($messenger, null, "location_id={$districtA->id}");
 
     $session = searchSession([
         'transcript' => ['нужен кран 25 тонн в Абайском районе'],
@@ -1328,8 +1373,7 @@ test('an explicit «any place» satisfies the intake and searches the whole base
     ]);
 
     $messenger = fakeSearchMessenger();
-    expectResultsHeader($messenger);
-    expectCatalogCta($messenger);
+    expectResultsCta($messenger);
 
     $session = searchSession(['transcript' => ['нужен кран'], 'clarifications' => 1]);
     $outcome = app(CustomerSearchAssistant::class)
@@ -1348,8 +1392,7 @@ test('the exhausted clarification limit searches with whatever was collected', f
     ]);
 
     $messenger = fakeSearchMessenger();
-    expectResultsHeader($messenger);
-    expectCatalogCta($messenger);
+    expectResultsCta($messenger);
 
     $session = searchSession(['transcript' => ['нужен кран'], 'clarifications' => 3]);
     $outcome = app(CustomerSearchAssistant::class)
@@ -1368,8 +1411,7 @@ test('an unavailable AI provider searches the raw text right away', function () 
     ]);
 
     $messenger = fakeSearchMessenger();
-    expectResultsHeader($messenger);
-    expectCatalogCta($messenger);
+    expectResultsCta($messenger);
 
     $session = searchSession();
     $outcome = app(CustomerSearchAssistant::class)
@@ -1404,9 +1446,8 @@ test('the results CTA link carries the subject and the resolved place without du
     ]);
 
     $messenger = fakeSearchMessenger();
-    $messenger->shouldReceive('sendButtons')->once();
     $messenger->shouldReceive('sendCtaUrl')->once()->withArgs(
-        fn (Contact $contact, string $text, string $button, string $url): bool => $text === 'Весь каталог с поиском и фильтрами по месту и категории — по кнопке ниже, ваш запрос уже подставлен.'
+        fn (Contact $contact, string $text, string $button, string $url): bool => $text === 'Нашлись варианты по запросу «кран» в г.Шымкент.'.SEARCH_RESULTS_CTA_TAIL
             && $button === CustomerSearchAssistant::CATALOG_BUTTON_RESULTS
             && str_contains($url, "/customer/{$contact->id}/listings")
             && str_contains($url, 'signature=')
@@ -1423,24 +1464,82 @@ test('the results CTA link carries the subject and the resolved place without du
     expect($outcome)->toBe(AiOutcome::InProgress);
 });
 
-test('a failing catalog CTA does not break the delivered выдача', function () {
+test('an unsendable catalog message falls back to the outcome text with «В меню»', function (Closure $breakCatalog) {
     SearchQueryExtractionAgent::fake([fullSearchIntake()]);
     Listing::factory()->published()->create([
-        'category_id' => categoryNamed('Автокран')->id, 'description' => 'Кран 25 тонн', 'location_id' => locationNamed('г.Шымкент')->id,
+        'category_id' => categoryNamed('Автокран')->id, 'description' => 'Кран 25 тонн', 'location_id' => locationNamed('г.Шымкент')->id, 'price' => '20000 тг/ч',
     ]);
+    Log::spy();
 
     $messenger = fakeSearchMessenger();
-    $messenger->shouldReceive('sendButtons')->once();
-    $messenger->shouldReceive('sendCtaUrl')->once()->andThrow(new RuntimeException('Dereu недоступен'));
+    $breakCatalog($messenger);
+    // Исход теперь едет одним сообщением: проглоченный сбой оставил бы
+    // заказчика вовсе без ответа. Поэтому вслед за неудачей уходит прежнее
+    // первое сообщение — тот же заголовок с кнопкой «В меню».
+    $messenger->shouldReceive('sendButtons')->once()->globally()->ordered()->withArgs(
+        fn (Contact $contact, string $text, array $buttons): bool => $text === 'Нашлись варианты по запросу «кран 25 тонн» в г.Шымкент. Выбирайте в каталоге — заявка сразу уйдёт поставщику.'
+            && $buttons === [['id' => CustomerSearchAssistant::BUTTON_MENU, 'title' => CustomerSearchAssistant::BUTTON_MENU_TITLE]],
+    );
 
     $session = searchSession();
     $outcome = app(CustomerSearchAssistant::class)
         ->resume($session, customerAiNode(), new InboundMessage(text: 'нужен кран 25 тонн, Шымкент'));
 
-    // Сбой кнопки логируется и не роняет уже отправленный заголовок
-    // выдачи: диалог живёт дальше, заказчик может уточнить запрос.
     expect($outcome)->toBe(AiOutcome::InProgress)
         ->and($session->refresh()->state['phase'])->toBe('searching');
+
+    Log::shouldHaveReceived('warning')->once()->withArgs(
+        fn (string $message, array $context): bool => $message === 'Failed to send the catalog CTA.'
+            && $context['bot_session_id'] === $session->id,
+    );
+})->with([
+    'отправка упала' => [fn (MockInterface $messenger) => $messenger->shouldReceive('sendCtaUrl')->once()->globally()->ordered()->andThrow(new RuntimeException('Dereu недоступен'))],
+    'ссылку не собрать' => [function (MockInterface $messenger): void {
+        test()->mock(CtaLinkBuilder::class)->shouldReceive('catalogUrl')->once()->globally()->ordered()->andThrow(new RuntimeException('Нет ключа подписи'));
+        $messenger->shouldNotReceive('sendCtaUrl');
+    }],
+]);
+
+test('the dead-end and wider-place outcomes fall back to their former text with «В меню» too', function (array $intake, Closure $places, string $fallbackText) {
+    SearchQueryExtractionAgent::fake([fullSearchIntake($intake)]);
+    $places();
+
+    $messenger = fakeSearchMessenger();
+    $messenger->shouldReceive('sendCtaUrl')->once()->ordered()->andThrow(new RuntimeException('Dereu недоступен'));
+    $messenger->shouldReceive('sendButtons')->once()->ordered()->withArgs(
+        fn (Contact $contact, string $text, array $buttons): bool => $text === $fallbackText
+            && $buttons === [['id' => CustomerSearchAssistant::BUTTON_MENU, 'title' => CustomerSearchAssistant::BUTTON_MENU_TITLE]],
+    );
+
+    $session = searchSession();
+    $outcome = app(CustomerSearchAssistant::class)
+        ->resume($session, customerAiNode(), new InboundMessage(text: 'нужен кран'));
+
+    expect($outcome)->toBe(AiOutcome::InProgress)
+        ->and($session->refresh()->state['attempts'])->toBe(1);
+})->with([
+    'пустая выдача' => [
+        ['subject' => 'вертолёт', 'location' => null, 'location_any' => true],
+        fn () => null,
+        'Пока по такому запросу пусто. Попробуйте сказать иначе — вид техники и город, например: «кран 25 тонн, Шымкент».',
+    ],
+    'в месте пусто — посмотрите шире' => [
+        ['subject' => 'кран', 'location' => 'Карааул'],
+        fn () => locationNamed('с.Карааул', locationNamed('Абайский район', locationNamed('область Абай'))),
+        'В «с.Карааул» пока пусто. Посмотрите шире: в каталоге уже подставлены ваш запрос и «Абайский район».',
+    ],
+]);
+
+test('when the fallback message fails as well, the failure surfaces like any outcome message', function () {
+    SearchQueryExtractionAgent::fake([fullSearchIntake(['subject' => 'вертолёт', 'location' => null, 'location_any' => true])]);
+
+    $messenger = fakeSearchMessenger();
+    $messenger->shouldReceive('sendCtaUrl')->once()->ordered()->andThrow(new RuntimeException('Dereu недоступен'));
+    $messenger->shouldReceive('sendButtons')->once()->ordered()->andThrow(new RuntimeException('Dereu всё ещё недоступен'));
+
+    expect(fn () => app(CustomerSearchAssistant::class)
+        ->resume(searchSession(), customerAiNode(), new InboundMessage(text: 'вертолёт')))
+        ->toThrow(RuntimeException::class, 'Dereu всё ещё недоступен');
 });
 
 test('a chat pick with a pending web request for the same listing does not ping the supplier twice', function () {
@@ -1618,8 +1717,7 @@ test('a search requirement resets the service question streak', function () {
     $session = searchSession(['service_questions' => 2]);
 
     $messenger = fakeSearchMessenger();
-    $messenger->shouldReceive('sendButtons')->once(); // пустая выдача с кнопкой «В меню»
-    expectCatalogCta($messenger, text: 'Или загляните в каталог — там все объявления, база пополняется каждый день.');
+    expectDeadEndCta($messenger, 'Пока по такому запросу пусто. Попробуйте сказать иначе — вид техники и город, например: «кран 25 тонн, Шымкент».');
 
     app(CustomerSearchAssistant::class)
         ->resume($session, customerAiNode(), new InboundMessage(text: 'нужен кран 25 тонн в Шымкенте'));
@@ -1711,10 +1809,9 @@ test('ветка «ищу водителя» передаёт вид ветки 
     Listing::factory()->driver()->published()->create(['title' => 'Машинист экскаватора']);
 
     $messenger = fakeSearchMessenger();
-    expectResultsHeader($messenger);
     // Каталог по ссылке открывается отфильтрованным по виду ветки —
     // заказчик из «ищу водителя» видит только водителей.
-    expectCatalogCta($messenger, 'kind=driver');
+    expectResultsCta($messenger, null, 'kind=driver');
 
     $outcome = app(CustomerSearchAssistant::class)->resume(
         searchSession(['kind' => 'driver']),
@@ -1734,10 +1831,9 @@ test('ветка аренды передаёт вид ветки в катало
     ]);
 
     $messenger = fakeSearchMessenger();
-    expectResultsHeader($messenger);
     // Чат в ветке аренды ищет жёстко по аренде, поэтому каталог по кнопке
     // обязан показывать то же самое, а не подмешивать мастеров и водителей.
-    expectCatalogCta($messenger, 'kind=rental');
+    expectResultsCta($messenger, null, 'kind=rental');
 
     $outcome = app(CustomerSearchAssistant::class)
         ->resume(searchSession(), customerAiNode(), new InboundMessage(text: 'нужен кран 25 тонн, Шымкент'));
@@ -1759,8 +1855,7 @@ test('сказанный заказчиком выезд превращаетс�
     ]);
 
     $messenger = fakeSearchMessenger();
-    expectResultsHeader($messenger);
-    expectCatalogCta($messenger, 'kind=repair');
+    expectResultsCta($messenger, null, 'kind=repair');
 
     $session = searchSession(['kind' => 'repair']);
     $outcome = app(CustomerSearchAssistant::class)->resume(

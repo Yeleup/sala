@@ -31,9 +31,10 @@ use Throwable;
  * (typed or voice messages, transcribed upstream by ScenarioAiAssistant),
  * asking clarifying questions about the missing pieces, and only then
  * matches the settled query against published listings and hands the
- * results off to the personal web catalog (the «Все варианты» CTA with
- * the query prefilled) — there the chosen option becomes a customer
- * request with a supplier notification. Rows of legacy in-chat result
+ * results off to the personal web catalog (one message: the results
+ * header with the «Все варианты» URL button, the query prefilled) — there
+ * the chosen option becomes a customer request with a supplier
+ * notification. Rows of legacy in-chat result
  * lists (sent before the catalog handoff) keep working until a new
  * search supersedes them. Equipment is never locked by a request.
  */
@@ -89,7 +90,13 @@ class CustomerSearchAssistant
 
     public const string BUTTON_EXPAND_TITLE = 'Искать шире';
 
-    /** Releases the contact from a dead-end search back to the main dialog. */
+    /**
+     * Releases the contact from the search back to the main dialog. New
+     * search outcomes no longer carry it — they ride a single message with
+     * the catalog URL button, and WhatsApp cannot add a reply button to
+     * that — but questions, the place pick list and the outcome fallback
+     * do, and taps on older outcome messages keep working.
+     */
     public const string BUTTON_MENU = 'search_to_menu';
 
     public const string BUTTON_MENU_TITLE = 'В меню';
@@ -109,6 +116,14 @@ class CustomerSearchAssistant
     public const string CATALOG_BUTTON_DEAD_END = 'Открыть каталог';
 
     private const string QUERY_EXAMPLE = 'например: «кран 25 тонн, Шымкент»';
+
+    /**
+     * The customer's own words quoted in an outcome (the subject, a place
+     * missing from the dictionary) are clamped to this length: the catalog
+     * sentence ends the message, so the 1024-char body limit must cut the
+     * quote, never the sentence that explains the button.
+     */
+    private const int QUOTED_INPUT_LIMIT = 200;
 
     public function __construct(
         private readonly DereuMessenger $messenger,
@@ -444,16 +459,17 @@ class CustomerSearchAssistant
     }
 
     /**
-     * The выдача lives in the web catalog: the chat gets an honest header
-     * (what matched and where) with the «В меню» exit, then the «Все
-     * варианты» CTA into the catalog — there the customer picks a listing
-     * and the «Выбрать» button places the request. WhatsApp cannot mix
-     * reply buttons with a URL button, so the pair mirrors
-     * offerWiderCatalog. The prefill carries what this search ranked by,
-     * without duplication: with a resolved place the link carries the
-     * subject alone plus the place as the location filter; an unresolved
-     * place stays in the search text (there it can still match the
-     * listings' location wording).
+     * The выдача lives in the web catalog: the chat gets one message — an
+     * honest header (what matched and where) followed by where to look and
+     * how to pick, with the «Все варианты» URL button into the catalog;
+     * there the customer picks a listing and the «Выбрать» button places
+     * the request. WhatsApp cannot add a reply button to a URL-button
+     * message, so the outcome carries no «В меню»: a worded menu request
+     * leaves, any other text refines the search. The prefill carries what
+     * this search ranked by, without duplication: with a resolved place the
+     * link carries the subject alone plus the place as the location
+     * filter; an unresolved place stays in the search text (there it can
+     * still match the listings' location wording).
      *
      * @param  array<string, mixed>  $state
      */
@@ -472,18 +488,15 @@ class CustomerSearchAssistant
         $unresolvedLocation = $state['unresolved_location'] ?? null;
         $subject = ($state['subject'] ?? null) ?: $query;
 
-        $this->messenger->sendButtons(
-            $session->contact,
-            filled($unresolvedLocation)
-                ? sprintf('Место «%s» не нашлось в справочнике, поэтому подобрали варианты без учёта места. Выбирайте в каталоге — заявка сразу уйдёт поставщику.', $unresolvedLocation)
-                : $this->resultsHeader($subject, $location),
-            [['id' => self::BUTTON_MENU, 'title' => self::BUTTON_MENU_TITLE]],
-        );
+        $header = filled($unresolvedLocation)
+            ? sprintf('Место «%s» не нашлось в справочнике, поэтому подобрали варианты без учёта места.', $this->quoted($unresolvedLocation))
+            : $this->resultsHeader($subject, $location);
 
         $this->sendCatalogCta(
             $session,
-            'Весь каталог с поиском и фильтрами по месту и категории — по кнопке ниже, ваш запрос уже подставлен.',
+            $header.' Смотрите их в каталоге по кнопке ниже — запрос уже подставлен, там же поиск и фильтры. Выберите подходящий — заявка сразу уйдёт поставщику.',
             self::CATALOG_BUTTON_RESULTS,
+            $header.' Выбирайте в каталоге — заявка сразу уйдёт поставщику.',
             $location !== null ? $subject : $query,
             $location,
             $this->kind($state),
@@ -502,13 +515,13 @@ class CustomerSearchAssistant
      */
     private function resultsHeader(string $subject, ?Location $location): string
     {
-        $header = sprintf('Нашлись варианты по запросу «%s»', $subject);
+        $header = sprintf('Нашлись варианты по запросу «%s»', $this->quoted($subject));
 
         if ($location !== null) {
             $header .= ' в '.$location->name;
         }
 
-        return $header.'. Выбирайте в каталоге — заявка сразу уйдёт поставщику.';
+        return $header.'.';
     }
 
     /**
@@ -529,19 +542,11 @@ class CustomerSearchAssistant
         $state['expand_location_id'] = null;
         $this->persist($session, $state);
 
-        // WhatsApp cannot mix reply buttons with a URL button: the «В
-        // меню» exit rides its own message ahead of the catalog CTA,
-        // mirroring sendDeadEnd.
-        $this->messenger->sendButtons(
-            $session->contact,
-            sprintf('В «%s» пока пусто. Посмотрите шире: в каталоге уже подставлены ваш запрос и «%s».', $location->name, $parent->name),
-            [['id' => self::BUTTON_MENU, 'title' => self::BUTTON_MENU_TITLE]],
-        );
-
         $this->sendCatalogCta(
             $session,
-            'Или загляните в каталог — там все объявления, база пополняется каждый день.',
+            sprintf('В «%s» пока пусто, но база пополняется каждый день. Посмотрите шире: в каталоге по кнопке ниже уже подставлены ваш запрос и «%s».', $location->name, $parent->name),
             self::CATALOG_BUTTON_DEAD_END,
+            sprintf('В «%s» пока пусто. Посмотрите шире: в каталоге уже подставлены ваш запрос и «%s».', $location->name, $parent->name),
             (($state['subject'] ?? null) ?: $query),
             $parent,
             $this->kind($state),
@@ -771,38 +776,41 @@ class CustomerSearchAssistant
 
     /**
      * A fruitless search that still waits for the contact: the prompt to
-     * rephrase plus a «В меню» button so the contact is never stuck without
-     * a way back to the main dialog. The catalog CTA follows as its own
-     * message (WhatsApp cannot mix reply buttons and a URL button) — an
-     * empty выдача is exactly what browsing the full catalog fixes. No
-     * prefill: this query just proved empty against the same matcher.
+     * rephrase and, in the same message, the «Открыть каталог» URL button —
+     * an empty выдача is exactly what browsing the full catalog fixes. No
+     * prefill: this query just proved empty against the same matcher. The
+     * contact is not stuck without a button back: a worded menu request
+     * leaves, any other text is the rephrased query.
      */
     protected function sendDeadEnd(BotSession $session, string $text, ?ListingKind $kind = null): void
     {
-        $this->messenger->sendButtons(
-            $session->contact,
-            $text,
-            [['id' => self::BUTTON_MENU, 'title' => self::BUTTON_MENU_TITLE]],
-        );
-
         $this->sendCatalogCta(
             $session,
-            'Или загляните в каталог — там все объявления, база пополняется каждый день.',
+            $text.' Или загляните в каталог по кнопке ниже — там все объявления, база пополняется каждый день.',
             self::CATALOG_BUTTON_DEAD_END,
+            $text,
             kind: $kind,
         );
     }
 
     /**
-     * The handoff to the web catalog: a personal signed link, sent with
-     * every search outcome (a выдача or a dead end) and never with an
-     * open question the bot is waiting on. Always a free session message
-     * — every send happens in the turn of an inbound customer message,
-     * so the 24-hour window is open by definition. A failure is logged
-     * and swallowed: the CTA is an enhancement and must not break the
-     * already-delivered outcome.
+     * The handoff to the web catalog: a personal signed link sent with
+     * every search outcome (a выдача, a dead end, the farewell) and never
+     * with an open question the bot is waiting on. The outcome and the
+     * button travel as ONE message — session messages above the free
+     * monthly quota are paid since 01.10.2026, and WhatsApp cannot put a
+     * reply button next to a URL button, so the outcome carries no «В
+     * меню». Always a session message: every send happens in the turn of
+     * an inbound customer message, so the 24-hour window is open by
+     * definition.
+     *
+     * A failed link or send must not leave the customer without the
+     * outcome: with a fallback text, the former form goes out instead —
+     * the outcome without the catalog sentence, with the «В меню» button —
+     * and a failure of that propagates like any outcome message. Only the
+     * farewell has no fallback: the block ends either way.
      */
-    protected function sendCatalogCta(BotSession $session, string $text, string $button, ?string $query = null, ?Location $location = null, ?ListingKind $kind = null): void
+    protected function sendCatalogCta(BotSession $session, string $text, string $button, ?string $fallbackText = null, ?string $query = null, ?Location $location = null, ?ListingKind $kind = null): void
     {
         try {
             $this->messenger->sendCtaUrl(
@@ -816,7 +824,24 @@ class CustomerSearchAssistant
                 'bot_session_id' => $session->id,
                 'error' => $e->getMessage(),
             ]);
+
+            if ($fallbackText !== null) {
+                $this->messenger->sendButtons(
+                    $session->contact,
+                    $fallbackText,
+                    [['id' => self::BUTTON_MENU, 'title' => self::BUTTON_MENU_TITLE]],
+                );
+            }
         }
+    }
+
+    /**
+     * The customer's own words as quoted in an outcome message, clamped so
+     * the catalog sentence after them survives the body limit.
+     */
+    private function quoted(string $text): string
+    {
+        return WhatsappText::clamp($text, self::QUOTED_INPUT_LIMIT);
     }
 
     protected function matchesExpandButton(InboundMessage $message): bool

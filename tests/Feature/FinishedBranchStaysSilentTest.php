@@ -463,6 +463,60 @@ describe('просьба о меню по-прежнему показывает 
         ]],
     ]);
 
+    test('после выдачи одним сообщением «меню» словами показывает главное меню', function () {
+        SearchQueryExtractionAgent::fake([
+            ['subject' => 'автокран', 'location' => null, 'location_any' => true, 'clarifying_question' => ''],
+            ['subject' => null, 'location' => null, 'location_any' => false, 'clarifying_question' => '', 'user_intent' => 'menu'],
+        ]);
+        Listing::factory()->published()->create([
+            'category_id' => categoryNamed('Автокран')->id, 'description' => 'Автокран 25 тонн', 'price' => '20000 тг/ч',
+        ]);
+        $scenario = typicalMainDialog();
+        $session = branchSessionInSearch($scenario, ['transcript' => []]);
+        $sent = recordOutbound();
+
+        pressInDialog($session, new InboundMessage(text: 'нужен автокран'));
+
+        // Выдача — одно сообщение с кнопкой каталога, без отдельного
+        // сообщения с «В меню»; поиск остаётся открытым и ждёт уточнения.
+        expect(outboundTo($sent, $session->contact_id))->toBe([
+            ['cta', 'Нашлись варианты по запросу «автокран». Смотрите их в каталоге по кнопке ниже — запрос уже подставлен, там же поиск и фильтры. Выберите подходящий — заявка сразу уйдёт поставщику.'],
+        ])
+            ->and($session->fresh())
+            ->current_node_id->toBe('search_rental')
+            ->state->phase->toBe('searching');
+
+        pressInDialog($session, new InboundMessage(text: 'меню'));
+
+        expect(array_slice(outboundTo($sent, $session->contact_id), 1))->toBe([['buttons', MAIN_MENU_TEXT]])
+            ->and($session->fresh()->current_node_id)->toBe('main_menu');
+    });
+
+    test('после пустой выдачи одним сообщением старая кнопка «В меню» по-прежнему выводит в меню', function () {
+        SearchQueryExtractionAgent::fake([
+            ['subject' => 'вертолёт', 'location' => null, 'location_any' => true, 'clarifying_question' => ''],
+        ]);
+        $scenario = typicalMainDialog();
+        $session = branchSessionInSearch($scenario, ['transcript' => []]);
+        $sent = recordOutbound();
+
+        pressInDialog($session, new InboundMessage(text: 'вертолёт'));
+
+        expect(outboundTo($sent, $session->contact_id))->toBe([
+            ['cta', 'Пока по такому запросу пусто. Попробуйте сказать иначе — вид техники и город, например: «кран 25 тонн, Шымкент». Или загляните в каталог по кнопке ниже — там все объявления, база пополняется каждый день.'],
+        ])
+            ->and($session->fresh())
+            ->current_node_id->toBe('search_rental')
+            ->state->attempts->toBe(1);
+
+        // «В меню» под сообщением, отправленным до объединения, остаётся
+        // в чатах и работает как раньше.
+        pressInDialog($session, new InboundMessage(text: 'В меню', replyId: CustomerSearchAssistant::BUTTON_MENU));
+
+        expect(array_slice(outboundTo($sent, $session->contact_id), 1))->toBe([['buttons', MAIN_MENU_TEXT]])
+            ->and($session->fresh()->current_node_id)->toBe('main_menu');
+    });
+
     test('«Назад» у нетронутого поиска ведёт на экран раздела, а не в главное меню', function () {
         $scenario = typicalMainDialog();
         $session = branchSessionInSearch($scenario, ['transcript' => []]);

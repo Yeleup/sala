@@ -218,6 +218,22 @@ describe('что бот перестаёт делать', function () {
         expect($contact->fresh()->operator_handoff_until)->toBeNull();
     });
 
+    test('нажатие кнопки раздела в паузе после закончившегося диалога снимает паузу и сразу ведёт в раздел', function () {
+        $scenario = handoffScenario();
+        $contact = Contact::factory()->create(['phone' => '77000000014']);
+        handoffSessionAt($scenario, $contact)->update(['current_node_id' => null, 'last_dialog_ended_at' => now()]);
+        app(OperatorHandoff::class)->start($contact);
+
+        $this->mock(DereuMessenger::class)
+            ->shouldReceive('sendButtons')->once()
+            ->withArgs(fn (Contact $to, string $text): bool => $text === 'Аренда. Предлагаете или ищете?');
+
+        app(BotEngine::class)->handle($contact, new InboundMessage(text: 'Аренда', replyId: 'rent'));
+
+        expect($contact->fresh()->operator_handoff_until)->toBeNull()
+            ->and(BotSession::sole()->current_node_id)->toBe('rent_menu');
+    });
+
     test('срок вышел — бот снова отвечает', function () {
         config()->set('services.dereu.external_id', 'org_наша');
         DereuCompany::factory()->create(['external_id' => 'org_наша', 'dereu_company_id' => 'co_abc123']);

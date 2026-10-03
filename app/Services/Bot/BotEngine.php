@@ -319,6 +319,24 @@ class BotEngine
         return $node === null;
     }
 
+    /**
+     * Whether the dialog being replaced is over rather than missing or
+     * reset: it ran to its end (or was closed) with nothing awaited, or
+     * went silent for 24 hours. Asked before the new dialog touches the
+     * session.
+     *
+     * A republication that reshaped the awaited step is not that: the
+     * contact is still mid-dialog, and a press there answers a question
+     * the new schema no longer asks — the soft reset stands. Nor is a
+     * contact with no session of this scenario at all.
+     */
+    private function previousDialogEnded(BotSession $session, BotScenario $scenario): bool
+    {
+        return $session->exists
+            && $session->bot_scenario_id === $scenario->id
+            && ($session->current_node_id === null || $session->isExpired());
+    }
+
     private function restart(BotSession $session, Contact $contact, BotScenario $scenario, ScenarioDefinition $definition): void
     {
         $this->clearMenuStreak($session);
@@ -334,9 +352,10 @@ class BotEngine
      * "continue" transitions, stop at the first block that waits for input.
      *
      * $silentMenuAt names a menu the walk should park at without showing —
-     * the dialog is opening and the navigator has already read the first
-     * message as a destination, so the menu would be a question the bot
-     * answers itself three seconds later.
+     * the dialog is opening and its first message may already name a
+     * destination (a pressed scenario button, or a text the navigator is
+     * about to read), so the menu would be a question the bot answers
+     * itself three seconds later.
      *
      * $carried is the message that brought the contact here; the first AI
      * block on the way answers by it instead of introducing itself. It is
@@ -469,15 +488,28 @@ class BotEngine
      * should learn where they landed. Only the menu is held back, and only
      * until it is clear whether it is needed at all.
      *
-     * Where the graph answers by itself the navigator is not asked and the
-     * walk is the ordinary one: a press is a destination in its own right,
-     * voice is left to the ordinary menu turn, an entry block that is not
-     * a menu has no options to route into, and a text matching an option
-     * or a wired «Любая другая фраза» output is the graph's own business.
+     * Once the previous dialog is over, a press of a button the published
+     * graph owns — an earlier menu still in the chat — is a destination in
+     * its own right and goes the same way, without the navigator: the menu
+     * would only ask what the press has already answered. It is followed
+     * exactly as routeButton() follows it inside a running dialog.
+     *
+     * Everything else is the ordinary walk: a press the graph does not own
+     * (an older version's button, an AI block's runtime button) has nowhere
+     * to lead, voice is left to the ordinary menu turn, an entry block that
+     * is not a menu has nothing to park at silently, and a text matching
+     * an option or a wired «Любая другая фраза» output is the graph's own
+     * business.
      */
     private function openDialog(BotSession $session, Contact $contact, BotScenario $scenario, ScenarioDefinition $definition, InboundMessage $message): void
     {
-        $entry = $this->routableEntry($session, $contact, $definition, $message);
+        $pressed = filled($message->replyId) && $this->previousDialogEnded($session, $scenario)
+            ? $definition->optionOwner((string) $message->replyId)
+            : null;
+
+        $entry = $pressed !== null
+            ? $this->entryMenu($session, $contact, $definition)
+            : $this->routableEntry($session, $contact, $definition, $message);
 
         if ($entry === null) {
             $this->restart($session, $contact, $scenario, $definition);
@@ -501,6 +533,12 @@ class BotEngine
             return;
         }
 
+        if ($pressed !== null) {
+            $this->routeToOption($session, $contact, $definition, $pressed);
+
+            return;
+        }
+
         // Расшифровывать здесь нечего: routableEntry пропускает сюда
         // только сообщение со словами, голосовое уходит обычным ходом меню.
         if ($this->routeFreeText($session, $contact, $definition, $entry, $message)) {
@@ -516,10 +554,6 @@ class BotEngine
      * worth asking the navigator about; null when it is not and the dialog
      * should simply be walked from «Старт».
      *
-     * resolveTarget() walks the graph without sending anything or touching
-     * the session — it answers «where would this stop» before the first
-     * message goes out, which is the whole point of asking early.
-     *
      * @return array<string, mixed>|null
      */
     private function routableEntry(BotSession $session, Contact $contact, ScenarioDefinition $definition, InboundMessage $message): ?array
@@ -528,16 +562,9 @@ class BotEngine
             return null;
         }
 
-        $startId = $definition->startNodeId();
+        $node = $this->entryMenu($session, $contact, $definition);
 
-        if ($startId === null) {
-            return null;
-        }
-
-        $entryId = $definition->resolveTarget($startId, $this->startOutput($session, $contact, $definition, $startId));
-        $node = $entryId === null ? null : $definition->node($entryId);
-
-        if ($node === null || ! $this->isMenu($definition, $node)) {
+        if ($node === null) {
             return null;
         }
 
@@ -547,6 +574,31 @@ class BotEngine
         }
 
         return $node;
+    }
+
+    /**
+     * The menu a fresh dialog for this contact stops at, walked from
+     * «Старт» down the output it would take for them; null when the walk
+     * stops anywhere but a menu.
+     *
+     * resolveTarget() walks the graph without sending anything or touching
+     * the session — it answers «where would this stop» before the first
+     * message goes out, which is the whole point of asking early.
+     *
+     * @return array<string, mixed>|null
+     */
+    private function entryMenu(BotSession $session, Contact $contact, ScenarioDefinition $definition): ?array
+    {
+        $startId = $definition->startNodeId();
+
+        if ($startId === null) {
+            return null;
+        }
+
+        $entryId = $definition->resolveTarget($startId, $this->startOutput($session, $contact, $definition, $startId));
+        $node = $entryId === null ? null : $definition->node($entryId);
+
+        return $node !== null && $this->isMenu($definition, $node) ? $node : null;
     }
 
     /**

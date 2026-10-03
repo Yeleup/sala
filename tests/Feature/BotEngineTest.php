@@ -13,6 +13,7 @@ use App\Services\Bot\MenuRouter;
 use App\Services\Bot\NullMenuRouter;
 use App\Services\Bot\PassthroughAiAssistant;
 use App\Services\Bot\ScenarioDefinition;
+use App\Services\Bot\ScenarioRunReplyHandler;
 use App\Services\DereuMessenger;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Mockery\MockInterface;
@@ -712,7 +713,7 @@ test('after a branch that has just ended the next message brings the menu, witho
     expect($session->fresh()->current_node_id)->toBe('main_menu');
 });
 
-test('a button from an earlier message pressed after the branch ended brings the menu once', function (InboundMessage $press) {
+test('a button the current graph does not own, pressed after the branch ended, brings the menu once', function (InboundMessage $press) {
     // Диалог завершён, и нажатие начинает новый — как у вернувшегося
     // контакта: одно меню, без «кнопка устарела», без приветствия и без
     // дублей. Ассистента нажатие не достигает: блока, которому оно
@@ -736,10 +737,245 @@ test('a button from an earlier message pressed after the branch ended brings the
     expect($session->fresh()->current_node_id)->toBe('main_menu');
 })->with([
     '«В меню» из сообщения ассистента' => [new InboundMessage(text: 'В меню', replyId: 'collect_to_menu')],
-    'кнопка раздела из прежнего меню' => [new InboundMessage(text: 'Аренда', replyId: 'kind_rental')],
-    'кнопка роли с экрана раздела' => [new InboundMessage(text: 'Я сдаю', replyId: 'rent_out')],
     'кнопка прежней версии сценария' => [new InboundMessage(text: 'Устаревшая', replyId: 'ghost_from_old_version')],
+    'кнопка предложения навигатора' => [new InboundMessage(text: 'Перейти', replyId: 'nav_confirm')],
 ]);
+
+test('a scenario button from an earlier message pressed after the branch ended leads straight into its branch', function (InboundMessage $press, Closure $expectSent, ?string $node) {
+    // Нажатие исполняется так же, как на только что показанном меню:
+    // промежуточного главного меню нет, приветствия знакомому контакту —
+    // тоже, навигатор не спрошен — кнопка сама говорит, куда идти.
+    $scenario = BotScenario::factory()->published(botBranchDefinition())->create();
+    $contact = Contact::factory()->create();
+    $session = botSessionWaitingAt($scenario, $contact, 'collect');
+    $session->update(['last_dialog_ended_at' => now()->subMinutes(5)]);
+
+    $assistant = test()->mock(AiAssistant::class);
+    $assistant->shouldReceive('resume')->once()->andReturn(AiOutcome::Completed);
+    test()->mock(MenuRouter::class)->shouldNotReceive('route');
+
+    $messenger = fakeBotMessenger();
+    $messenger->shouldNotReceive('sendText');
+    $expectSent($messenger, $assistant);
+
+    app(BotEngine::class)->handle($contact, new InboundMessage(text: 'Да, отправить', replyId: 'collect_submit'));
+    app(BotEngine::class)->handle($contact, $press);
+
+    expect($session->fresh())
+        ->current_node_id->toBe($node)
+        ->state->toBeNull();
+})->with([
+    'кнопка раздела из прежнего главного меню' => [
+        new InboundMessage(text: 'Аренда', replyId: 'kind_rental'),
+        function (MockInterface $messenger, MockInterface $assistant): void {
+            $assistant->shouldNotReceive('start');
+            $messenger->shouldReceive('sendButtons')->once()
+                ->withArgs(fn (Contact $to, string $text, array $buttons) => $text === 'Аренда. Сдаёте или ищете?'
+                    && array_column($buttons, 'id') === ['rent_out', 'my']);
+        },
+        'menu_rental',
+    ],
+    'кнопка роли с экрана раздела' => [
+        new InboundMessage(text: 'Я сдаю', replyId: 'rent_out'),
+        function (MockInterface $messenger, MockInterface $assistant): void {
+            // Анкета начинается со своего приглашения: нажатие ничего не
+            // написало, и нести в блок нечего.
+            $assistant->shouldReceive('start')->once()
+                ->withArgs(fn (BotSession $session, array $node, ?InboundMessage $carried) => $node['id'] === 'collect' && $carried === null)
+                ->andReturn(AiOutcome::InProgress);
+            $messenger->shouldNotReceive('sendButtons');
+        },
+        'collect',
+    ],
+    '«Мои объявления» с экрана раздела' => [
+        new InboundMessage(text: 'Мои объявления', replyId: 'my'),
+        function (MockInterface $messenger, MockInterface $assistant): void {
+            $assistant->shouldNotReceive('start');
+            $messenger->shouldNotReceive('sendButtons');
+            $messenger->shouldReceive('sendCtaUrl')->once()
+                ->withArgs(fn (Contact $to, string $text) => $text === 'Откройте кабинет.');
+        },
+        null,
+    ],
+]);
+
+test('a scenario button pressed after 24 hours of silence leads straight into its branch', function () {
+    $scenario = BotScenario::factory()->published(botBranchDefinition())->create();
+    $contact = Contact::factory()->create();
+    $session = botSessionWaitingAt($scenario, $contact, 'main_menu');
+    $session->update(['last_dialog_ended_at' => now()->subDays(2)]);
+    $session->forceFill(['updated_at' => now()->subDays(2)])->saveQuietly();
+
+    $messenger = fakeBotMessenger();
+    $messenger->shouldNotReceive('sendText');
+    $messenger->shouldReceive('sendButtons')->once()
+        ->withArgs(fn (Contact $to, string $text) => $text === 'Аренда. Сдаёте или ищете?');
+
+    app(BotEngine::class)->handle($contact, new InboundMessage(text: 'Аренда', replyId: 'kind_rental'));
+
+    expect($session->fresh())
+        ->current_node_id->toBe('menu_rental')
+        ->scenario_version->toBe($scenario->published_version);
+});
+
+test('a scenario button pressed after a soft reset by republication starts the dialog over, as before', function () {
+    // Ждали на AI-блоке, а республикация сменила его задачу — отпечаток
+    // шага разошёлся. Диалог не закончился, а мягко сброшен: нажатие —
+    // ответ посреди диалога, и сброс ведёт в меню, как и раньше.
+    $definition = botBranchDefinition();
+    $scenario = BotScenario::factory()->published($definition)->create();
+    $contact = Contact::factory()->create();
+    $session = botSessionWaitingAt($scenario, $contact, 'collect');
+    $session->update([
+        'current_node_fingerprint' => (new ScenarioDefinition($definition))->nodeFingerprint(['id' => 'collect', 'type' => 'ai', 'task' => 'customer_search']),
+        'last_dialog_ended_at' => now()->subMinutes(5),
+    ]);
+    $scenario->update(['published_version' => 2]);
+
+    test()->mock(AiAssistant::class)->shouldNotReceive('start', 'resume');
+
+    $messenger = fakeBotMessenger();
+    $messenger->shouldNotReceive('sendText');
+    $messenger->shouldReceive('sendButtons')->once()
+        ->withArgs(fn (Contact $to, string $text) => $text === 'Что вас интересует?');
+
+    app(BotEngine::class)->handle($contact, new InboundMessage(text: 'Аренда', replyId: 'kind_rental'));
+
+    expect($session->fresh())
+        ->current_node_id->toBe('main_menu')
+        ->scenario_version->toBe(2);
+});
+
+test('a scenario button pressed after the dialog ended gets the greeting «Старт» decides on, then its branch', function (bool $reachedStep, bool $knownToBot, bool $connectReturning, bool $greeted) {
+    // Приветствие решает «Старт» — ровно как для любого нового диалога:
+    // «Повторное обращение» тому, кто уже доходил до шага диалога или
+    // кому бот уже писал сам.
+    $scenario = BotScenario::factory()->published(botBranchDefinition(connectReturning: $connectReturning))->create();
+    $contact = Contact::factory()->create();
+    BotSession::factory()->create([
+        'contact_id' => $contact->id,
+        'bot_scenario_id' => $scenario->id,
+        'scenario_version' => $scenario->published_version,
+        'current_node_id' => null,
+        'last_dialog_ended_at' => $reachedStep ? now()->subHour() : null,
+    ]);
+
+    if ($knownToBot) {
+        ChannelMessage::factory()->outbound()->delivered()->create(['contact_id' => $contact->id]);
+    }
+
+    $sent = [];
+    $messenger = fakeBotMessenger();
+    $messenger->shouldReceive('sendText')->andReturnUsing(function (Contact $to, string $text) use (&$sent): void {
+        $sent[] = $text;
+    });
+    $messenger->shouldReceive('sendButtons')->andReturnUsing(function (Contact $to, string $text) use (&$sent): void {
+        $sent[] = $text;
+    });
+
+    app(BotEngine::class)->handle($contact, new InboundMessage(text: 'Аренда', replyId: 'kind_rental'));
+
+    expect($sent)->toBe($greeted
+        ? ['Здравствуйте, это сервис!', 'Аренда. Сдаёте или ищете?']
+        : ['Аренда. Сдаёте или ищете?'])
+        ->and(BotSession::sole()->current_node_id)->toBe('menu_rental');
+})->with([
+    'доходил до шага диалога' => [true, false, true, false],
+    'бот уже писал ему сам' => [false, true, true, false],
+    'ни того, ни другого' => [false, false, true, true],
+    '«Повторное обращение» не подключено' => [true, true, false, true],
+]);
+
+test('a scenario button pressed with no dialog of this scenario behind it opens the dialog with the menu, as before', function (bool $otherScenario, array $expected) {
+    $scenario = BotScenario::factory()->published(botBranchDefinition())->create();
+    $contact = Contact::factory()->create();
+
+    if ($otherScenario) {
+        BotSession::factory()->create([
+            'contact_id' => $contact->id,
+            'bot_scenario_id' => BotScenario::factory()->create()->id,
+            'scenario_version' => 1,
+            'current_node_id' => null,
+            'last_dialog_ended_at' => now()->subHour(),
+        ]);
+    }
+
+    $sent = [];
+    $messenger = fakeBotMessenger();
+    $messenger->shouldReceive('sendText')->andReturnUsing(function (Contact $to, string $text) use (&$sent): void {
+        $sent[] = $text;
+    });
+    $messenger->shouldReceive('sendButtons')->andReturnUsing(function (Contact $to, string $text) use (&$sent): void {
+        $sent[] = $text;
+    });
+
+    app(BotEngine::class)->handle($contact, new InboundMessage(text: 'Аренда', replyId: 'kind_rental'));
+
+    expect($sent)->toBe($expected)
+        ->and(BotSession::sole())
+        ->current_node_id->toBe('main_menu')
+        ->bot_scenario_id->toBe($scenario->id);
+})->with([
+    'сессии нет' => [false, ['Здравствуйте, это сервис!', 'Что вас интересует?']],
+    'сессия другого сценария' => [true, ['Что вас интересует?']],
+]);
+
+test('a scenario button pressed after the dialog ended while «Старт» leads to no menu starts the dialog over', function () {
+    // Нажатие исполняется после того, как новый диалог молча встал на меню
+    // от «Старта». Если «Старт» ведёт не в меню (здесь — сразу в анкету),
+    // встать молча не на что: диалог начинается заново, как раньше.
+    $scenario = BotScenario::factory()->published([
+        'nodes' => [
+            ['id' => 'start', 'type' => 'start'],
+            ['id' => 'collect', 'type' => 'ai', 'task' => 'collect_listing'],
+            ['id' => 'main_menu', 'type' => 'buttons', 'text' => 'Что вас интересует?', 'options' => [
+                ['id' => 'kind_rental', 'title' => 'Аренда'],
+            ]],
+            ['id' => 'rental_text', 'type' => 'text', 'text' => 'Раздел аренды'],
+        ],
+        'edges' => [
+            ['from' => 'start', 'output' => 'continue', 'to' => 'collect'],
+            ['from' => 'collect', 'output' => 'menu', 'to' => 'main_menu'],
+            ['from' => 'main_menu', 'output' => 'option:kind_rental', 'to' => 'rental_text'],
+        ],
+    ])->create();
+    $contact = Contact::factory()->create();
+    BotSession::factory()->create([
+        'contact_id' => $contact->id,
+        'bot_scenario_id' => $scenario->id,
+        'scenario_version' => $scenario->published_version,
+        'current_node_id' => null,
+        'last_dialog_ended_at' => now()->subHour(),
+    ]);
+
+    test()->mock(AiAssistant::class)->shouldReceive('start')->once()
+        ->withArgs(fn (BotSession $session, array $node, ?InboundMessage $carried) => $node['id'] === 'collect' && $carried === null)
+        ->andReturn(AiOutcome::InProgress);
+    fakeBotMessenger()->shouldNotReceive('sendText', 'sendButtons');
+
+    app(BotEngine::class)->handle($contact, new InboundMessage(text: 'Аренда', replyId: 'kind_rental'));
+
+    expect(BotSession::sole()->current_node_id)->toBe('collect');
+});
+
+test('a button of a scenario run pressed after the dialog ended goes to its run and starts no dialog', function () {
+    $scenario = BotScenario::factory()->published(botBranchDefinition())->create();
+    $contact = Contact::factory()->create();
+    $session = BotSession::factory()->create([
+        'contact_id' => $contact->id,
+        'bot_scenario_id' => $scenario->id,
+        'scenario_version' => $scenario->published_version,
+        'current_node_id' => null,
+        'last_dialog_ended_at' => now()->subMinutes(5),
+    ]);
+
+    test()->mock(ScenarioRunReplyHandler::class)->shouldReceive('handle')->once()->andReturnTrue();
+    fakeBotMessenger()->shouldNotReceive('sendText', 'sendButtons', 'sendList', 'sendCtaUrl');
+
+    app(BotEngine::class)->handle($contact, new InboundMessage(text: 'Да, актуально', replyId: 'flow:token:kind_rental'));
+
+    expect($session->fresh()->current_node_id)->toBeNull();
+});
 
 test('a request for the menu follows the menu output and shows the menu at once', function () {
     $definition = botBranchDefinition();

@@ -239,6 +239,11 @@ class ScenarioRunner
                     break;
 
                 case BotNodeType::Action:
+                    // A run's text before its action goes out before the
+                    // action is taken: a failed send must stop the run with
+                    // the request or listing untouched, as it always did.
+                    $this->reply->flush();
+
                     $action = ScenarioAction::tryFrom((string) ($node['action'] ?? ''));
 
                     $outcome = $action === null
@@ -365,6 +370,9 @@ class ScenarioRunner
 
     private function complete(ScenarioRun $run): void
     {
+        // The run's last text goes out before the run is recorded complete.
+        $this->reply->flush();
+
         $run->forceFill([
             'status' => ScenarioRunStatus::Completed,
             'current_node_id' => null,

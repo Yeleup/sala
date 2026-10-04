@@ -18,6 +18,7 @@ use App\Services\Bot\InboundMessage;
 use App\Services\CustomerRequestPlacer;
 use App\Services\DereuMessenger;
 use App\Services\Locations\LocationResolver;
+use App\Services\WhatsappReplyBuffer;
 use App\Support\WhatsappText;
 use Illuminate\Database\Eloquent\Collection as EloquentCollection;
 use Illuminate\Support\Carbon;
@@ -154,6 +155,7 @@ class CustomerSearchAssistant
         private readonly LocationResolver $locations,
         private readonly AiAudit $audit,
         private readonly BotReplyTexts $replyTexts,
+        private readonly WhatsappReplyBuffer $reply,
     ) {}
 
     /**
@@ -188,17 +190,22 @@ class CustomerSearchAssistant
         }
 
         $session->state = ['kind' => $kind->value] + $this->defaultState();
-        $session->save();
 
         if ($carried !== null) {
+            $this->saveSession($session);
+
             return $this->resume($session, $node, $carried);
         }
 
+        // The invitation goes out first and the fresh memory is saved after
+        // it: a text block right before the block rides the same message,
+        // and a failed send leaves nothing recorded to replay differently.
         $this->messenger->sendButtons(
             $session->contact,
             trim((string) ($node['text'] ?? '')) ?: $this->searchGreeting($kind),
             $this->exitButton($session->state),
         );
+        $this->saveSession($session);
 
         return AiOutcome::InProgress;
     }
@@ -1490,6 +1497,17 @@ class CustomerSearchAssistant
     protected function persist(BotSession $session, array $state): void
     {
         $session->state = $state;
+        $this->saveSession($session);
+    }
+
+    /**
+     * Record the search's memory. What the bot has already said in this
+     * reply goes out first, so a failed send stops the turn before the
+     * memory moves on (see WhatsappReplyBuffer).
+     */
+    private function saveSession(BotSession $session): void
+    {
+        $this->reply->flush();
         $session->save();
     }
 }

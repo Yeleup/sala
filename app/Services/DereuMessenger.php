@@ -14,6 +14,7 @@ use App\Support\WhatsappText;
 use Closure;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\PendingRequest;
+use Illuminate\Http\Client\RequestException;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
@@ -241,10 +242,15 @@ class DereuMessenger
 
         try {
             $this->deliver($company, $contact, 'interactive', $payload($joined));
-        } catch (Throwable $e) {
-            // Nothing reached the person, so the text is still owed: it goes
-            // out on its own or inside the next message — even when the
-            // caller swallows the failure of this one (a best-effort link).
+        } catch (RequestException|OutboundRequestBlocked $e) {
+            // Dereu answered with a refusal, or nothing left the machine:
+            // the message was not accepted, so the text is still owed — on
+            // its own or inside the next message, even when the caller
+            // swallows this failure (a best-effort link). Any other failure
+            // keeps it spent: a lost connection may have delivered it, and a
+            // failure of the bookkeeping after an accepted send means the
+            // message is already out — sending the text again would say it
+            // twice.
             $this->reply->putBack($held);
 
             throw $e;

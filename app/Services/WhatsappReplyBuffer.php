@@ -2,9 +2,6 @@
 
 namespace App\Services;
 
-use App\Models\AiAttempt;
-use App\Models\AiOperation;
-use App\Models\ChannelMessage;
 use App\Models\Contact;
 use Closure;
 use Illuminate\Support\Facades\Log;
@@ -26,14 +23,15 @@ use Throwable;
  * (the supplier notified about a request) are not part of the reply: they
  * go out at once and leave the held text alone.
  *
- * A held text must fail where it always failed — before anything the bot
- * did after writing it is persisted. So it also goes out right before the
- * next write of dialog state (beforeQuery(), hooked into the database
- * connection): a failed send then stops the turn with the dialog exactly
- * where it stood, and the queue's retry replays the same step instead of
- * answering a dialog that has moved on. Only the journals — the channel
- * journal and the AI audit — are written past it: they record what
- * happened, they do not decide where the dialog stands.
+ * A held text must fail where it always failed — before the bot records
+ * what came after it. So the code that records a step of the dialog or
+ * acts on data (the engine saving the session, an assistant saving its
+ * memory or the draft, a scenario run acting or closing) calls flush()
+ * first: a failed send then stops the turn with the dialog where it stood,
+ * and the queue's retry replays the same step. Where a pair must stay one
+ * message, that code sends its own message first and records after.
+ * flush() is never called from inside a database transaction — every
+ * boundary sits before one is opened.
  *
  * Whatever is still held when the reply ends goes out then — also when
  * the reply dies with an exception, because before the text would already
@@ -50,9 +48,6 @@ class WhatsappReplyBuffer
 
     /** @var array{contact: Contact, text: string, send: Closure(): void}|null */
     private ?array $held = null;
-
-    /** @var list<string>|null */
-    private ?array $journalTables = null;
 
     /**
      * Run one reply of the bot to the given person.
@@ -155,7 +150,7 @@ class WhatsappReplyBuffer
     }
 
     /**
-     * The message that was to carry the held text did not go out: the text
+     * Dereu refused the message that was to carry the held text: the text
      * is still to be said — on its own, or inside whatever comes next.
      *
      * @param  array{contact: Contact, text: string, send: Closure(): void}  $held
@@ -203,39 +198,5 @@ class WhatsappReplyBuffer
                 'error' => $e->getMessage(),
             ]);
         }
-    }
-
-    /**
-     * Called before every database statement: a write of dialog state
-     * sends the held text first, so that a failed send stops the turn
-     * before the write (see the class description). Reads and the journals
-     * pass.
-     */
-    public function beforeQuery(string $sql): void
-    {
-        if ($this->held === null) {
-            return;
-        }
-
-        if (preg_match('/^\s*(?:insert\s+into|update|delete\s+from)\s+"?([\w.]+)"?/i', $sql, $matches) !== 1) {
-            return;
-        }
-
-        if (in_array($matches[1], $this->journalTables(), true)) {
-            return;
-        }
-
-        $this->flush();
-    }
-
-    /**
-     * @return list<string>
-     */
-    private function journalTables(): array
-    {
-        return $this->journalTables ??= array_map(
-            fn (string $model): string => (new $model)->getTable(),
-            [ChannelMessage::class, AiOperation::class, AiAttempt::class],
-        );
     }
 }

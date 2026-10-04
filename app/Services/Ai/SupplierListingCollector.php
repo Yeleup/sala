@@ -27,6 +27,7 @@ use App\Services\Bot\InboundMessage;
 use App\Services\DereuMediaDownloader;
 use App\Services\DereuMessenger;
 use App\Services\Locations\LocationResolver;
+use App\Services\WhatsappReplyBuffer;
 use App\Support\WhatsappText;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Support\Facades\DB;
@@ -189,6 +190,7 @@ class SupplierListingCollector
         private readonly AiAudit $audit,
         private readonly LocationResolver $locations,
         private readonly BotReplyTexts $replyTexts,
+        private readonly WhatsappReplyBuffer $reply,
     ) {}
 
     /**
@@ -234,9 +236,10 @@ class SupplierListingCollector
         // A fresh questionnaire outdates whatever an earlier one left behind
         // to resume — restoring it is not this method's job (see task 4).
         $session->paused_state = null;
-        $session->save();
 
         if ($carried !== null) {
+            $this->saveSession($session);
+
             // Straight into the ordinary turn. resume()'s own guards are
             // moot on a state this fresh: there is no draft to have moved
             // on, no exit confirmation open, and «В меню» was not what
@@ -244,11 +247,15 @@ class SupplierListingCollector
             return $this->dispatchPhase($session, $this->normalizeState($session), $carried, $node);
         }
 
+        // The invitation goes out first and the fresh memory is saved after
+        // it: a text block right before the block rides the same message,
+        // and a failed send leaves nothing recorded to replay differently.
         $this->messenger->sendButtons(
             $session->contact,
             trim((string) ($node['text'] ?? '')) ?: $kind->greeting(),
             $this->exitButton($session, $session->state),
         );
+        $this->saveSession($session);
 
         return AiOutcome::InProgress;
     }
@@ -651,6 +658,13 @@ class SupplierListingCollector
      * one of the matching dictionary locations, clarify, or hand off to the
      * web form once the clarification limit is spent.
      *
+     * A question is sent first and the step recorded after it: a text the
+     * bot said just before (the return to an interrupted questionnaire)
+     * rides the question's message, and a failed send leaves the attempt
+     * unspent, so the retry of the same message asks the same question.
+     * The summary and the web-form handoff write the draft first — the
+     * text before them goes out on its own (see ensureDraft()).
+     *
      * @param  array<string, mixed>  $state
      */
     private function advance(BotSession $session, array $state): AiOutcome
@@ -724,8 +738,8 @@ class SupplierListingCollector
             if (! $asksName && $state['location_lists'] < self::MAX_LOCATION_LISTS) {
                 $state['location_lists']++;
                 $state['phase'] = 'locating';
-                $this->persist($session, $state);
                 $this->sendLocationChoices($session, $candidates);
+                $this->persist($session, $state);
 
                 return AiOutcome::InProgress;
             }
@@ -747,8 +761,8 @@ class SupplierListingCollector
             $state['button_prompts'][$field] = ($state['button_prompts'][$field] ?? 0) + 1;
             $state['phase'] = 'choosing';
             $state['button_field'] = $field;
-            $this->persist($session, $state);
             $this->sendButtonPrompt($session, $field, $prompt);
+            $this->persist($session, $state);
 
             return AiOutcome::InProgress;
         }
@@ -767,11 +781,11 @@ class SupplierListingCollector
                 $state['unlisted_prompts']++;
                 $state['phase'] = 'collecting';
                 $state['last_question'] = $this->unlistedMachineryPrompt($state['fields']['unlisted_machinery']);
-                $this->persist($session, $state);
                 $this->messenger->sendButtons($session->contact, $state['last_question'], [
                     ['id' => self::BUTTON_MACHINERY_UNLISTED, 'title' => self::BUTTON_MACHINERY_UNLISTED_TITLE],
                     ['id' => self::BUTTON_MENU, 'title' => self::BUTTON_MENU_TITLE],
                 ]);
+                $this->persist($session, $state);
 
                 return AiOutcome::InProgress;
             }
@@ -805,12 +819,12 @@ class SupplierListingCollector
         $state['attempts']++;
         $state['phase'] = 'collecting';
         $state['last_question'] = $this->clarificationQuestion($state['fields'], $missing, $kind);
-        $this->persist($session, $state);
         $this->messenger->sendButtons(
             $session->contact,
             $state['last_question'],
             [['id' => self::BUTTON_MENU, 'title' => self::BUTTON_MENU_TITLE]],
         );
+        $this->persist($session, $state);
 
         return AiOutcome::InProgress;
     }
@@ -1394,6 +1408,7 @@ class SupplierListingCollector
                 return AiOutcome::InProgress;
             }
 
+            $this->reply->flush();
             $draft?->submitForModeration();
             $this->messenger->sendText($session->contact, 'Готово! Объявление ушло на проверку. Как только модератор решит — сразу напишем.');
 
@@ -1830,6 +1845,10 @@ class SupplierListingCollector
      */
     private function saveDraft(Listing $draft, array $state, array $attributes): void
     {
+        // Outside the transaction, never inside it: a send from within one
+        // would lose its journal row to a rollback.
+        $this->reply->flush();
+
         DB::transaction(function () use ($draft, $state, $attributes): void {
             if ($this->kind($state) === ListingKind::Rental) {
                 $category = $state['fields']['category'] ?? null;
@@ -1931,6 +1950,7 @@ class SupplierListingCollector
             return;
         }
 
+        $this->reply->flush();
         $session->contact->update(['display_name' => Str::limit(trim($name), 255, '')]);
     }
 
@@ -1976,6 +1996,11 @@ class SupplierListingCollector
      */
     private function ensureDraft(BotSession $session, array &$state): Listing
     {
+        // The draft (and the media written to it right after) is data the
+        // retry would find already changed — what was said before goes out
+        // first.
+        $this->reply->flush();
+
         if ($state['draft_id'] !== null) {
             $draft = Listing::find($state['draft_id']);
 
@@ -2393,6 +2418,17 @@ class SupplierListingCollector
     private function persist(BotSession $session, array $state): void
     {
         $session->state = $state;
+        $this->saveSession($session);
+    }
+
+    /**
+     * Record the questionnaire's memory. What the bot has already said in
+     * this reply goes out first, so a failed send stops the turn before
+     * the memory moves on (see WhatsappReplyBuffer).
+     */
+    private function saveSession(BotSession $session): void
+    {
+        $this->reply->flush();
         $session->save();
     }
 }

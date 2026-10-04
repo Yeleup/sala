@@ -2,10 +2,13 @@
 
 use App\Ai\Agents\ListingExtractionAgent;
 use App\Enums\AiCostStatus;
+use App\Enums\BotReplyKey;
 use App\Enums\BotScenarioTrigger;
 use App\Enums\ChannelDirection;
 use App\Enums\ChannelMessageStatus;
+use App\Enums\CustomerRequestStatus;
 use App\Enums\ListingKind;
+use App\Enums\RouteConfidence;
 use App\Enums\ScenarioRunStatus;
 use App\Exceptions\SessionWindowClosed;
 use App\Jobs\ProcessDereuWebhookEvent;
@@ -21,7 +24,11 @@ use App\Models\ScenarioRun;
 use App\Models\WhatsappTemplate;
 use App\Services\Ai\CtaLinkBuilder;
 use App\Services\Ai\CustomerSearchAssistant;
+use App\Services\Ai\ScenarioAiAssistant;
+use App\Services\Ai\SupplierListingCollector;
+use App\Services\Bot\BotReplyTexts;
 use App\Services\Bot\InboundMessage;
+use App\Services\Bot\MenuRoute;
 use App\Services\Bot\MenuRouter;
 use App\Services\Bot\NullMenuRouter;
 use App\Services\Bot\ScenarioRunner;
@@ -34,6 +41,7 @@ use App\Services\WhatsappReplyBuffer;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\Request;
 use Illuminate\Http\Client\RequestException;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
@@ -122,6 +130,38 @@ function joinMenuButtonsPayload(): array
 function joinApprovedTemplate(): WhatsappTemplate
 {
     return WhatsappTemplate::factory()->approved()->create();
+}
+
+/**
+ * Анкета аренды с уже существующим черновиком контакта.
+ */
+function joinCollectorWithDraft(Contact $contact): BotSession
+{
+    $draft = Listing::factory()->create(['contact_id' => $contact->id, 'description' => 'Старое описание']);
+
+    return BotSession::factory()->waitingAt('collect')->create([
+        'contact_id' => $contact->id,
+        'state' => [
+            'kind' => 'rental', 'phase' => 'collecting', 'attempts' => 1,
+            'transcript' => ['Сдаю трактор в Шымкенте'],
+            'fields' => ['description' => 'Трактор в аренду'],
+            'draft_id' => $draft->id,
+        ],
+    ]);
+}
+
+/**
+ * Придержанный текст, затем выход из непустой анкеты словами — ход,
+ * который пишет черновик.
+ */
+function joinExitCollector(Contact $contact, BotSession $session): void
+{
+    joinMessenger()->sendText($contact, 'Возвращаемся к анкете — всё написанное на месте.');
+    app(ScenarioAiAssistant::class)->resume(
+        $session,
+        ['id' => 'collect', 'type' => 'ai', 'task' => 'collect_listing'],
+        new InboundMessage(text: 'покажите другие разделы'),
+    );
 }
 
 describe('склейка в одном ответе', function () {
@@ -466,7 +506,31 @@ describe('сбои внутри ответа', function () {
             ->and($rows[1]->text)->toBe('Приветствие.');
     });
 
-    test('запись состояния диалога не обгоняет придержанный текст: он уходит перед ней', function () {
+    test('принятое Dereu склеенное сообщение не повторяет текст, если упал учёт после отправки', function () {
+        fakeDereuForJoining();
+        connectedDereuCompany();
+        $contact = Contact::factory()->withOpenSessionWindow()->create();
+        $journalDown = true;
+        ChannelMessage::creating(function () use (&$journalDown): void {
+            if ($journalDown) {
+                $journalDown = false;
+
+                throw new RuntimeException('journal is down');
+            }
+        });
+
+        // Dereu принял сообщение — текст уже у человека; сбой записи в
+        // журнал не повод отправлять его второй раз.
+        expect(fn () => inBotReply($contact, function () use ($contact): void {
+            joinMessenger()->sendText($contact, 'Приветствие.');
+            joinMessenger()->sendButtons($contact, 'Что вас интересует?', joinMenuButtons());
+        }))->toThrow(RuntimeException::class, 'journal is down');
+
+        expect(sentToDereu())->toHaveCount(1)
+            ->and(sentToDereu()[0]['payload']['body'])->toBe(['text' => "Приветствие.\n\nЧто вас интересует?"]);
+    });
+
+    test('откат транзакции посреди ответа не уносит строку журнала текста: внутри транзакций бот не отправляет', function () {
         fakeDereuForJoining();
         connectedDereuCompany();
         $contact = Contact::factory()->withOpenSessionWindow()->create();
@@ -475,29 +539,82 @@ describe('сбои внутри ответа', function () {
         inBotReply($contact, function () use ($contact, $session): void {
             joinMessenger()->sendText($contact, 'Хорошо, остановимся.');
 
-            // Журналы — что сказано и сколько стоило ИИ — текст не торопят.
-            ChannelMessage::factory()->create(['contact_id' => $contact->id]);
-            expect(sentToDereu())->toBe([]);
+            try {
+                DB::transaction(function () use ($session): void {
+                    $session->update(['current_node_id' => null]);
 
-            $session->update(['current_node_id' => null]);
-            expect(sentToDereu())->toHaveCount(1);
+                    throw new RuntimeException('rolled back');
+                });
+            } catch (RuntimeException) {
+            }
+
+            // Точка сохранения внутри транзакции, откатанная сама по себе.
+            DB::transaction(function () use ($session): void {
+                try {
+                    DB::transaction(function () use ($session): void {
+                        $session->update(['current_node_id' => 'other']);
+
+                        throw new RuntimeException('savepoint rolled back');
+                    });
+                } catch (RuntimeException) {
+                }
+            });
         });
 
-        expect(sentToDereu())->toHaveCount(1);
+        expect(sentToDereu())->toHaveCount(1)
+            ->and(ChannelMessage::sole())
+            ->text->toBe('Хорошо, остановимся.')
+            ->status->toBe(ChannelMessageStatus::Queued)
+            ->and($session->fresh()->current_node_id)->toBe('menu');
     });
 
-    test('не ушедший текст останавливает ход до записи состояния — как раньше его собственная отправка', function () {
+    test('текст перед записью существующего черновика уходит до транзакции и переживает её откат', function () {
+        ListingExtractionAgent::fake([['user_intent' => 'menu']]);
+        fakeDereuForJoining();
+        connectedDereuCompany();
+        $contact = Contact::factory()->withOpenSessionWindow()->create();
+        $session = joinCollectorWithDraft($contact);
+        Listing::updating(fn () => throw new RuntimeException('draft write failed'));
+
+        // У черновика нет записи до транзакции — она первая. Текст уходит
+        // раньше неё, и откат транзакции не уносит его строку журнала.
+        expect(fn () => inBotReply($contact, fn () => joinExitCollector($contact, $session)))
+            ->toThrow(RuntimeException::class, 'draft write failed');
+
+        expect(sentToDereu())->toHaveCount(1)
+            ->and(ChannelMessage::sole())
+            ->text->toBe('Возвращаемся к анкете — всё написанное на месте.')
+            ->status->toBe(ChannelMessageStatus::Queued);
+    });
+
+    test('не ушедший текст останавливает ход до записи черновика — как раньше его собственная отправка', function () {
+        ListingExtractionAgent::fake([['user_intent' => 'menu']]);
         fakeDereuForJoining(fn (): bool => true);
         connectedDereuCompany();
         $contact = Contact::factory()->withOpenSessionWindow()->create();
-        $session = BotSession::factory()->waitingAt('menu')->create(['contact_id' => $contact->id]);
+        $session = joinCollectorWithDraft($contact);
+        $draft = Listing::sole();
 
-        expect(fn () => inBotReply($contact, function () use ($contact, $session): void {
-            joinMessenger()->sendText($contact, 'Хорошо, остановимся.');
-            $session->update(['current_node_id' => null]);
-        }))->toThrow(RequestException::class);
+        expect(fn () => inBotReply($contact, fn () => joinExitCollector($contact, $session)))
+            ->toThrow(RequestException::class);
 
-        expect($session->fresh()->current_node_id)->toBe('menu');
+        expect($draft->fresh()->description)->toBe('Старое описание')
+            ->and($session->fresh()->state['phase'])->toBe('collecting');
+    });
+
+    test('не ушедший текст не даёт завести новый черновик', function () {
+        ListingExtractionAgent::fake([['user_intent' => 'menu']]);
+        fakeDereuForJoining(fn (): bool => true);
+        connectedDereuCompany();
+        $contact = Contact::factory()->withOpenSessionWindow()->create();
+        $session = joinCollectorWithDraft($contact);
+        Listing::query()->delete();
+        $session->update(['state' => [...$session->state, 'draft_id' => null]]);
+
+        expect(fn () => inBotReply($contact, fn () => joinExitCollector($contact, $session)))
+            ->toThrow(RequestException::class);
+
+        expect(Listing::count())->toBe(0);
     });
 
     test('джоба, выполненная синхронно внутри ответа, его не сбрасывает и не опустошает', function () {
@@ -575,6 +692,32 @@ function joinMenuScenario(): BotScenario
             ['from' => 'main_menu', 'output' => 'option:repair', 'to' => 'repair_branch'],
         ],
     ])->create();
+}
+
+/**
+ * Контакт на главном меню типового диалога с прерванной (непустой)
+ * анкетой аренды, к которой можно вернуться.
+ */
+function joinPausedQuestionnaire(string $phone): BotSession
+{
+    test()->artisan('bot:install-default-scenario', ['--only' => BotScenarioTrigger::InboundMessage->value])->assertSuccessful();
+    $scenario = BotScenario::main();
+    $definition = $scenario->publishedDefinition();
+    $contact = Contact::factory()->withOpenSessionWindow()->create(['phone' => $phone]);
+
+    return BotSession::factory()->waitingAt('main_menu')->create([
+        'contact_id' => $contact->id,
+        'bot_scenario_id' => $scenario->id,
+        'scenario_version' => $scenario->published_version,
+        'current_node_fingerprint' => $definition->nodeFingerprint($definition->node('main_menu')),
+        'last_dialog_ended_at' => now()->subMinutes(5),
+        'paused_state' => [
+            'node_id' => 'collect_rental',
+            'fingerprint' => $definition->nodeFingerprint($definition->node('collect_rental')),
+            'state' => ['kind' => 'rental', 'phase' => 'collecting', 'attempts' => 0, 'transcript' => ['Сдаю трактор']],
+            'saved_at' => now()->toIso8601String(),
+        ],
+    ]);
 }
 
 describe('сквозной путь входящего сообщения', function () {
@@ -724,6 +867,112 @@ describe('сквозной путь входящего сообщения', func
             ->current_node_id->toBe('main_menu')
             ->state->toBeNull();
     });
+
+    test('возврат к прерванной анкете: «Возвращаемся к анкете…» и следующий вопрос — одно сообщение, повтор после сбоя задаёт тот же вопрос', function () {
+        ListingExtractionAgent::fake([
+            ['category' => 'Трактор', 'description' => 'Трактор в аренду', 'location' => null, 'price' => null,
+                'clarifying_question' => 'В каком городе и по какой цене сдаёте?', 'user_intent' => 'task'],
+            ['category' => 'Трактор', 'description' => 'Трактор в аренду', 'location' => null, 'price' => null,
+                'clarifying_question' => 'В каком городе и по какой цене сдаёте?', 'user_intent' => 'task'],
+        ]);
+        categoryNamed('Трактор');
+        test()->mock(MenuRouter::class)->shouldReceive('route')->andReturn(MenuRoute::toResume(RouteConfidence::High));
+        $failing = true;
+        fakeDereuForJoining(function () use (&$failing): bool {
+            return $failing;
+        });
+        connectedDereuCompany();
+        $session = joinPausedQuestionnaire('77015550105');
+        $contact = $session->contact;
+        $event = joinInboundEvent($contact, ['type' => 'text', 'payload' => ['body' => 'продолжим, трактор с водителем']]);
+        $resumed = app(BotReplyTexts::class)->get(BotReplyKey::NavResumed);
+
+        expect(fn () => runJoinJob($event))->toThrow(RequestException::class);
+
+        // Попытка уточнения не потрачена: отправка не ушла.
+        expect($session->fresh()->state['attempts'])->toBe(0);
+
+        $failing = false;
+        runJoinJob($event);
+
+        $sent = sentToDereu();
+        $first = $sent[0];
+        $retry = collect($sent)->last();
+        $question = $retry['payload']['body']['text'];
+        expect($question)->not->toStartWith($resumed)
+            ->and($first['payload']['body'])->toBe(['text' => $resumed."\n\n".$question])
+            ->and($first['payload']['action']['buttons'])->toBe([
+                ['type' => 'reply', 'reply' => ['id' => SupplierListingCollector::BUTTON_MENU, 'title' => SupplierListingCollector::BUTTON_MENU_TITLE]],
+            ])
+            ->and($retry['payload']['action']['buttons'])->toBe($first['payload']['action']['buttons'])
+            ->and($session->fresh()->state['attempts'])->toBe(1);
+    });
+
+    test('возврат к прерванной анкете без сбоев — одно сообщение и одна строка журнала', function () {
+        ListingExtractionAgent::fake([
+            ['category' => 'Трактор', 'description' => 'Трактор в аренду', 'location' => null, 'price' => null,
+                'clarifying_question' => 'В каком городе и по какой цене сдаёте?', 'user_intent' => 'task'],
+        ]);
+        categoryNamed('Трактор');
+        test()->mock(MenuRouter::class)->shouldReceive('route')->once()->andReturn(MenuRoute::toResume(RouteConfidence::High));
+        fakeDereuForJoining();
+        connectedDereuCompany();
+        $session = joinPausedQuestionnaire('77015550106');
+
+        runJoinJob(joinInboundEvent($session->contact, ['type' => 'text', 'payload' => ['body' => 'продолжим, трактор с водителем']]));
+
+        expect(sentToDereu())->toHaveCount(1)
+            ->and(ChannelMessage::query()->where('direction', ChannelDirection::Outbound)->count())->toBe(1)
+            ->and(sentToDereu()[0]['payload']['body']['text'])->toStartWith(app(BotReplyTexts::class)->get(BotReplyKey::NavResumed)."\n\n");
+    });
+
+    test('текстовый блок перед AI-блоком и его первое сообщение — одно сообщение, повтор после сбоя приносит то же', function () {
+        $failing = true;
+        fakeDereuForJoining(function () use (&$failing): bool {
+            return $failing;
+        });
+        connectedDereuCompany();
+        $scenario = BotScenario::factory()->published([
+            'nodes' => [
+                ['id' => 'start', 'type' => 'start'],
+                ['id' => 'main_menu', 'type' => 'buttons', 'text' => 'Что вас интересует?', 'options' => [
+                    ['id' => 'rent', 'title' => 'Сдаю технику'],
+                    ['id' => 'other', 'title' => 'Другое'],
+                ]],
+                ['id' => 'note', 'type' => 'text', 'text' => 'Хорошо, разместим объявление.'],
+                ['id' => 'collect', 'type' => 'ai', 'task' => 'collect_listing', 'kind' => 'rental', 'text' => 'Расскажите о технике: что, где и почём.'],
+                ['id' => 'other_branch', 'type' => 'text', 'text' => 'Другое'],
+            ],
+            'edges' => [
+                ['from' => 'start', 'output' => 'continue', 'to' => 'main_menu'],
+                ['from' => 'main_menu', 'output' => 'option:rent', 'to' => 'note'],
+                ['from' => 'main_menu', 'output' => 'option:other', 'to' => 'other_branch'],
+                ['from' => 'note', 'output' => 'continue', 'to' => 'collect'],
+            ],
+        ])->create();
+        $contact = Contact::factory()->withOpenSessionWindow()->create(['phone' => '77015550107']);
+        $session = BotSession::factory()->waitingAt('main_menu')->create([
+            'contact_id' => $contact->id,
+            'bot_scenario_id' => $scenario->id,
+            'scenario_version' => $scenario->published_version,
+        ]);
+        $event = joinInboundEvent($contact, joinPress('rent', 'Сдаю технику'));
+
+        expect(fn () => runJoinJob($event))->toThrow(RequestException::class);
+        expect($session->fresh())
+            ->current_node_id->toBe('main_menu')
+            ->state->toBeNull();
+
+        $failing = false;
+        runJoinJob($event);
+
+        $delivered = collect(sentToDereu())->last();
+        expect($delivered['payload']['body'])->toBe(['text' => "Хорошо, разместим объявление.\n\nРасскажите о технике: что, где и почём."])
+            ->and($delivered['payload']['action']['buttons'][0]['reply']['id'])->toBe(SupplierListingCollector::BUTTON_BACK)
+            ->and($session->fresh())
+            ->current_node_id->toBe('collect')
+            ->and($session->fresh()->state['phase'])->toBe('collecting');
+    });
 });
 
 describe('запуски сценариев и уведомления внутри ответа', function () {
@@ -844,6 +1093,50 @@ describe('запуски сценариев и уведомления внутр
             ->and($sent)->toHaveCount(3)
             ->and($sent[1]['payload'])->toBe(['body' => 'Принято.'])
             ->and($sent[2]['payload']['body'])->toBe(['text' => 'Что вас интересует?']);
+    });
+
+    test('текст запуска перед его действием: не ушёл — действие не выполнено, запуск — «ошибка»', function () {
+        $failing = false;
+        fakeDereuForJoining(function () use (&$failing): bool {
+            return $failing;
+        });
+        connectedDereuCompany();
+        $customer = Contact::factory()->withOpenSessionWindow()->create(['phone' => '77010000001']);
+        $supplier = Contact::factory()->withOpenSessionWindow()->create(['phone' => '77010000002']);
+        $request = CustomerRequest::factory()->create([
+            'contact_id' => $customer->id,
+            'listing_id' => Listing::factory()->published()->for($supplier, 'supplier')->create()->id,
+            'query_text' => 'нужен кран',
+        ]);
+        $scenario = BotScenario::factory()
+            ->trigger(BotScenarioTrigger::NewCustomerRequest)
+            ->published([
+                'nodes' => [
+                    ['id' => 'start', 'type' => 'start'],
+                    ['id' => 'ask', 'type' => 'message', 'text' => 'Возьмёте заказ?', 'channel' => 'session',
+                        'options' => [['id' => 'accept', 'title' => 'Согласиться']]],
+                    ['id' => 'note', 'type' => 'text', 'text' => 'Принимаем.'],
+                    ['id' => 'do_accept', 'type' => 'action', 'action' => 'accept_request'],
+                ],
+                'edges' => [
+                    ['from' => 'start', 'output' => 'continue', 'to' => 'ask'],
+                    ['from' => 'ask', 'output' => 'option:accept', 'to' => 'note'],
+                    ['from' => 'note', 'output' => 'continue', 'to' => 'do_accept'],
+                ],
+            ])
+            ->create();
+        $run = app(ScenarioRunner::class)->launch($scenario, $supplier, $request);
+        $failing = true;
+
+        // Раньше текст падал на своей отправке, и до действия запуск не
+        // доходил: заявка остаётся ждать ответа.
+        inBotReply($supplier, fn () => app(ScenarioRunReplyHandler::class)->handle(
+            $supplier,
+            new InboundMessage(replyId: "flow:{$run->token}:accept"),
+        ));
+
+        expect($run->refresh()->status)->toBe(ScenarioRunStatus::Failed)
+            ->and($request->fresh()->status)->toBe(CustomerRequestStatus::Pending);
     });
 
     test('уведомление поставщику по выбору заказчика уходит сразу и не склеивается, а ответ поставщика на его кнопку склеивается', function () {

@@ -686,6 +686,70 @@ describe('поиск после исхода: через час текст чи�
             ->and(AiOperation::query()->where('operation', AiOperationType::Transcription)->count())->toBe(1);
     });
 
+    test('пустой исход после ухода из списка мест текстом тоже устаревает: через час — навигатор и чистый лист', function () {
+        SearchQueryExtractionAgent::fake([
+            ['subject' => 'кран', 'location' => 'Абайский район', 'location_any' => false, 'clarifying_question' => ''],
+            ['subject' => 'вертолёт', 'location' => null, 'location_any' => true, 'clarifying_question' => ''],
+        ])->preventStrayPrompts();
+        locationNamed('Абайский район', locationNamed('Карагандинская область'));
+        locationNamed('Абайский район', locationNamed('область Абай'));
+        $scenario = typicalMainDialog();
+        $session = branchSessionInSearch($scenario, ['transcript' => []]);
+        $sent = recordOutbound();
+        test()->mock(MenuRouter::class)->shouldReceive('route')->once()
+            ->withArgs(fn (BotSession $s, $definition, array $node, InboundMessage $m): bool => $node['id'] === 'main_menu'
+                && $m->text === 'Здравствуйте')
+            ->andReturnNull();
+
+        pressInDialog($session, new InboundMessage(text: 'кран в Абайском районе'));
+        // Вместо выбора места — другой запрос, без места; он пуст.
+        pressInDialog($session, new InboundMessage(text: 'нужен вертолёт, место не важно'));
+
+        $this->travel(61)->minutes();
+
+        pressInDialog($session, new InboundMessage(text: 'Здравствуйте'));
+
+        expect(outboundTo($sent, $session->contact_id))->toBe([
+            ['list', 'Нашли несколько подходящих мест — уточните, в каком из них искать.'],
+            ['cta', 'Пока по такому запросу пусто. Попробуйте сказать иначе — вид техники и город, например: «кран 25 тонн, Шымкент». Или загляните в каталог по кнопке ниже — там все объявления, база пополняется каждый день. Чтобы вернуться в меню, напишите «меню».'],
+            ['buttons', MAIN_MENU_TEXT],
+        ])
+            ->and($session->fresh())
+            ->current_node_id->toBe('main_menu')
+            ->state->toBeNull();
+    });
+
+    test('голосовое, на расшифровке которого истёк час, скачивается и расшифровывается один раз', function () {
+        $this->freezeSecond();
+        SearchQueryExtractionAgent::fake([
+            ['subject' => 'экскаватор', 'location' => null, 'location_any' => true, 'clarifying_question' => ''],
+        ])->preventStrayPrompts();
+        Transcription::fake(['а экскаватор есть?']);
+        // Пока голосовое скачивается и расшифровывается, час с исхода истекает.
+        test()->mock(DereuMediaDownloader::class)
+            ->shouldReceive('download')->once()->with('voice-1')
+            ->andReturnUsing(function (): array {
+                $this->travel(2)->minutes();
+
+                return ['contents' => 'OGG-BYTES', 'mime_type' => 'audio/ogg'];
+            });
+        $scenario = typicalMainDialog();
+        $session = branchSessionInSearch($scenario, [
+            'query' => 'кран',
+            'outcome_at' => now()->subMinutes(59)->toIso8601String(),
+        ]);
+        $sent = recordOutbound();
+        test()->mock(MenuRouter::class)->shouldNotReceive('route');
+
+        pressInDialog($session, new InboundMessage(mediaType: ListingMediaType::Audio, mediaId: 'voice-1'));
+
+        // Свежесть решена один раз, до расшифровки: голосовое уточняет
+        // поиск, и движку расшифровывать его повторно не приходится.
+        expect(outboundTo($sent, $session->contact_id))->toHaveCount(1)
+            ->and($session->fresh()->state['subject'])->toBe('экскаватор')
+            ->and(AiOperation::query()->where('operation', AiOperationType::Transcription)->count())->toBe(1);
+    });
+
     test('кнопка «В меню» прежнего сообщения через час — по-прежнему просто меню', function () {
         SearchQueryExtractionAgent::fake()->preventStrayPrompts();
         $scenario = typicalMainDialog();

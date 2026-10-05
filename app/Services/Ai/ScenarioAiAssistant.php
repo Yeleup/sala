@@ -46,7 +46,9 @@ class ScenarioAiAssistant implements AiAssistant
 
         // A search gone stale lets the message go unread: the engine reads
         // it as a returning contact's message and transcribes a voice there
-        // — once, not here as well.
+        // — once, not here as well. Decided here, once per turn and before
+        // the transcription: asked again after it, the hour could run out in
+        // between, and the voice transcribed here would be paid for twice.
         if ($handler instanceof CustomerSearchAssistant && $handler->hasGoneStale($session, $message)) {
             return $this->settle($session, AiOutcome::Reroute);
         }

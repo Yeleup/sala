@@ -221,10 +221,6 @@ class CustomerSearchAssistant
      */
     public function resume(BotSession $session, array $node, InboundMessage $message): AiOutcome
     {
-        if ($this->hasGoneStale($session, $message)) {
-            return AiOutcome::Reroute;
-        }
-
         $state = is_array($session->state) ? $session->state : [];
         $state += $this->defaultState();
 
@@ -267,7 +263,7 @@ class CustomerSearchAssistant
             if ($this->isStaleRow($state['offered'], $message)) {
                 $this->messenger->sendText($session->contact, 'Этот вариант уже сняли с публикации. Сейчас поищем свежие.');
 
-                return $this->runSearch($session, $state, (string) $state['query'], countAttempt: false);
+                return $this->runSearch($session, $state, (string) $state['query'], countAttempt: false, rerun: true);
             }
         }
 
@@ -281,16 +277,21 @@ class CustomerSearchAssistant
     /**
      * Whether the search went stale for this message: its last outcome
      * went out more than OUTCOME_TTL_MINUTES ago, nothing was asked since,
-     * and the message is words — typed or spoken. The block then lets it
-     * go unread (AiOutcome::Reroute). Public so the AI entry point can tell
-     * before paying for a transcription the engine would repeat.
+     * and the message is words — typed or spoken. The search then lets it
+     * go unread (AiOutcome::Reroute) and resume() never sees it.
+     *
+     * Decided once per turn, by the AI entry point and before a voice is
+     * transcribed: asked again after the transcription, the hour could run
+     * out in between — and the engine would pay for the same voice twice.
      *
      * Only words go stale. A press — the catalog, «В меню», «Назад», a row
      * or button of an earlier message — answers what the bot showed, and a
-     * typed button title is the press spelled out. An open clarifying
-     * question or place list waits for its answer however late it comes:
-     * asking it clears the outcome time. A state written before outcomes
-     * were timed has no outcome time and reads as fresh.
+     * typed button title is the press spelled out. Anything the search asked
+     * and is waiting on — a clarifying question, a place list, a request to
+     * write in words, the invitation repeated after a service question —
+     * waits for its answer however late it comes: sending it stops the
+     * clock. A state written before outcomes were timed has no outcome time
+     * and reads as fresh.
      */
     public function hasGoneStale(BotSession $session, InboundMessage $message): bool
     {
@@ -336,7 +337,7 @@ class CustomerSearchAssistant
             // provider failure upstream) never spends a fruitless-search
             // attempt or a clarifying question.
             if ($input === '') {
-                $this->persist($session, $state);
+                $this->persist($session, $this->awaitingAnswer($state));
                 $this->messenger->sendButtons(
                     $session->contact,
                     'Голосовое не расшифровалось — бывает. Напишите, пожалуйста, текстом: что нужно и в каком городе?',
@@ -348,7 +349,7 @@ class CustomerSearchAssistant
         }
 
         if ($input === '') {
-            $this->persist($session, $state);
+            $this->persist($session, $this->awaitingAnswer($state));
             $this->messenger->sendButtons(
                 $session->contact,
                 'Напишите, пожалуйста, текстом: что нужно и в каком городе?',
@@ -372,7 +373,7 @@ class CustomerSearchAssistant
         if ($requirements === null) {
             $state['subject'] = null;
 
-            return $this->runSearch($session, $state, implode(', ', $state['transcript']));
+            return $this->runSearch($session, $state, implode(', ', $state['transcript']), rerun: true);
         }
 
         $intent = UserIntent::fromExtraction($requirements['user_intent'] ?? null);
@@ -409,6 +410,9 @@ class CustomerSearchAssistant
         if ($intent === UserIntent::ServiceQuestion && $state['service_questions'] < self::MAX_SERVICE_QUESTIONS) {
             $state['transcript'] = array_slice($state['transcript'], 0, $intakeMark);
             $state['service_questions']++;
+            // The step repeated below is a question too — after an outcome,
+            // the block's invitation.
+            $state = $this->awaitingAnswer($state);
             $this->persist($session, $state);
             $this->messenger->sendText($session->contact, $this->replyTexts->get(BotReplyKey::ServiceQuestion));
             $this->repeatCurrentStep($session, $state, $node);
@@ -474,9 +478,7 @@ class CustomerSearchAssistant
         if ($missing !== [] && $state['clarifications'] < self::MAX_CLARIFICATIONS) {
             $state['clarifications']++;
             $state['last_question'] = $this->clarifyingQuestion($requirements, $missing, $candidates);
-            // The bot now waits for an answer, not after an outcome: an
-            // answer to a question does not go stale (hasGoneStale()).
-            $state['outcome_at'] = null;
+            $state = $this->awaitingAnswer($state);
             $this->persist($session, $state);
             $this->messenger->sendButtons(
                 $session->contact,
@@ -494,26 +496,27 @@ class CustomerSearchAssistant
             $state['unresolved_location'] = (string) $requirements['location'];
         }
 
-        return $this->runSearch($session, $state, $this->composeQuery($state, $requirements), $location, refinement: true);
+        return $this->runSearch($session, $state, $this->composeQuery($state, $requirements), $location);
     }
 
     /**
-     * $refinement marks a search the intake settled from the customer's
-     * words: one that asks again for exactly what the last search ran with
-     * is not run again (see answerRepeatedSearch()). The other callers run
-     * regardless — the provider-failure fallback, a picked place, the
-     * restart after a stale row.
+     * A search that asks again for exactly what the last one ran with is
+     * not run again (see answerRepeatedSearch()) — whether the customer
+     * worded it or picked the place from a list. $rerun is for the two
+     * searches that run regardless: the provider-failure fallback keeps its
+     * former behaviour, and the restart after a stale row refreshes a
+     * выдача that went stale under the customer, not a repeated query.
      *
      * @param  array<string, mixed>  $state
      */
-    protected function runSearch(BotSession $session, array $state, string $query, ?Location $location = null, bool $countAttempt = true, bool $refinement = false): AiOutcome
+    protected function runSearch(BotSession $session, array $state, string $query, ?Location $location = null, bool $countAttempt = true, bool $rerun = false): AiOutcome
     {
         // A running search supersedes an open place pick list.
         $state['location_candidates'] = [];
 
         $location ??= $this->locations->detectInQuery($query);
 
-        if ($refinement && $this->repeatsLastSearch($state, $query, $location)) {
+        if (! $rerun && $this->repeatsLastSearch($state, $query, $location)) {
             return $this->answerRepeatedSearch($session, $state);
         }
 
@@ -545,13 +548,12 @@ class CustomerSearchAssistant
                 return $this->offerWiderCatalog($session, $state, $query, $location);
             }
 
-            $state = $this->withOutcome($state, $query, $location, found: false);
-            $this->persist($session, $state);
             $this->sendDeadEnd(
                 $session,
                 sprintf('Пока по такому запросу пусто. Попробуйте сказать иначе — вид техники и город, %s.', self::QUERY_EXAMPLE),
                 $this->kind($state),
             );
+            $this->persist($session, $this->withOutcome($state, $query, $location, found: false));
 
             return AiOutcome::InProgress;
         }
@@ -596,13 +598,6 @@ class CustomerSearchAssistant
      */
     private function answerRepeatedSearch(BotSession $session, array $state): AiOutcome
     {
-        $state['phase'] = 'searching';
-        // A question asked since is answered: the answer led back to the
-        // search that already ran.
-        $state['last_question'] = null;
-        $state['outcome_at'] = $state['last_search']['at'] ?? null;
-        $this->persist($session, $state);
-
         $this->messenger->sendButtons(
             $session->contact,
             ($state['last_search']['found'] ?? false)
@@ -611,13 +606,27 @@ class CustomerSearchAssistant
             [['id' => self::BUTTON_MENU, 'title' => self::BUTTON_MENU_TITLE]],
         );
 
+        // A question or list asked since is answered: the answer led back
+        // to the search that already ran, so the dialog is back after that
+        // search's outcome — on its clock.
+        $state = $this->closeOpenQuestion($state);
+        $state['outcome_at'] = $state['last_search']['at'] ?? null;
+        $this->persist($session, $state);
+
         return AiOutcome::InProgress;
     }
 
     /**
      * Record an outcome that leaves the search open: when it went out (the
      * stale clock, see hasGoneStale()) and what the search ran with (the
-     * repeat guard, see repeatsLastSearch()).
+     * repeat guard, see repeatsLastSearch()). The dialog now waits for a
+     * refinement after an outcome, whatever it waited for before.
+     *
+     * Called only once the outcome went out — by its catalog message or the
+     * fallback. A turn whose outcome reached nobody fails before anything
+     * is saved, and the webhook job retries it from the state before it: the
+     * retry searches and sends the outcome instead of taking it for shown,
+     * and neither the transcript nor a counter moves twice.
      *
      * @param  array<string, mixed>  $state
      * @return array<string, mixed>
@@ -626,8 +635,48 @@ class CustomerSearchAssistant
     {
         $now = now()->toIso8601String();
 
+        $state = $this->closeOpenQuestion($state);
         $state['outcome_at'] = $now;
         $state['last_search'] = $this->searchSignature($state, $query, $location) + ['found' => $found, 'at' => $now];
+
+        return $state;
+    }
+
+    /**
+     * Whatever the dialog asked before is answered: a clarifying question,
+     * a place list, a legacy result list or «Искать шире» from older
+     * messages. A search ran on the answer, so none of them is open any
+     * more — the extractor no longer reads the old question as the bot's
+     * last word, and a stale-clock check sees the dialog after an outcome.
+     *
+     * @param  array<string, mixed>  $state
+     * @return array<string, mixed>
+     */
+    private function closeOpenQuestion(array $state): array
+    {
+        $state['phase'] = 'searching';
+        $state['last_question'] = null;
+        $state['location_candidates'] = [];
+        $state['offered'] = [];
+        $state['expand_location_id'] = null;
+
+        return $state;
+    }
+
+    /**
+     * The search asks something and waits for the answer — a clarifying
+     * question, a place list, a request to write in words, the repeated
+     * invitation. The dialog is no longer after an outcome, so the answer
+     * does not go stale however late it comes (hasGoneStale()); the next
+     * outcome, or an answer that leads back to the last search, starts the
+     * clock again.
+     *
+     * @param  array<string, mixed>  $state
+     * @return array<string, mixed>
+     */
+    private function awaitingAnswer(array $state): array
+    {
+        $state['outcome_at'] = null;
 
         return $state;
     }
@@ -673,16 +722,7 @@ class CustomerSearchAssistant
      */
     protected function offerCatalogResults(BotSession $session, array $state, string $query, ?Location $location = null): AiOutcome
     {
-        $state['phase'] = 'searching';
         $state['query'] = $query;
-        // Новая выдача гасит легаси-список прошлых сообщений: его строки
-        // не должны выбираться после смены запроса. Открытый уточняющий
-        // вопрос тоже закрыт — поиск по нему уже выполнен.
-        $state['offered'] = [];
-        $state['expand_location_id'] = null;
-        $state['last_question'] = null;
-        $state = $this->withOutcome($state, $query, $location, found: true);
-        $this->persist($session, $state);
 
         $unresolvedLocation = $state['unresolved_location'] ?? null;
         $subject = ($state['subject'] ?? null) ?: $query;
@@ -700,6 +740,11 @@ class CustomerSearchAssistant
             $location,
             $this->kind($state),
         );
+
+        // Новая выдача гасит легаси-список прошлых сообщений: его строки
+        // не должны выбираться после смены запроса. Открытый уточняющий
+        // вопрос тоже закрыт — поиск по нему уже выполнен (withOutcome()).
+        $this->persist($session, $this->withOutcome($state, $query, $location, found: true));
 
         return AiOutcome::InProgress;
     }
@@ -736,11 +781,7 @@ class CustomerSearchAssistant
     {
         $parent = $location->parent;
 
-        $state['phase'] = 'searching';
         $state['query'] = $query;
-        $state['expand_location_id'] = null;
-        $state = $this->withOutcome($state, $query, $location, found: false);
-        $this->persist($session, $state);
 
         $this->sendCatalogCta(
             $session,
@@ -751,6 +792,8 @@ class CustomerSearchAssistant
             $parent,
             $this->kind($state),
         );
+
+        $this->persist($session, $this->withOutcome($state, $query, $location, found: false));
 
         return AiOutcome::InProgress;
     }
@@ -772,8 +815,7 @@ class CustomerSearchAssistant
         $state['location_candidates'] = $candidates->pluck('id')->all();
         $state['offered'] = [];
         $state['expand_location_id'] = null;
-        // An open list waits for its pick however late it comes.
-        $state['outcome_at'] = null;
+        $state = $this->awaitingAnswer($state);
         $this->persist($session, $state);
 
         $this->sendLocationChoices($session, $candidates);
@@ -875,6 +917,8 @@ class CustomerSearchAssistant
         $candidates = array_map(intval(...), (array) $state['location_candidates']);
         $picked = $this->matchLocationChoice($candidates, $message);
 
+        // The pick settles the place: a pick that lands on the very search
+        // that already ran is answered like any repeated query.
         if ($picked !== null && (string) $state['query'] !== '') {
             $state['phase'] = 'searching';
             $state['location_id'] = $picked->id;
@@ -964,15 +1008,12 @@ class CustomerSearchAssistant
             return $this->offerWiderCatalog($session, $state, $query, $location);
         }
 
-        $state['phase'] = 'searching';
-        $state['expand_location_id'] = null;
-        $state = $this->withOutcome($state, $query, $location, found: false);
-        $this->persist($session, $state);
         $this->sendDeadEnd(
             $session,
             sprintf('По всей стране пока пусто — шире уже некуда. Попробуйте сказать иначе, %s.', self::QUERY_EXAMPLE),
             $this->kind($state),
         );
+        $this->persist($session, $this->withOutcome($state, $query, $location, found: false));
 
         return AiOutcome::InProgress;
     }

@@ -119,6 +119,50 @@ describe('форма объявления по виду', function () {
             ->repair_place->toBe(RepairPlace::Both);
     });
 
+    test('стаж водителя в админке — только целые годы: дробь отклоняет форма, а не база', function () {
+        // Колонка стажа целочисленная: «0.2» (пара месяцев) раньше доходило
+        // до базы и роняло создание с 500 — теперь это ошибка поля.
+        Livewire::test(CreateListing::class)
+            ->fillForm([
+                'contact_id' => Contact::factory()->create()->id,
+                'kind' => ListingKind::Driver->value,
+                'person_name' => 'Иван',
+                'experience_years' => '0.2',
+            ])
+            ->call('create')
+            ->assertHasFormErrors(['experience_years' => ['integer']])
+            ->assertSee('Стаж указывается целым числом лет; меньше года — 0.');
+
+        expect(Listing::exists())->toBeFalse();
+
+        Livewire::test(CreateListing::class)
+            ->fillForm([
+                'contact_id' => Contact::factory()->create()->id,
+                'kind' => ListingKind::Driver->value,
+                'person_name' => 'Иван',
+                'experience_years' => '3',
+            ])
+            ->call('create')
+            ->assertHasNoFormErrors();
+
+        expect(Listing::sole())
+            ->kind->toBe(ListingKind::Driver)
+            ->experience_years->toBe(3);
+    });
+
+    test('дробный стаж на редактировании не сохраняется — объявление остаётся прежним', function () {
+        $driver = Listing::factory()->driver()->create(['title' => 'Машинист крана', 'experience_years' => 8]);
+
+        Livewire::test(EditListing::class, ['record' => $driver->id])
+            ->fillForm(['title' => 'Машинист автокрана', 'experience_years' => '2.5'])
+            ->call('save')
+            ->assertHasFormErrors(['experience_years' => ['integer']]);
+
+        expect($driver->refresh())
+            ->title->toBe('Машинист крана')
+            ->experience_years->toBe(8);
+    });
+
     test('«создать ещё» сохраняет выбранный вид', function () {
         // Мастера, как и технику, заводят пачками: три объявления ремонта
         // подряд не должны требовать выбирать вид заново.

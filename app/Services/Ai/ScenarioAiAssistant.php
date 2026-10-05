@@ -42,9 +42,20 @@ class ScenarioAiAssistant implements AiAssistant
 
     public function resume(BotSession $session, array $node, InboundMessage $message): AiOutcome
     {
+        $handler = $this->handlerFor($node);
+
+        // A search gone stale lets the message go unread: the engine reads
+        // it as a returning contact's message and transcribes a voice there
+        // — once, not here as well. Decided here, once per turn and before
+        // the transcription: asked again after it, the hour could run out in
+        // between, and the voice transcribed here would be paid for twice.
+        if ($handler instanceof CustomerSearchAssistant && $handler->hasGoneStale($session, $message)) {
+            return $this->settle($session, AiOutcome::Reroute);
+        }
+
         $message = $this->resolveVoice($session, $message);
 
-        return $this->settle($session, $this->handlerFor($node)->resume($session, $node, $message));
+        return $this->settle($session, $handler->resume($session, $node, $message));
     }
 
     /**
@@ -92,9 +103,9 @@ class ScenarioAiAssistant implements AiAssistant
 
     /**
      * Any release of the contact — through «continue», to the menu they
-     * asked for or one level up on «Назад» — leaves no working memory
-     * behind: the next block starts from nothing, whichever way this one
-     * ended.
+     * asked for, one level up on «Назад» or back to the engine with the
+     * message unread — leaves no working memory behind: the next block
+     * starts from nothing, whichever way this one ended.
      */
     private function settle(BotSession $session, AiOutcome $outcome): AiOutcome
     {

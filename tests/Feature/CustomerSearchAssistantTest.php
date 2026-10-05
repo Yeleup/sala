@@ -63,17 +63,24 @@ function fakeSearchMessenger(): MockInterface
 }
 
 /**
+ * Последняя строка исходов, после которых поиск остаётся открытым: кнопки
+ * «В меню» на сообщении с URL-кнопкой нет, и выход называется словами.
+ */
+const SEARCH_MENU_HINT = ' Чтобы вернуться в меню, напишите «меню».';
+
+/**
  * Вторая половина текста выдачи — то, что раньше было отдельным сообщением
  * с кнопкой каталога: где смотреть варианты, что запрос уже подставлен и
- * что выбор там же отправляет заявку.
+ * что выбор там же отправляет заявку, — и подсказка про «меню».
  */
-const SEARCH_RESULTS_CTA_TAIL = ' Смотрите их в каталоге по кнопке ниже — запрос уже подставлен, там же поиск и фильтры. Выберите подходящий — заявка сразу уйдёт поставщику.';
+const SEARCH_RESULTS_CTA_TAIL = ' Смотрите их в каталоге по кнопке ниже — запрос уже подставлен, там же поиск и фильтры. Выберите подходящий — заявка сразу уйдёт поставщику.'.SEARCH_MENU_HINT;
 
 /**
  * Вторая половина текста тупика: каталог целиком, без обещания
- * подставленного запроса — именно он только что дал пусто.
+ * подставленного запроса — именно он только что дал пусто, — и подсказка
+ * про «меню».
  */
-const SEARCH_DEAD_END_CTA_TAIL = ' Или загляните в каталог по кнопке ниже — там все объявления, база пополняется каждый день.';
+const SEARCH_DEAD_END_CTA_TAIL = ' Или загляните в каталог по кнопке ниже — там все объявления, база пополняется каждый день.'.SEARCH_MENU_HINT;
 
 /**
  * Исход поиска — выдача, тупик, «посмотрите шире» — приходит ОДНИМ
@@ -192,7 +199,7 @@ test('a complete query hands the ranked results off to the web catalog', functio
     // Одно сообщение вместо пары «заголовок с «В меню» + кнопка каталога»:
     // с 01.10.2026 сессионные сообщения сверх бесплатной квоты платные.
     $messenger->shouldReceive('sendCtaUrl')->once()->withArgs(
-        fn (Contact $contact, string $text, string $button, string $url): bool => $text === 'Нашлись варианты по запросу «кран 25 тонн» в г.Шымкент. Смотрите их в каталоге по кнопке ниже — запрос уже подставлен, там же поиск и фильтры. Выберите подходящий — заявка сразу уйдёт поставщику.'
+        fn (Contact $contact, string $text, string $button, string $url): bool => $text === 'Нашлись варианты по запросу «кран 25 тонн» в г.Шымкент. Смотрите их в каталоге по кнопке ниже — запрос уже подставлен, там же поиск и фильтры. Выберите подходящий — заявка сразу уйдёт поставщику. Чтобы вернуться в меню, напишите «меню».'
             && $button === 'Все варианты'
             && str_contains($url, "/customer/{$contact->id}/listings")
             && str_contains(urldecode($url), 'q=кран 25 тонн')
@@ -373,7 +380,7 @@ test('a fruitless search asks to rephrase in one message with the catalog button
     // Без подстановки запроса: именно он только что дал пусто. Кнопки
     // «В меню» нет — выход в меню словами, а новый текст уточняет поиск.
     $messenger->shouldReceive('sendCtaUrl')->once()->withArgs(
-        fn (Contact $contact, string $text, string $button, string $url): bool => $text === 'Пока по такому запросу пусто. Попробуйте сказать иначе — вид техники и город, например: «кран 25 тонн, Шымкент». Или загляните в каталог по кнопке ниже — там все объявления, база пополняется каждый день.'
+        fn (Contact $contact, string $text, string $button, string $url): bool => $text === 'Пока по такому запросу пусто. Попробуйте сказать иначе — вид техники и город, например: «кран 25 тонн, Шымкент». Или загляните в каталог по кнопке ниже — там все объявления, база пополняется каждый день. Чтобы вернуться в меню, напишите «меню».'
             && $button === 'Открыть каталог'
             && str_contains($url, "/customer/{$contact->id}/listings")
             && ! str_contains($url, '&q=')
@@ -652,7 +659,7 @@ test('пустое поддерево места присылает ссылку
     // Одно сообщение: WhatsApp не смешивает reply-кнопки и URL-кнопку,
     // поэтому «В меню» здесь нет — только кнопка каталога.
     $messenger->shouldReceive('sendCtaUrl')->once()->withArgs(
-        fn (Contact $contact, string $text, string $button, string $url): bool => $text === 'В «с.Карааул» пока пусто, но база пополняется каждый день. Посмотрите шире: в каталоге по кнопке ниже уже подставлены ваш запрос и «Абайский район».'
+        fn (Contact $contact, string $text, string $button, string $url): bool => $text === 'В «с.Карааул» пока пусто, но база пополняется каждый день. Посмотрите шире: в каталоге по кнопке ниже уже подставлены ваш запрос и «Абайский район». Чтобы вернуться в меню, напишите «меню».'
             && $button === 'Открыть каталог'
             && str_contains($url, "location_id={$district->id}")
             && str_contains(urldecode($url), 'q=кран')
@@ -710,7 +717,7 @@ test('старая кнопка при пустом уровне выше при
     $messenger = fakeSearchMessenger();
     expectSearchOutcome(
         $messenger,
-        'В «Абайский район» пока пусто, но база пополняется каждый день. Посмотрите шире: в каталоге по кнопке ниже уже подставлены ваш запрос и «область Абай».',
+        'В «Абайский район» пока пусто, но база пополняется каждый день. Посмотрите шире: в каталоге по кнопке ниже уже подставлены ваш запрос и «область Абай». Чтобы вернуться в меню, напишите «меню».',
         CustomerSearchAssistant::CATALOG_BUTTON_DEAD_END,
         "location_id={$region->id}",
     );
@@ -889,7 +896,7 @@ test('the exhausted clarification limit searches without the place and labels th
     // Место так и не разрешилось — CTA приходит без префилла места, слово
     // остаётся в строке поиска ссылки.
     $messenger->shouldReceive('sendCtaUrl')->once()->withArgs(
-        fn (Contact $contact, string $text, string $button, string $url): bool => $text === 'Место «Сарыагаш» не нашлось в справочнике, поэтому подобрали варианты без учёта места. Смотрите их в каталоге по кнопке ниже — запрос уже подставлен, там же поиск и фильтры. Выберите подходящий — заявка сразу уйдёт поставщику.'
+        fn (Contact $contact, string $text, string $button, string $url): bool => $text === 'Место «Сарыагаш» не нашлось в справочнике, поэтому подобрали варианты без учёта места. Смотрите их в каталоге по кнопке ниже — запрос уже подставлен, там же поиск и фильтры. Выберите подходящий — заявка сразу уйдёт поставщику. Чтобы вернуться в меню, напишите «меню».'
             && $button === 'Все варианты'
             && str_contains(urldecode($url), 'q=погрузчик, Сарыагаш')
             && ! str_contains($url, 'location_id='),
@@ -980,7 +987,7 @@ test('picking a place with an empty subtree sends the wider catalog link', funct
     $messenger = fakeSearchMessenger();
     expectSearchOutcome(
         $messenger,
-        'В «Абайский район» пока пусто, но база пополняется каждый день. Посмотрите шире: в каталоге по кнопке ниже уже подставлены ваш запрос и «Карагандинская область».',
+        'В «Абайский район» пока пусто, но база пополняется каждый день. Посмотрите шире: в каталоге по кнопке ниже уже подставлены ваш запрос и «Карагандинская область». Чтобы вернуться в меню, напишите «меню».',
         CustomerSearchAssistant::CATALOG_BUTTON_DEAD_END,
         "location_id={$regionA->id}",
     );
@@ -2123,3 +2130,584 @@ describe('пустой раздел поиска', function () {
         'без подстановки' => ['Водителей пока нет. Заходите через неделю.', 'Водителей пока нет. Заходите через неделю.'],
     ]);
 });
+
+// Поиск после исхода (issue #18). Исход — выдача, «пусто», «посмотрите
+// шире»: сообщения, после которых поиск остаётся открытым. Час после него
+// текст уточняет запрос; позже — уже нет: блок отпускает сообщение
+// движку непрочитанным, и тот читает его как от вернувшегося клиента.
+
+/**
+ * Опубликованный автокран в Шымкенте — выдача по «кран 25 тонн, Шымкент»
+ * непустая. Описание и цена заданы явно: случайные из фабрики меняют
+ * состав выдачи.
+ */
+function craneInShymkent(): Listing
+{
+    return Listing::factory()->published()->create([
+        'category_id' => categoryNamed('Автокран')->id,
+        'description' => 'Кран 25 тонн',
+        'location_id' => locationNamed('г.Шымкент')->id,
+        'price' => 'договорная',
+    ]);
+}
+
+test('an hour past the outcome a text is let go unread instead of refining the old query', function () {
+    // Второго разбора нет: preventStrayPrompts уронил бы тест.
+    SearchQueryExtractionAgent::fake([fullSearchIntake()])->preventStrayPrompts();
+    craneInShymkent();
+
+    $messenger = fakeSearchMessenger();
+    expectResultsCta($messenger);
+    $messenger->shouldNotReceive('sendButtons', 'sendText', 'sendList');
+
+    $session = searchSession();
+    app(ScenarioAiAssistant::class)
+        ->resume($session, customerAiNode(), new InboundMessage(text: 'нужен кран 25 тонн, Шымкент'));
+
+    $this->travel(61)->minutes();
+
+    $outcome = app(ScenarioAiAssistant::class)
+        ->resume($session, customerAiNode(), new InboundMessage(text: 'Сәлеметсіз бе'));
+
+    // Ни разбора, ни повторной выдачи: память поиска стёрта, и следующий
+    // поиск начнётся с чистого листа, без прежнего запроса.
+    expect($outcome)->toBe(AiOutcome::Reroute)
+        ->and($session->refresh()->state)->toBeNull();
+});
+
+test('within the hour after the outcome a text still refines the search', function (int $minutes) {
+    $this->freezeSecond();
+    SearchQueryExtractionAgent::fake([
+        fullSearchIntake(),
+        fullSearchIntake(['subject' => 'экскаватор']),
+    ])->preventStrayPrompts();
+    craneInShymkent();
+
+    $messenger = fakeSearchMessenger();
+    $messenger->shouldReceive('sendCtaUrl')->twice();
+    $messenger->shouldNotReceive('sendButtons', 'sendText', 'sendList');
+
+    $session = searchSession();
+    app(ScenarioAiAssistant::class)
+        ->resume($session, customerAiNode(), new InboundMessage(text: 'нужен кран 25 тонн, Шымкент'));
+
+    $this->travel($minutes)->minutes();
+
+    $outcome = app(ScenarioAiAssistant::class)
+        ->resume($session, customerAiNode(), new InboundMessage(text: 'а экскаватор есть?'));
+
+    expect($outcome)->toBe(AiOutcome::InProgress)
+        ->and($session->refresh()->state['subject'])->toBe('экскаватор')
+        ->and($session->state['transcript'])->toBe(['нужен кран 25 тонн, Шымкент', 'а экскаватор есть?']);
+})->with([
+    'полчаса' => [30],
+    'ровно час' => [60],
+]);
+
+test('a clarifying question asked after the outcome is answered however late the answer comes', function () {
+    SearchQueryExtractionAgent::fake([
+        fullSearchIntake(),
+        fullSearchIntake(['location' => null, 'clarifying_question' => 'В каком городе нужен кран?']),
+        fullSearchIntake(['location' => 'Астана']),
+    ])->preventStrayPrompts();
+    craneInShymkent();
+    locationNamed('г.Астана');
+
+    $messenger = fakeSearchMessenger();
+    $messenger->shouldReceive('sendCtaUrl')->twice();
+    $messenger->shouldReceive('sendButtons')->once()->withArgs(
+        fn (Contact $contact, string $text): bool => $text === 'В каком городе нужен кран?',
+    );
+
+    $session = searchSession();
+    $assistant = app(ScenarioAiAssistant::class);
+    $assistant->resume($session, customerAiNode(), new InboundMessage(text: 'нужен кран 25 тонн, Шымкент'));
+
+    $this->travel(10)->minutes();
+    $assistant->resume($session, customerAiNode(), new InboundMessage(text: 'а в другом городе?'));
+
+    $this->travel(3)->hours();
+    $outcome = $assistant->resume($session, customerAiNode(), new InboundMessage(text: 'в Астане'));
+
+    // Последним бот спросил, а не показал исход, — ответ остаётся ответом:
+    // поиск по Астане выполнен (пусто — попытка потрачена).
+    expect($outcome)->toBe(AiOutcome::InProgress)
+        ->and($session->refresh()->state['attempts'])->toBe(1)
+        ->and($session->state['clarifications'])->toBe(1)
+        ->and($session->state['transcript'])->toBe(['нужен кран 25 тонн, Шымкент', 'а в другом городе?', 'в Астане']);
+});
+
+test('a place pick list offered after the outcome waits for the pick hours later', function () {
+    SearchQueryExtractionAgent::fake([
+        fullSearchIntake(),
+        fullSearchIntake(['location' => 'Абайский район']),
+    ])->preventStrayPrompts();
+    craneInShymkent();
+    $districtA = locationNamed('Абайский район', locationNamed('Карагандинская область'));
+    locationNamed('Абайский район', locationNamed('область Абай'));
+
+    $messenger = fakeSearchMessenger();
+    $messenger->shouldReceive('sendCtaUrl')->twice();
+    $messenger->shouldReceive('sendList')->once();
+
+    $session = searchSession();
+    $assistant = app(ScenarioAiAssistant::class);
+    $assistant->resume($session, customerAiNode(), new InboundMessage(text: 'нужен кран 25 тонн, Шымкент'));
+
+    $this->travel(10)->minutes();
+    $assistant->resume($session, customerAiNode(), new InboundMessage(text: 'а в Абайском районе?'));
+
+    $this->travel(3)->hours();
+    // Порядковый номер набран текстом — это тоже выбор из списка.
+    $outcome = $assistant->resume($session, customerAiNode(), new InboundMessage(text: '1'));
+
+    expect($outcome)->toBe(AiOutcome::InProgress)
+        ->and($session->refresh()->state['location_id'])->toBe($districtA->id)
+        ->and($session->state['phase'])->toBe('searching');
+});
+
+test('presses and typed button titles after a stale outcome keep their own handling', function (InboundMessage $message) {
+    SearchQueryExtractionAgent::fake()->preventStrayPrompts();
+    fakeSearchMessenger()->shouldNotReceive('sendText', 'sendButtons', 'sendList', 'sendCtaUrl');
+
+    $session = searchSession([
+        'transcript' => ['нужен кран 25 тонн, Шымкент'],
+        'query' => 'кран 25 тонн, Шымкент',
+        'outcome_at' => now()->subHours(3)->toIso8601String(),
+    ]);
+
+    $outcome = app(ScenarioAiAssistant::class)->resume($session, customerAiNode(), $message);
+
+    expect($outcome)->toBe(AiOutcome::Menu);
+})->with([
+    'кнопка «В меню» прежнего сообщения' => [new InboundMessage(text: 'В меню', replyId: CustomerSearchAssistant::BUTTON_MENU)],
+    'набранное «В меню»' => [new InboundMessage(text: 'в меню')],
+    'старая кнопка «Назад»' => [new InboundMessage(text: 'Назад', replyId: CustomerSearchAssistant::BUTTON_BACK)],
+    'набранное «Назад»' => [new InboundMessage(text: 'назад')],
+]);
+
+test('a search state written before outcomes were timed reads as fresh', function () {
+    SearchQueryExtractionAgent::fake([fullSearchIntake(['subject' => 'экскаватор'])])->preventStrayPrompts();
+    locationNamed('г.Шымкент');
+
+    $messenger = fakeSearchMessenger();
+    $messenger->shouldReceive('sendCtaUrl')->once();
+
+    $session = searchSession([
+        'transcript' => ['нужен кран 25 тонн, Шымкент'],
+        'query' => 'кран 25 тонн, Шымкент',
+        'subject' => 'кран 25 тонн',
+    ]);
+
+    $this->travel(5)->hours();
+
+    $outcome = app(ScenarioAiAssistant::class)
+        ->resume($session, customerAiNode(), new InboundMessage(text: 'а экскаватор есть?'));
+
+    expect($outcome)->toBe(AiOutcome::InProgress)
+        ->and($session->refresh()->state['subject'])->toBe('экскаватор');
+});
+
+test('a voice message to a stale search is left for the engine to transcribe', function () {
+    SearchQueryExtractionAgent::fake()->preventStrayPrompts();
+    // Расшифрует движок, когда прочтёт сообщение как от вернувшегося
+    // клиента; здесь — ни скачивания, ни второй оплаченной транскрипции.
+    test()->mock(DereuMediaDownloader::class)->shouldNotReceive('download');
+    fakeSearchMessenger()->shouldNotReceive('sendText', 'sendButtons', 'sendList', 'sendCtaUrl');
+
+    $session = searchSession([
+        'transcript' => ['нужен кран 25 тонн, Шымкент'],
+        'query' => 'кран 25 тонн, Шымкент',
+        'outcome_at' => now()->subHours(2)->toIso8601String(),
+    ]);
+
+    $outcome = app(ScenarioAiAssistant::class)
+        ->resume($session, customerAiNode(), new InboundMessage(mediaType: ListingMediaType::Audio, mediaId: 'voice-1'));
+
+    expect($outcome)->toBe(AiOutcome::Reroute);
+});
+
+test('a message not about the search ends the block for the main menu, spending nothing', function (array $state) {
+    // Модель вернула прежние предмет и место — как и было в реальном
+    // диалоге, — но намерение «не про поиск» важнее: поиска нет.
+    SearchQueryExtractionAgent::fake([fullSearchIntake(['user_intent' => 'off_topic'])])->preventStrayPrompts();
+    // Ни реплики, ни выдачи: меню приходит от движка тем же ходом.
+    fakeSearchMessenger()->shouldNotReceive('sendText', 'sendButtons', 'sendList', 'sendCtaUrl');
+
+    $session = searchSession($state);
+    $outcome = app(CustomerSearchAssistant::class)
+        ->resume($session, customerAiNode(), new InboundMessage(text: 'ааааааа'));
+
+    expect($outcome)->toBe(AiOutcome::Menu)
+        ->and($session->refresh()->state['transcript'])->toBe($state['transcript'])
+        ->and($session->state['attempts'])->toBe($state['attempts'])
+        ->and($session->state['clarifications'])->toBe($state['clarifications']);
+})->with([
+    'на приглашение' => [fn (): array => ['transcript' => [], 'attempts' => 0, 'clarifications' => 0]],
+    'в ответ на уточняющий вопрос' => [fn (): array => [
+        'transcript' => ['нужен кран 25 тонн'], 'attempts' => 0, 'clarifications' => 1,
+        'last_question' => 'В каком городе нужен кран?',
+    ]],
+    'после пустой выдачи в пределах часа' => [fn (): array => [
+        'transcript' => ['нужен кран 25 тонн, Шымкент'], 'query' => 'кран 25 тонн, Шымкент',
+        'attempts' => 1, 'clarifications' => 0, 'outcome_at' => now()->subMinutes(10)->toIso8601String(),
+    ]],
+]);
+
+test('the same query is not searched again: one line with «В меню» instead of the выдача', function (string $sameSubject) {
+    SearchQueryExtractionAgent::fake([
+        fullSearchIntake(),
+        fullSearchIntake(['subject' => $sameSubject]),
+    ])->preventStrayPrompts();
+    craneInShymkent();
+
+    $messenger = fakeSearchMessenger();
+    // Ровно одна выдача: повтор её не пересылает.
+    expectResultsCta($messenger);
+    $messenger->shouldReceive('sendButtons')->once()->withArgs(
+        fn (Contact $contact, string $text, array $buttons): bool => $text === 'Варианты по этому запросу уже показаны выше. Чтобы поискать другое, назовите другую технику или другое место — или скажите иначе.'
+            && $buttons === [['id' => CustomerSearchAssistant::BUTTON_MENU, 'title' => CustomerSearchAssistant::BUTTON_MENU_TITLE]],
+    );
+    $messenger->shouldNotReceive('sendText', 'sendList');
+
+    $session = searchSession();
+    $assistant = app(CustomerSearchAssistant::class);
+    $assistant->resume($session, customerAiNode(), new InboundMessage(text: 'нужен кран 25 тонн, Шымкент'));
+    $outcomeAt = $session->refresh()->state['outcome_at'];
+
+    $this->travel(5)->minutes();
+    $outcome = $assistant->resume($session, customerAiNode(), new InboundMessage(text: 'здравствуйте, кран 25 тонн в Шымкенте нужен'));
+
+    expect($outcome)->toBe(AiOutcome::InProgress)
+        ->and($session->refresh()->state['attempts'])->toBe(0)
+        // Реплика о повторе — не исход: час считается от настоящей выдачи.
+        ->and($session->state['outcome_at'])->toBe($outcomeAt);
+})->with([
+    'слово в слово' => ['кран 25 тонн'],
+    'другим регистром и с лишними пробелами' => [' Кран  25 тонн'],
+]);
+
+test('the same empty query spends no second fruitless attempt', function () {
+    SearchQueryExtractionAgent::fake([
+        fullSearchIntake(['subject' => 'вертолёт', 'location' => null, 'location_any' => true]),
+        fullSearchIntake(['subject' => 'вертолёт', 'location' => null, 'location_any' => true]),
+    ])->preventStrayPrompts();
+
+    $messenger = fakeSearchMessenger();
+    expectDeadEndCta($messenger, 'Пока по такому запросу пусто. Попробуйте сказать иначе — вид техники и город, например: «кран 25 тонн, Шымкент».');
+    $messenger->shouldReceive('sendButtons')->once()->withArgs(
+        fn (Contact $contact, string $text, array $buttons): bool => $text === 'По этому запросу уже искали — пока пусто. Попробуйте назвать другую технику или другое место — или скажите иначе.'
+            && $buttons === [['id' => CustomerSearchAssistant::BUTTON_MENU, 'title' => CustomerSearchAssistant::BUTTON_MENU_TITLE]],
+    );
+
+    $session = searchSession();
+    $assistant = app(CustomerSearchAssistant::class);
+    $assistant->resume($session, customerAiNode(), new InboundMessage(text: 'нужен вертолёт, место не важно'));
+    $outcome = $assistant->resume($session, customerAiNode(), new InboundMessage(text: 'вертолёт'));
+
+    expect($outcome)->toBe(AiOutcome::InProgress)
+        ->and($session->refresh()->state['attempts'])->toBe(1);
+});
+
+test('a changed subject, place or travel filter searches again', function (string $kind, array $first, array $second) {
+    SearchQueryExtractionAgent::fake([$first, $second])->preventStrayPrompts();
+    locationNamed('г.Шымкент');
+    locationNamed('г.Астана');
+
+    $messenger = fakeSearchMessenger();
+    $messenger->shouldReceive('sendCtaUrl')->twice();
+    $messenger->shouldNotReceive('sendButtons', 'sendText', 'sendList');
+
+    $session = searchSession(['kind' => $kind]);
+    $node = customerAiNode() + ['kind' => $kind];
+    $assistant = app(CustomerSearchAssistant::class);
+    $assistant->resume($session, $node, new InboundMessage(text: 'первый запрос'));
+    $outcome = $assistant->resume($session, $node, new InboundMessage(text: 'уточнение'));
+
+    // Оба поиска пусты: вторая попытка потрачена на новый запрос.
+    expect($outcome)->toBe(AiOutcome::InProgress)
+        ->and($session->refresh()->state['attempts'])->toBe(2);
+})->with([
+    'другой предмет' => ['rental', fullSearchIntake(), fullSearchIntake(['subject' => 'экскаватор'])],
+    'другое место' => ['rental', fullSearchIntake(), fullSearchIntake(['location' => 'Астана'])],
+    'место стало любым' => ['rental', fullSearchIntake(), fullSearchIntake(['location' => null, 'location_any' => true])],
+    'понадобился выезд' => [
+        'repair',
+        fullSearchIntake(['subject' => 'ремонт гидравлики', 'needs_travel' => null]),
+        fullSearchIntake(['subject' => 'ремонт гидравлики', 'needs_travel' => true]),
+    ],
+]);
+
+test('the answer to a repeated query does not restart the outcome clock', function () {
+    $this->freezeSecond();
+    SearchQueryExtractionAgent::fake([fullSearchIntake(), fullSearchIntake()])->preventStrayPrompts();
+    locationNamed('г.Шымкент');
+
+    $messenger = fakeSearchMessenger();
+    $messenger->shouldReceive('sendCtaUrl')->once();
+    $messenger->shouldReceive('sendButtons')->once();
+
+    $session = searchSession();
+    $assistant = app(ScenarioAiAssistant::class);
+    $assistant->resume($session, customerAiNode(), new InboundMessage(text: 'нужен кран 25 тонн, Шымкент'));
+
+    $this->travel(50)->minutes();
+    $assistant->resume($session, customerAiNode(), new InboundMessage(text: 'кран 25 тонн, Шымкент'));
+
+    $this->travel(11)->minutes();
+    $outcome = $assistant->resume($session, customerAiNode(), new InboundMessage(text: 'кран 25 тонн, Шымкент'));
+
+    expect($outcome)->toBe(AiOutcome::Reroute);
+});
+
+test('a question answered back into the last query points back to its outcome', function () {
+    $this->freezeSecond();
+    SearchQueryExtractionAgent::fake([
+        fullSearchIntake(),
+        fullSearchIntake(['location' => null, 'clarifying_question' => 'В каком городе нужен кран?']),
+        fullSearchIntake(),
+    ])->preventStrayPrompts();
+    locationNamed('г.Шымкент');
+
+    $messenger = fakeSearchMessenger();
+    $messenger->shouldReceive('sendCtaUrl')->once();
+    $messenger->shouldReceive('sendButtons')->twice();
+
+    $session = searchSession();
+    $assistant = app(ScenarioAiAssistant::class);
+    $assistant->resume($session, customerAiNode(), new InboundMessage(text: 'нужен кран 25 тонн, Шымкент'));
+    $outcomeAt = $session->refresh()->state['outcome_at'];
+
+    $this->travel(10)->minutes();
+    $assistant->resume($session, customerAiNode(), new InboundMessage(text: 'а в другом городе?'));
+
+    $this->travel(2)->hours();
+    $outcome = $assistant->resume($session, customerAiNode(), new InboundMessage(text: 'нет, всё-таки Шымкент'));
+
+    // Ответ на вопрос через два часа — по-прежнему ответ; он привёл к уже
+    // выполненному поиску, и вопрос закрыт, а часы снова идут от его исхода.
+    expect($outcome)->toBe(AiOutcome::InProgress)
+        ->and($session->refresh()->state['last_question'])->toBeNull()
+        ->and($session->state['outcome_at'])->toBe($outcomeAt)
+        ->and($assistant->resume($session, customerAiNode(), new InboundMessage(text: 'алло')))->toBe(AiOutcome::Reroute);
+});
+
+test('the outcomes that keep the search open say how to leave for the menu, within the body limit', function (Closure $arrange, string $catalogSentence) {
+    $long = str_repeat('очень длинная фраза ', 30);
+    $arrange($long);
+
+    $messenger = fakeSearchMessenger();
+    $messenger->shouldReceive('sendCtaUrl')->once()->withArgs(
+        fn (Contact $contact, string $text): bool => mb_strlen($text) <= 1024
+            // Обрезана цитата слов заказчика, а не фразы после неё.
+            && ! str_contains($text, $long)
+            && str_contains($text, $catalogSentence)
+            && str_ends_with($text, $catalogSentence.SEARCH_MENU_HINT),
+    );
+
+    $session = searchSession(['clarifications' => 3]);
+    $outcome = app(CustomerSearchAssistant::class)
+        ->resume($session, customerAiNode(), new InboundMessage(text: 'кран '.$long));
+
+    expect($outcome)->toBe(AiOutcome::InProgress);
+})->with([
+    'выдача с длинным запросом в месте с длинным названием' => [
+        function (string $long): void {
+            $place = locationNamed(mb_substr('г.'.str_repeat('Длинноназванный', 20), 0, 255));
+            SearchQueryExtractionAgent::fake([fullSearchIntake(['subject' => 'кран '.$long, 'location' => $place->name])]);
+            Listing::factory()->published()->create([
+                'category_id' => categoryNamed('Автокран')->id, 'description' => 'Кран', 'location_id' => $place->id, 'price' => 'договорная',
+            ]);
+        },
+        ' Смотрите их в каталоге по кнопке ниже — запрос уже подставлен, там же поиск и фильтры. Выберите подходящий — заявка сразу уйдёт поставщику.',
+    ],
+    'выдача без учёта ненайденного длинного места' => [
+        function (string $long): void {
+            SearchQueryExtractionAgent::fake([fullSearchIntake(['subject' => 'кран', 'location' => $long])]);
+            Listing::factory()->published()->create([
+                'category_id' => categoryNamed('Автокран')->id, 'description' => 'Кран', 'price' => 'договорная',
+            ]);
+        },
+        ' Смотрите их в каталоге по кнопке ниже — запрос уже подставлен, там же поиск и фильтры. Выберите подходящий — заявка сразу уйдёт поставщику.',
+    ],
+    '«посмотрите шире» между местами с длинными названиями' => [
+        function (string $long): void {
+            $parent = locationNamed(mb_substr('область '.str_repeat('Широкая', 40), 0, 255));
+            $place = locationNamed(mb_substr('с.'.str_repeat('Пустое', 50), 0, 255), $parent);
+            SearchQueryExtractionAgent::fake([fullSearchIntake(['subject' => 'кран '.$long, 'location' => $place->name])]);
+        },
+        ' уже подставлены ваш запрос и «'.mb_substr('область '.str_repeat('Широкая', 40), 0, 255).'».',
+    ],
+    'пусто' => [
+        function (string $long): void {
+            SearchQueryExtractionAgent::fake([fullSearchIntake(['subject' => 'вертолёт '.$long, 'location' => null, 'location_any' => true])]);
+        },
+        ' Или загляните в каталог по кнопке ниже — там все объявления, база пополняется каждый день.',
+    ],
+]);
+
+test('an outcome that reached nobody is not taken for shown: the retried turn searches and sends it', function (array $intake, Closure $expectOutcome, int $attempts) {
+    $this->freezeSecond();
+    SearchQueryExtractionAgent::fake([$intake, $intake])->preventStrayPrompts();
+    craneInShymkent();
+
+    $messenger = fakeSearchMessenger();
+    // Первая попытка хода: не ушли ни сообщение с кнопкой каталога, ни
+    // прежняя форма исхода с «В меню».
+    $messenger->shouldReceive('sendCtaUrl')->once()->andThrow(new RuntimeException('Dereu недоступен'));
+    $messenger->shouldReceive('sendButtons')->once()->andThrow(new RuntimeException('Dereu недоступен'));
+    // Повтор хода джобом вебхука: уходит сам исход, а не «уже показаны».
+    $expectOutcome($messenger);
+
+    $session = searchSession();
+    $message = new InboundMessage(text: 'нужен кран 25 тонн, Шымкент');
+
+    expect(fn () => app(ScenarioAiAssistant::class)->resume($session, customerAiNode(), $message))
+        ->toThrow(RuntimeException::class);
+
+    // Ничего не записано: ни запрос, ни попытка, ни время исхода.
+    expect($session->refresh()->state['transcript'])->toBe([])
+        ->and($session->state['attempts'])->toBe(0)
+        ->and($session->state['outcome_at'] ?? null)->toBeNull();
+
+    $this->travel(1)->minutes();
+    $outcome = app(ScenarioAiAssistant::class)->resume($session->refresh(), customerAiNode(), $message);
+
+    // Час идёт от исхода, который дошёл.
+    expect($outcome)->toBe(AiOutcome::InProgress)
+        ->and($session->refresh()->state['transcript'])->toBe(['нужен кран 25 тонн, Шымкент'])
+        ->and($session->state['attempts'])->toBe($attempts)
+        ->and($session->state['outcome_at'])->toBe(now()->toIso8601String());
+})->with([
+    'выдача' => [
+        fullSearchIntake(),
+        fn (MockInterface $messenger) => expectResultsCta($messenger),
+        0,
+    ],
+    'пусто' => [
+        fullSearchIntake(['subject' => 'вертолёт', 'location' => null, 'location_any' => true]),
+        fn (MockInterface $messenger) => expectDeadEndCta($messenger, 'Пока по такому запросу пусто. Попробуйте сказать иначе — вид техники и город, например: «кран 25 тонн, Шымкент».'),
+        1,
+    ],
+]);
+
+test('an outcome closes whatever the search was waiting on', function (Closure $waiting) {
+    SearchQueryExtractionAgent::fake([
+        fullSearchIntake(['subject' => 'вертолёт', 'location' => null, 'location_any' => true]),
+    ])->preventStrayPrompts();
+    $listing = craneInShymkent();
+
+    $messenger = fakeSearchMessenger();
+    $messenger->shouldReceive('sendCtaUrl')->once();
+
+    $session = searchSession(['transcript' => ['нужен кран'], 'query' => 'кран', ...$waiting($listing)]);
+    app(ScenarioAiAssistant::class)
+        ->resume($session, customerAiNode(), new InboundMessage(text: 'нужен вертолёт, место не важно'));
+
+    // После «пусто» диалог ждёт уточнения после исхода — и только его: ни
+    // списка, ни прежнего вопроса, которые продолжали бы поиск через часы.
+    expect($session->refresh()->state)
+        ->phase->toBe('searching')
+        ->location_candidates->toBe([])
+        ->offered->toBe([])
+        ->last_question->toBeNull()
+        ->outcome_at->not->toBeNull();
+})->with([
+    'список одноимённых мест' => [fn (Listing $listing): array => [
+        'phase' => 'locating',
+        'location_candidates' => [
+            locationNamed('Абайский район', locationNamed('Карагандинская область'))->id,
+            locationNamed('Абайский район', locationNamed('область Абай'))->id,
+        ],
+    ]],
+    'чат-список прежней выдачи' => [fn (Listing $listing): array => ['phase' => 'choosing', 'offered' => [$listing->id]]],
+    'уточняющий вопрос' => [fn (Listing $listing): array => ['clarifications' => 1, 'last_question' => 'В каком городе нужен кран?']],
+]);
+
+test('picking from the list the very place the last search ran in is a repeated query too', function () {
+    SearchQueryExtractionAgent::fake([
+        fullSearchIntake(['location' => 'Абайский район']),
+        fullSearchIntake(['location' => 'Абайский район']),
+    ])->preventStrayPrompts();
+    $districtA = locationNamed('Абайский район', locationNamed('Карагандинская область'));
+
+    $messenger = fakeSearchMessenger();
+    // Ссылка в каталог одна — от первого поиска: выбор того же места поиск
+    // не повторяет и попытку не тратит.
+    $messenger->shouldReceive('sendCtaUrl')->once();
+    $messenger->shouldReceive('sendList')->once();
+    $messenger->shouldReceive('sendButtons')->once()->withArgs(
+        fn (Contact $contact, string $text, array $buttons): bool => $text === 'По этому запросу уже искали — пока пусто. Попробуйте назвать другую технику или другое место — или скажите иначе.'
+            && $buttons === [['id' => CustomerSearchAssistant::BUTTON_MENU, 'title' => CustomerSearchAssistant::BUTTON_MENU_TITLE]],
+    );
+
+    $session = searchSession();
+    $assistant = app(ScenarioAiAssistant::class);
+    // Место однозначно: поиск идёт сразу, выбор не запоминается.
+    $assistant->resume($session, customerAiNode(), new InboundMessage(text: 'кран 25 тонн в Абайском районе'));
+
+    // То же название теперь делят два места — уточнение приходит списком.
+    locationNamed('Абайский район', locationNamed('область Абай'));
+    $assistant->resume($session, customerAiNode(), new InboundMessage(text: 'кран 25 тонн, Абайский район'));
+
+    $outcome = $assistant->resume($session, customerAiNode(), new InboundMessage(replyId: "search_location:{$districtA->id}"));
+
+    expect($outcome)->toBe(AiOutcome::InProgress)
+        ->and($session->refresh()->state['attempts'])->toBe(1)
+        ->and($session->state['phase'])->toBe('searching')
+        ->and($session->state['location_candidates'])->toBe([])
+        ->and($session->state['location_id'])->toBe($districtA->id);
+});
+
+test('a request the search sent after the outcome is answered however late the answer comes', function (Closure $prompted, array $between, int $texts) {
+    SearchQueryExtractionAgent::fake([
+        fullSearchIntake(),
+        ...$between,
+        fullSearchIntake(['subject' => 'экскаватор']),
+    ])->preventStrayPrompts();
+    craneInShymkent();
+
+    $messenger = fakeSearchMessenger();
+    $messenger->shouldReceive('sendCtaUrl')->twice();
+    // Просьба написать словами или повтор приглашения — ждущий вопрос.
+    $messenger->shouldReceive('sendButtons')->once();
+    $messenger->shouldReceive('sendText')->times($texts);
+
+    $session = searchSession();
+    $assistant = app(ScenarioAiAssistant::class);
+    $assistant->resume($session, customerAiNode(), new InboundMessage(text: 'нужен кран 25 тонн, Шымкент'));
+
+    $this->travel(10)->minutes();
+    // Сообщение готовится до того, как ассистент собран: моки медиа должны
+    // попасть в него.
+    $message = $prompted();
+    app(ScenarioAiAssistant::class)->resume($session, customerAiNode(), $message);
+
+    $this->travel(3)->hours();
+    $outcome = app(ScenarioAiAssistant::class)->resume($session, customerAiNode(), new InboundMessage(text: 'а экскаватор есть?'));
+
+    // Последним бот спросил, а не показал исход: ответ уточняет поиск.
+    expect($outcome)->toBe(AiOutcome::InProgress)
+        ->and($session->refresh()->state['subject'])->toBe('экскаватор');
+})->with([
+    'фото без подписи — просьба написать словами' => [
+        fn (): InboundMessage => new InboundMessage(mediaType: ListingMediaType::Photo, mediaId: 'img-1'),
+        [],
+        0,
+    ],
+    'нераспознанное голосовое — просьба написать текстом' => [
+        function (): InboundMessage {
+            test()->mock(DereuMediaDownloader::class)->shouldReceive('download')->once()
+                ->andThrow(new RuntimeException('media gone'));
+
+            return new InboundMessage(mediaType: ListingMediaType::Audio, mediaId: 'voice-1');
+        },
+        [],
+        0,
+    ],
+    'вопрос о сервисе — повтор приглашения' => [
+        fn (): InboundMessage => new InboundMessage(text: 'это платно?'),
+        [fullSearchIntake(['user_intent' => 'service_question'])],
+        1,
+    ],
+]);

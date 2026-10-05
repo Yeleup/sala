@@ -31,3 +31,15 @@ test('схема агента уходит в строгом режиме и ц�
     'маршрутизация текста из меню' => fn (): object => new MenuRouteAgent(['option:supplier' => '«Кто вы?» → «Поставщик»'], 'вернуться к прерванной анкете (Аренда спецтехники)'),
     'маршрутизация текста из меню (продолжать нечего)' => fn (): object => new MenuRouteAgent(['option:supplier' => '«Кто вы?» → «Поставщик»']),
 ]);
+
+test('намерение «не про поиск» есть только у разбора поискового запроса', function () {
+    $intents = fn (object $agent): array => (new ObjectSchema($agent->schema(new JsonSchemaTypeFactory), strict: true))
+        ->toSchema()['properties']['user_intent']['enum'];
+
+    // Сбор объявления поставщика не меняется: его разбору новое значение
+    // не предлагается, и модель физически не может его вернуть.
+    foreach ([ListingKind::Rental, ListingKind::Repair, ListingKind::Driver] as $kind) {
+        expect($intents(new ListingExtractionAgent($kind)))->toBe(['task', 'abandoned', 'service_question', 'menu'])
+            ->and($intents(new SearchQueryExtractionAgent($kind)))->toBe(['task', 'abandoned', 'service_question', 'menu', 'off_topic']);
+    }
+});

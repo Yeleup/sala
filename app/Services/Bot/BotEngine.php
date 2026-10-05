@@ -174,7 +174,9 @@ class BotEngine
         }
 
         if ($type === BotNodeType::AiInput) {
-            $this->resumeAi($session, $contact, $definition, $node, $message);
+            if ($this->resumeAi($session, $contact, $definition, $node, $message) === AiOutcome::Reroute) {
+                $this->rerouteAsReturning($session, $contact, $scenario, $definition, $message);
+            }
 
             return;
         }
@@ -1074,19 +1076,45 @@ class BotEngine
     }
 
     /**
+     * Reroute is left to the caller: the block let the message go unread,
+     * and only handle(), which holds the live message and the scenario, can
+     * open the next dialog with it. Only a customer search returns it, so
+     * the other caller — a paused questionnaire, always a supplier's — never
+     * gets it back.
+     *
      * @param  array<string, mixed>  $node
      */
-    private function resumeAi(BotSession $session, Contact $contact, ScenarioDefinition $definition, array $node, InboundMessage $message): void
+    private function resumeAi(BotSession $session, Contact $contact, ScenarioDefinition $definition, array $node, InboundMessage $message): AiOutcome
     {
         $outcome = $this->aiAssistant->resume($session, $node, $message);
 
         if ($outcome === AiOutcome::InProgress) {
             $session->save();
 
-            return;
+            return $outcome;
         }
 
-        $this->advance($session, $contact, $definition, $this->nodeAfterAi($definition, $node, $outcome));
+        if ($outcome !== AiOutcome::Reroute) {
+            $this->advance($session, $contact, $definition, $this->nodeAfterAi($definition, $node, $outcome));
+        }
+
+        return $outcome;
+    }
+
+    /**
+     * The AI block let the message go unread: what it waited on went stale
+     * (a customer search an hour past its outcome). The dialog it held is
+     * over, and the message opens the next one exactly as a returning
+     * contact's message does — the navigator reads it: a named section
+     * takes it straight into its branch with the text carried over, a
+     * greeting or an unclear text gets the menu. A voice is transcribed
+     * here, once: the block did not read it.
+     */
+    private function rerouteAsReturning(BotSession $session, Contact $contact, BotScenario $scenario, ScenarioDefinition $definition, InboundMessage $message): void
+    {
+        $this->endDialog($session);
+
+        $this->openDialog($session, $contact, $scenario, $definition, $this->readableMessage($session, $message) ?? $message);
     }
 
     /**

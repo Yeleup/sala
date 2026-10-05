@@ -301,6 +301,26 @@ test('missing data triggers the clarifying question suggested by the extractor',
         ->and(Listing::count())->toBe(0);
 });
 
+test('ответ разбора «не про поиск» в анкете поставщика остаётся данными объявления, как раньше', function () {
+    // Схема разбора объявления этого значения не предлагает (оно только
+    // у поиска заказчика); а если бы модель его всё же вернула, анкета
+    // ведёт себя как до его появления: сообщение — данные, а не выход.
+    ListingExtractionAgent::fake([
+        fullExtraction(['price' => null, 'clarifying_question' => 'Какая цена или тариф за смену?', 'clarifying_field' => 'price', 'user_intent' => 'off_topic']),
+    ]);
+    $session = collectorSession();
+
+    fakeCollectorMessenger()->shouldReceive('sendButtons')->once()
+        ->withArgs(fn (Contact $to, string $text, array $buttons) => $text === 'Какая цена или тариф за смену?');
+
+    $outcome = app(SupplierListingCollector::class)
+        ->resume($session, supplierAiNode(), new InboundMessage(text: 'Сдаю трактор в Шымкенте'));
+
+    expect($outcome)->toBe(AiOutcome::InProgress)
+        ->and($session->fresh()->state['attempts'])->toBe(1)
+        ->and($session->fresh()->state['transcript'])->toBe(['Сдаю трактор в Шымкенте']);
+});
+
 test('вопрос модели про уже заполненное поле заменяется встроенным вопросом о недостающем', function () {
     // Модель регулярно переспрашивает уже извлечённое: сужает несколько
     // категорий техники до одной, заново спрашивает ответ, данный кнопкой,

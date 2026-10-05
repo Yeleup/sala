@@ -356,6 +356,9 @@ describe('после завершившейся ветки меню приход
     ]);
 
     test('кнопка схемы из более раннего сообщения ведёт сразу в свою ветку — без главного меню', function (InboundMessage $press, array $expected, ?string $node) {
+        // В разделе аренды есть что искать — иначе ветка поиска вместо
+        // приглашения ответила бы, что раздел пуст.
+        Listing::factory()->published()->create(['description' => 'Автокран 25 тонн', 'price' => '20000 тг/ч']);
         $scenario = typicalMainDialog();
         $session = branchSessionOnSummary($scenario);
         silentNavigator()->shouldNotReceive('route');
@@ -901,6 +904,9 @@ describe('«Старт» ведёт в анкету, а меню открыва�
     }
 
     test('кнопка из более раннего сообщения ведёт в свою ветку, не начиная анкету от «Старта»', function (bool $silentForADay, InboundMessage $press, array $expected, string $node) {
+        // Чужое опубликованное объявление аренды: в разделе есть что искать,
+        // иначе ветка поиска вместо приглашения ответила бы, что раздел пуст.
+        Listing::factory()->published()->create(['description' => 'Автокран 25 тонн', 'price' => '20000 тг/ч']);
         $scenario = entryQuestionnaireDialog();
         $session = branchSessionOnSummary($scenario);
         $draftId = $session->state['draft_id'];
@@ -932,7 +938,7 @@ describe('«Старт» ведёт в анкету, а меню открыва�
             // Прерванная анкета осталась — как после нажатия на показанном меню.
             ->and($session->fresh()->paused_state['node_id'])->toBe('collect_rental')
             ->and($session->fresh()->paused_state['state']['draft_id'])->toBe($draftId)
-            ->and(Listing::count())->toBe(1);
+            ->and(Listing::query()->where('contact_id', $session->contact_id)->count())->toBe(1);
     })->with([
         'ветка завершилась' => [false],
         'сутки тишины' => [true],
@@ -948,4 +954,122 @@ describe('«Старт» ведёт в анкету, а меню открыва�
             'search_rental',
         ],
     ]);
+});
+
+/**
+ * Ответ пустого раздела водителей — в типовом диалоге объявлений нет вовсе.
+ */
+const EMPTY_DRIVER_SECTION_TEXT = 'Раздел «Водитель / машинист» только наполняется — объявлений пока нет. Загляните позже: база пополняется каждый день.';
+
+describe('пустой раздел поиска отвечается одним сообщением, каким бы путём ни вёл вход', function () {
+    // Запрос не собирается: ни приглашения, ни разбора требований (строгий
+    // фейк разборщика упал бы на любом вызове), ни кнопки каталога. Дальше —
+    // как у любой завершившейся ветки: диалог закончен, меню не приходит.
+    function expectEmptyDriverSectionOnly(ArrayObject $sent, BotSession $session, int $before = 0): void
+    {
+        expect(array_slice(outboundTo($sent, $session->contact_id), $before))->toBe([['text', EMPTY_DRIVER_SECTION_TEXT]])
+            ->and($session->fresh())
+            ->current_node_id->toBeNull()
+            ->state->toBeNull()
+            ->and(AiOperation::query()->where('operation', AiOperationType::SearchQueryExtraction)->count())->toBe(0);
+        SearchQueryExtractionAgent::assertNeverPrompted();
+    }
+
+    test('кнопка «Я ищу водителя» на показанном экране раздела', function () {
+        $scenario = typicalMainDialog();
+        $session = branchSessionAt($scenario, 'menu_driver');
+        silentNavigator()->shouldNotReceive('route');
+        $sent = recordOutbound();
+
+        pressInDialog($session, new InboundMessage(text: 'Я ищу водителя', replyId: 'driver_seek'));
+
+        expectEmptyDriverSectionOnly($sent, $session);
+    });
+
+    test('слова в меню, по которым навигатор уверенно ведёт в ветку вместе с текстом', function () {
+        $scenario = typicalMainDialog();
+        $session = branchSessionAt($scenario, 'main_menu');
+        test()->mock(MenuRouter::class)->shouldReceive('route')->once()
+            ->andReturn(MenuRoute::toOption(['node_id' => 'menu_driver', 'option_id' => 'driver_seek'], RouteConfidence::High));
+        $sent = recordOutbound();
+
+        pressInDialog($session, new InboundMessage(text: 'нужен машинист на экскаватор, Шымкент'));
+
+        expectEmptyDriverSectionOnly($sent, $session);
+    });
+
+    test('подтверждённое «Перейти» на предложение навигатора', function () {
+        $scenario = typicalMainDialog();
+        $session = branchSessionAt($scenario, 'main_menu');
+        test()->mock(MenuRouter::class)->shouldReceive('route')->once()
+            ->andReturn(MenuRoute::toOption(['node_id' => 'menu_driver', 'option_id' => 'driver_seek'], RouteConfidence::Medium));
+        $sent = recordOutbound();
+
+        pressInDialog($session, new InboundMessage(text: 'водитель нужен'));
+
+        expect(outboundTo($sent, $session->contact_id))->toBe([['buttons', 'Похоже, вам нужно «Я ищу водителя». Перейти?']]);
+
+        pressInDialog($session, new InboundMessage(text: 'Перейти', replyId: 'nav_confirm'));
+
+        expectEmptyDriverSectionOnly($sent, $session, before: 1);
+    });
+
+    test('кнопка «Я ищу водителя» из более раннего сообщения после закончившегося диалога', function () {
+        $scenario = typicalMainDialog();
+        $session = branchSessionAt($scenario, 'menu_driver');
+        $session->update(['current_node_id' => null]);
+        silentNavigator()->shouldNotReceive('route');
+        $sent = recordOutbound();
+
+        pressInDialog($session, new InboundMessage(text: 'Я ищу водителя', replyId: 'driver_seek'));
+
+        expectEmptyDriverSectionOnly($sent, $session);
+    });
+
+    test('первое сообщение нового диалога, которое навигатор прочёл как поиск водителя', function () {
+        $scenario = typicalMainDialog();
+        $session = branchSessionAt($scenario, 'main_menu');
+        $session->update(['current_node_id' => null]);
+        test()->mock(MenuRouter::class)->shouldReceive('route')->once()
+            ->andReturn(MenuRoute::toOption(['node_id' => 'menu_driver', 'option_id' => 'driver_seek'], RouteConfidence::High));
+        $sent = recordOutbound();
+
+        pressInDialog($session, new InboundMessage(text: 'ищу водителя самосвала'));
+
+        // Знакомому контакту ни приветствия, ни меню — сразу ответ раздела.
+        expectEmptyDriverSectionOnly($sent, $session);
+    });
+
+    test('следующее сообщение после ответа пустого раздела даёт главное меню, как вернувшемуся', function () {
+        $scenario = typicalMainDialog();
+        $session = branchSessionAt($scenario, 'menu_driver');
+        silentNavigator();
+        $sent = recordOutbound();
+
+        pressInDialog($session, new InboundMessage(text: 'Я ищу водителя', replyId: 'driver_seek'));
+        pressInDialog($session, new InboundMessage(text: 'а когда появятся?'));
+
+        expect(outboundTo($sent, $session->contact_id))->toBe([
+            ['text', EMPTY_DRIVER_SECTION_TEXT],
+            ['buttons', MAIN_MENU_TEXT],
+        ])
+            ->and($session->fresh()->current_node_id)->toBe('main_menu');
+    });
+
+    test('появилось хоть одно опубликованное объявление водителя — «Я ищу водителя» приглашает как раньше', function () {
+        Listing::factory()->driver()->published()->create();
+        $scenario = typicalMainDialog();
+        $session = branchSessionAt($scenario, 'menu_driver');
+        silentNavigator()->shouldNotReceive('route');
+        $sent = recordOutbound();
+
+        pressInDialog($session, new InboundMessage(text: 'Я ищу водителя', replyId: 'driver_seek'));
+
+        expect(outboundTo($sent, $session->contact_id))->toBe([
+            ['buttons', 'Какой водитель или машинист нужен и в каком городе? Можно написать или наговорить голосом.'],
+        ])
+            ->and($session->fresh())
+            ->current_node_id->toBe('search_driver')
+            ->state->kind->toBe('driver');
+    });
 });

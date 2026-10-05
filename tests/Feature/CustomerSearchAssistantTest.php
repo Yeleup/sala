@@ -4,11 +4,13 @@ use App\Ai\Agents\SearchQueryExtractionAgent;
 use App\Enums\AiOperationStatus;
 use App\Enums\AiOperationType;
 use App\Enums\AiOutcome;
+use App\Enums\BotReplyKey;
 use App\Enums\CustomerRequestStatus;
 use App\Enums\ListingMediaType;
 use App\Enums\RepairPlace;
 use App\Exceptions\OutboundRequestBlocked;
 use App\Models\AiOperation;
+use App\Models\BotReplyText;
 use App\Models\BotSession;
 use App\Models\Contact;
 use App\Models\CustomerRequest;
@@ -18,6 +20,7 @@ use App\Models\WhatsappTemplate;
 use App\Services\Ai\CtaLinkBuilder;
 use App\Services\Ai\CustomerSearchAssistant;
 use App\Services\Ai\ScenarioAiAssistant;
+use App\Services\Bot\BotReplyTexts;
 use App\Services\Bot\InboundMessage;
 use App\Services\DereuMediaDownloader;
 use App\Services\DereuMessenger;
@@ -149,6 +152,9 @@ function fullSearchIntake(array $overrides = []): array
 }
 
 test('entering the block asks what the customer needs, with «Назад» one level up', function () {
+    // Приглашение получает только раздел, где есть что искать (пустой —
+    // см. «пустой раздел поиска» ниже).
+    searchableListingOf('rental');
     // Пока ничего не написано, единственная кнопка — «Назад» на экран
     // раздела: «В меню» под первым сообщением читалось как «Далее».
     $messenger = fakeSearchMessenger();
@@ -165,6 +171,7 @@ test('entering the block asks what the customer needs, with «Назад» one l
 });
 
 test('the search AI block sends the operator text instead of the built-in prompt', function () {
+    searchableListingOf('rental');
     $session = searchSession();
 
     fakeSearchMessenger()->shouldReceive('sendButtons')->once()
@@ -1789,6 +1796,7 @@ test('a service question while a results list is open sends a hint instead of re
 });
 
 test('вход в ветку поиска водителя пишет вид в state и здоровается по-своему', function () {
+    searchableListingOf('driver');
     $messenger = fakeSearchMessenger();
     $messenger->shouldReceive('sendButtons')->once()->withArgs(
         fn (Contact $contact, string $text, array $buttons): bool => str_contains($text, 'водитель или машинист')
@@ -1965,4 +1973,153 @@ test('a photo as the first message asks for text and keeps «Назад»', func
         ->resume(searchSession(), customerAiNode(), new InboundMessage(mediaType: ListingMediaType::Photo, mediaId: 'img-1'));
 
     expect($outcome)->toBe(AiOutcome::InProgress);
+});
+
+/**
+ * Объявление вида, которое поиск видит: опубликовано и не истекло. Тексты
+ * заданы явно — случайные описание и цена фабрики не должны влиять на
+ * исход теста.
+ */
+function searchableListingOf(string $kind): Listing
+{
+    $factory = match ($kind) {
+        'repair' => Listing::factory()->repair(),
+        'driver' => Listing::factory()->driver(),
+        default => Listing::factory()->state(['description' => 'Автокран 25 тонн', 'price' => '20000 тг/ч']),
+    };
+
+    return $factory->published()->create();
+}
+
+describe('пустой раздел поиска', function () {
+    beforeEach(function () {
+        SearchQueryExtractionAgent::fake()->preventStrayPrompts();
+        app(BotReplyTexts::class)->flush();
+    });
+
+    afterEach(fn () => app(BotReplyTexts::class)->flush());
+
+    test('вход в ветку без единого объявления её вида сразу говорит, что раздел наполняется, и завершает блок', function (string $kind, string $section) {
+        // Заказчик ещё ничего не написал, а ответить на любой его запрос
+        // нечем: одно честное сообщение вместо приглашения, без кнопки
+        // каталога — каталог этого вида пуст так же.
+        $messenger = fakeSearchMessenger();
+        $messenger->shouldReceive('sendText')->once()->withArgs(
+            fn (Contact $contact, string $text): bool => $text === "Раздел «{$section}» только наполняется — объявлений пока нет. Загляните позже: база пополняется каждый день.",
+        );
+        $messenger->shouldNotReceive('sendButtons', 'sendCtaUrl', 'sendList');
+        $session = BotSession::factory()->waitingAt('search')->create(['state' => null]);
+
+        $outcome = app(ScenarioAiAssistant::class)->start($session, customerAiNode() + ['kind' => $kind]);
+
+        expect($outcome)->toBe(AiOutcome::Completed)
+            ->and($session->fresh()->state)->toBeNull()
+            ->and(AiOperation::count())->toBe(0);
+        SearchQueryExtractionAgent::assertNeverPrompted();
+    })->with([
+        'аренда' => ['rental', 'Аренда спецтехники'],
+        'ремонт' => ['repair', 'Ремонт спецтехники'],
+        'водитель' => ['driver', 'Водитель / машинист'],
+    ]);
+
+    test('текст, перенесённый навигатором в пустой раздел, не разбирается — ответ тот же', function () {
+        $messenger = fakeSearchMessenger();
+        $messenger->shouldReceive('sendText')->once()->withArgs(
+            fn (Contact $contact, string $text): bool => str_starts_with($text, 'Раздел «Водитель / машинист» только наполняется'),
+        );
+        $messenger->shouldNotReceive('sendButtons', 'sendCtaUrl', 'sendList');
+        $session = BotSession::factory()->waitingAt('search')->create(['state' => null]);
+
+        $outcome = app(ScenarioAiAssistant::class)->start(
+            $session,
+            customerAiNode() + ['kind' => 'driver'],
+            new InboundMessage(text: 'нужен машинист экскаватора в Шымкенте'),
+        );
+
+        // Ни разбора требований, ни уточняющего вопроса, ни потраченной
+        // безрезультатной попытки: блок закончился, не начав поиск.
+        expect($outcome)->toBe(AiOutcome::Completed)
+            ->and($session->fresh()->state)->toBeNull()
+            ->and(AiOperation::count())->toBe(0);
+        SearchQueryExtractionAgent::assertNeverPrompted();
+    });
+
+    test('собственное приглашение блока тоже заменяется: звать с запросом, на который нечем ответить, незачем', function () {
+        $messenger = fakeSearchMessenger();
+        $messenger->shouldReceive('sendText')->once()->withArgs(
+            fn (Contact $contact, string $text): bool => str_starts_with($text, 'Раздел «Водитель / машинист» только наполняется'),
+        );
+        $messenger->shouldNotReceive('sendButtons', 'sendCtaUrl', 'sendList');
+
+        $outcome = app(CustomerSearchAssistant::class)->start(
+            BotSession::factory()->waitingAt('search')->create(['state' => null]),
+            customerAiNode() + ['kind' => 'driver', 'text' => 'Какой водитель вам нужен?'],
+        );
+
+        expect($outcome)->toBe(AiOutcome::Completed);
+    });
+
+    test('объявления, которых поиск не видит, и объявления других видов раздел не наполняют', function () {
+        Listing::factory()->driver()->create();
+        Listing::factory()->driver()->pendingModeration()->create();
+        Listing::factory()->driver()->rejected()->create();
+        Listing::factory()->driver()->archived()->create();
+        Listing::factory()->driver()->expired()->create();
+        searchableListingOf('rental');
+        searchableListingOf('repair');
+
+        $messenger = fakeSearchMessenger();
+        $messenger->shouldReceive('sendText')->once()->withArgs(
+            fn (Contact $contact, string $text): bool => str_starts_with($text, 'Раздел «Водитель / машинист» только наполняется'),
+        );
+        $messenger->shouldNotReceive('sendButtons', 'sendCtaUrl', 'sendList');
+
+        $outcome = app(CustomerSearchAssistant::class)->start(
+            BotSession::factory()->waitingAt('search')->create(['state' => null]),
+            customerAiNode() + ['kind' => 'driver'],
+        );
+
+        expect($outcome)->toBe(AiOutcome::Completed);
+    });
+
+    test('ветка, у вида которой есть объявление, приглашает как раньше', function (string $kind, string $greeting) {
+        searchableListingOf($kind);
+
+        $messenger = fakeSearchMessenger();
+        $messenger->shouldReceive('sendButtons')->once()->withArgs(
+            fn (Contact $contact, string $text, array $buttons): bool => $text === $greeting
+                && $buttons === [['id' => CustomerSearchAssistant::BUTTON_BACK, 'title' => CustomerSearchAssistant::BUTTON_BACK_TITLE]],
+        );
+        $messenger->shouldNotReceive('sendText', 'sendCtaUrl', 'sendList');
+        $session = BotSession::factory()->waitingAt('search')->create(['state' => null]);
+
+        $outcome = app(CustomerSearchAssistant::class)->start($session, customerAiNode() + ['kind' => $kind]);
+
+        expect($outcome)->toBe(AiOutcome::InProgress)
+            ->and($session->fresh()->state['kind'])->toBe($kind);
+    })->with([
+        'аренда' => ['rental', 'Расскажите, что нужно и в каком городе — можно голосом. Например: «нужен кран 25 тонн, Шымкент».'],
+        'ремонт' => ['repair', 'Что случилось с техникой и в каком вы городе? Можно написать или наговорить голосом.'],
+        'водитель' => ['driver', 'Какой водитель или машинист нужен и в каком городе? Можно написать или наговорить голосом.'],
+    ]);
+
+    test('текст оператора со страницы «Ответы бота» заменяет стандартный, %s — вид ветки', function (string $override, string $expected) {
+        BotReplyText::query()->create(['key' => BotReplyKey::SearchSectionEmpty->value, 'text' => $override]);
+
+        $messenger = fakeSearchMessenger();
+        $messenger->shouldReceive('sendText')->once()->withArgs(
+            fn (Contact $contact, string $text): bool => $text === $expected,
+        );
+        $messenger->shouldNotReceive('sendButtons', 'sendCtaUrl', 'sendList');
+
+        $outcome = app(CustomerSearchAssistant::class)->start(
+            BotSession::factory()->waitingAt('search')->create(['state' => null]),
+            customerAiNode() + ['kind' => 'driver'],
+        );
+
+        expect($outcome)->toBe(AiOutcome::Completed);
+    })->with([
+        'с подстановкой вида' => ['В разделе «%s» пока пусто — 100% честно. Заходите через неделю.', 'В разделе «Водитель / машинист» пока пусто — 100% честно. Заходите через неделю.'],
+        'без подстановки' => ['Водителей пока нет. Заходите через неделю.', 'Водителей пока нет. Заходите через неделю.'],
+    ]);
 });

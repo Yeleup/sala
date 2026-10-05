@@ -20,6 +20,7 @@ use App\Services\DereuMessenger;
 use App\Services\Locations\LocationResolver;
 use App\Support\WhatsappText;
 use Illuminate\Database\Eloquent\Collection as EloquentCollection;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
@@ -62,6 +63,16 @@ class CustomerSearchAssistant
      */
     private const int MAX_SERVICE_QUESTIONS = 3;
 
+    /**
+     * How long a search stays open after its outcome (a выдача, «пусто»,
+     * «посмотрите шире»). Past that, a text no longer refines the old query:
+     * the block lets it go unread (AiOutcome::Reroute) and it is read as a
+     * returning contact's message — hours later it is rarely about the old
+     * query, and the model, which sees no time, kept taking a greeting for a
+     * refinement and re-sending the same выдача.
+     */
+    public const int OUTCOME_TTL_MINUTES = 60;
+
     private const string ROW_ID_PREFIX = 'listing:';
 
     public const string LOCATION_ROW_PREFIX = 'search_location:';
@@ -94,8 +105,9 @@ class CustomerSearchAssistant
      * Releases the contact from the search back to the main dialog. New
      * search outcomes no longer carry it — they ride a single message with
      * the catalog URL button, and WhatsApp cannot add a reply button to
-     * that — but questions, the place pick list and the outcome fallback
-     * do, and taps on older outcome messages keep working.
+     * that — but questions, the place pick list, the outcome fallback and
+     * the answer to a repeated query do, and taps on older outcome messages
+     * keep working.
      */
     public const string BUTTON_MENU = 'search_to_menu';
 
@@ -118,10 +130,19 @@ class CustomerSearchAssistant
     private const string QUERY_EXAMPLE = 'например: «кран 25 тонн, Шымкент»';
 
     /**
+     * The way out of an outcome that leaves the search open (a выдача,
+     * «пусто», «посмотрите шире»): such a message rides the catalog URL
+     * button, WhatsApp cannot add «В меню» next to it, and without this line
+     * nothing on screen said how to leave. Its fallback forms carry the
+     * button itself, and the farewell closes the block, so neither says it.
+     */
+    public const string MENU_HINT = 'Чтобы вернуться в меню, напишите «меню».';
+
+    /**
      * The customer's own words quoted in an outcome (the subject, a place
      * missing from the dictionary) are clamped to this length: the catalog
-     * sentence ends the message, so the 1024-char body limit must cut the
-     * quote, never the sentence that explains the button.
+     * sentence and the menu hint end the message, so the 1024-char body
+     * limit must cut the quote, never the sentences after it.
      */
     private const int QUOTED_INPUT_LIMIT = 200;
 
@@ -200,6 +221,10 @@ class CustomerSearchAssistant
      */
     public function resume(BotSession $session, array $node, InboundMessage $message): AiOutcome
     {
+        if ($this->hasGoneStale($session, $message)) {
+            return AiOutcome::Reroute;
+        }
+
         $state = is_array($session->state) ? $session->state : [];
         $state += $this->defaultState();
 
@@ -251,6 +276,44 @@ class CustomerSearchAssistant
         }
 
         return $this->search($session, $state, $message, $node);
+    }
+
+    /**
+     * Whether the search went stale for this message: its last outcome
+     * went out more than OUTCOME_TTL_MINUTES ago, nothing was asked since,
+     * and the message is words — typed or spoken. The block then lets it
+     * go unread (AiOutcome::Reroute). Public so the AI entry point can tell
+     * before paying for a transcription the engine would repeat.
+     *
+     * Only words go stale. A press — the catalog, «В меню», «Назад», a row
+     * or button of an earlier message — answers what the bot showed, and a
+     * typed button title is the press spelled out. An open clarifying
+     * question or place list waits for its answer however late it comes:
+     * asking it clears the outcome time. A state written before outcomes
+     * were timed has no outcome time and reads as fresh.
+     */
+    public function hasGoneStale(BotSession $session, InboundMessage $message): bool
+    {
+        $state = is_array($session->state) ? $session->state : [];
+        $outcomeAt = $state['outcome_at'] ?? null;
+
+        if (! is_string($outcomeAt) || ($state['phase'] ?? 'searching') !== 'searching') {
+            return false;
+        }
+
+        if ($message->isPress() || $this->matchesMenuButton($message) || $this->matchesBackButton($message)) {
+            return false;
+        }
+
+        if (trim((string) $message->text) === '' && ! $message->isVoice()) {
+            return false;
+        }
+
+        try {
+            return Carbon::parse($outcomeAt)->addMinutes(self::OUTCOME_TTL_MINUTES)->isPast();
+        } catch (Throwable) {
+            return false;
+        }
     }
 
     /**
@@ -326,8 +389,12 @@ class CustomerSearchAssistant
 
         // A worded request for the menu is the same exit as the «В меню»
         // button, just spelled out instead of tapped — the engine carries
-        // the contact to the main dialog, so no message goes out here.
-        if ($intent === UserIntent::MenuRequested) {
+        // the contact to the main dialog, so no message goes out here. A
+        // message not about the search at all (a greeting, a meaningless
+        // string) leaves the same way: there is nothing in it to search by,
+        // and refining with it only repeated the last outcome — a fruitless
+        // attempt spent per greeting, or the same выдача paid for again.
+        if ($intent === UserIntent::MenuRequested || $intent === UserIntent::OffTopic) {
             $state['transcript'] = array_slice($state['transcript'], 0, $intakeMark);
             $this->persist($session, $state);
 
@@ -407,6 +474,9 @@ class CustomerSearchAssistant
         if ($missing !== [] && $state['clarifications'] < self::MAX_CLARIFICATIONS) {
             $state['clarifications']++;
             $state['last_question'] = $this->clarifyingQuestion($requirements, $missing, $candidates);
+            // The bot now waits for an answer, not after an outcome: an
+            // answer to a question does not go stale (hasGoneStale()).
+            $state['outcome_at'] = null;
             $this->persist($session, $state);
             $this->messenger->sendButtons(
                 $session->contact,
@@ -424,18 +494,29 @@ class CustomerSearchAssistant
             $state['unresolved_location'] = (string) $requirements['location'];
         }
 
-        return $this->runSearch($session, $state, $this->composeQuery($state, $requirements), $location);
+        return $this->runSearch($session, $state, $this->composeQuery($state, $requirements), $location, refinement: true);
     }
 
     /**
+     * $refinement marks a search the intake settled from the customer's
+     * words: one that asks again for exactly what the last search ran with
+     * is not run again (see answerRepeatedSearch()). The other callers run
+     * regardless — the provider-failure fallback, a picked place, the
+     * restart after a stale row.
+     *
      * @param  array<string, mixed>  $state
      */
-    protected function runSearch(BotSession $session, array $state, string $query, ?Location $location = null, bool $countAttempt = true): AiOutcome
+    protected function runSearch(BotSession $session, array $state, string $query, ?Location $location = null, bool $countAttempt = true, bool $refinement = false): AiOutcome
     {
         // A running search supersedes an open place pick list.
         $state['location_candidates'] = [];
 
         $location ??= $this->locations->detectInQuery($query);
+
+        if ($refinement && $this->repeatsLastSearch($state, $query, $location)) {
+            return $this->answerRepeatedSearch($session, $state);
+        }
+
         $matches = $this->matcher->match($query, $location, $this->kind($state), $this->matchFilters($state));
 
         if ($matches->isEmpty()) {
@@ -464,6 +545,7 @@ class CustomerSearchAssistant
                 return $this->offerWiderCatalog($session, $state, $query, $location);
             }
 
+            $state = $this->withOutcome($state, $query, $location, found: false);
             $this->persist($session, $state);
             $this->sendDeadEnd(
                 $session,
@@ -478,17 +560,114 @@ class CustomerSearchAssistant
     }
 
     /**
+     * Whether the settled requirements are exactly what the last search
+     * ran with — the same subject, place and travel filter. Such a search
+     * would only return the same выдача (or the same «пусто», spending
+     * another fruitless attempt on it): a greeting or a stray line the
+     * model read as a refinement kept doing exactly that.
+     *
+     * @param  array<string, mixed>  $state
+     */
+    private function repeatsLastSearch(array $state, string $query, ?Location $location): bool
+    {
+        $last = $state['last_search'] ?? null;
+
+        if (! is_array($last)) {
+            return false;
+        }
+
+        foreach ($this->searchSignature($state, $query, $location) as $key => $value) {
+            if (! array_key_exists($key, $last) || $last[$key] !== $value) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /**
+     * The answer to a repeated query: one plain message — the outcome is
+     * already in the chat, so neither the search nor its catalog link goes
+     * out again and no fruitless attempt is spent. Not an outcome itself, so
+     * it can carry «В меню»; the outcome clock keeps counting from the real
+     * outcome, the one this message points back to.
+     *
+     * @param  array<string, mixed>  $state
+     */
+    private function answerRepeatedSearch(BotSession $session, array $state): AiOutcome
+    {
+        $state['phase'] = 'searching';
+        // A question asked since is answered: the answer led back to the
+        // search that already ran.
+        $state['last_question'] = null;
+        $state['outcome_at'] = $state['last_search']['at'] ?? null;
+        $this->persist($session, $state);
+
+        $this->messenger->sendButtons(
+            $session->contact,
+            ($state['last_search']['found'] ?? false)
+                ? 'Варианты по этому запросу уже показаны выше. Чтобы поискать другое, назовите другую технику или другое место — или скажите иначе.'
+                : 'По этому запросу уже искали — пока пусто. Попробуйте назвать другую технику или другое место — или скажите иначе.',
+            [['id' => self::BUTTON_MENU, 'title' => self::BUTTON_MENU_TITLE]],
+        );
+
+        return AiOutcome::InProgress;
+    }
+
+    /**
+     * Record an outcome that leaves the search open: when it went out (the
+     * stale clock, see hasGoneStale()) and what the search ran with (the
+     * repeat guard, see repeatsLastSearch()).
+     *
+     * @param  array<string, mixed>  $state
+     * @return array<string, mixed>
+     */
+    private function withOutcome(array $state, string $query, ?Location $location, bool $found): array
+    {
+        $now = now()->toIso8601String();
+
+        $state['outcome_at'] = $now;
+        $state['last_search'] = $this->searchSignature($state, $query, $location) + ['found' => $found, 'at' => $now];
+
+        return $state;
+    }
+
+    /**
+     * What a search ran with, as far as the customer's words decide it:
+     * the subject (the raw query when none was extracted), the place — the
+     * dictionary node, or a named place the dictionary lacks, or none at
+     * all, which is also what «место не важно» searches by — and the travel
+     * filter. Letter case and spacing do not make a query different.
+     *
+     * @param  array<string, mixed>  $state
+     * @return array{subject: string, location_id: int|null, unresolved_location: string|null, needs_travel: bool|null}
+     */
+    private function searchSignature(array $state, string $query, ?Location $location): array
+    {
+        $normalized = fn (?string $text): ?string => filled($text) ? Str::lower(Str::squish($text)) : null;
+
+        return [
+            'subject' => (string) $normalized(($state['subject'] ?? null) ?: $query),
+            'location_id' => $location?->id,
+            'unresolved_location' => $location === null ? $normalized($state['unresolved_location'] ?? null) : null,
+            'needs_travel' => $state['needs_travel'] ?? null,
+        ];
+    }
+
+    /**
      * The выдача lives in the web catalog: the chat gets one message — an
      * honest header (what matched and where) followed by where to look and
      * how to pick, with the «Все варианты» URL button into the catalog;
      * there the customer picks a listing and the «Выбрать» button places
      * the request. WhatsApp cannot add a reply button to a URL-button
-     * message, so the outcome carries no «В меню»: a worded menu request
-     * leaves, any other text refines the search. The prefill carries what
-     * this search ranked by, without duplication: with a resolved place the
-     * link carries the subject alone plus the place as the location
-     * filter; an unresolved place stays in the search text (there it can
-     * still match the listings' location wording).
+     * message, so the outcome carries no «В меню» and says instead that
+     * writing «меню» leaves (MENU_HINT): a worded menu request leaves, a
+     * message not about the search leaves the same way, any other text
+     * refines the search — within the hour (hasGoneStale()). The prefill
+     * carries what this search ranked by, without duplication: with a
+     * resolved place the link carries the subject alone plus the place as
+     * the location filter; an unresolved place stays in the search text
+     * (there it can still match the listings' location wording).
      *
      * @param  array<string, mixed>  $state
      */
@@ -502,6 +681,7 @@ class CustomerSearchAssistant
         $state['offered'] = [];
         $state['expand_location_id'] = null;
         $state['last_question'] = null;
+        $state = $this->withOutcome($state, $query, $location, found: true);
         $this->persist($session, $state);
 
         $unresolvedLocation = $state['unresolved_location'] ?? null;
@@ -513,7 +693,7 @@ class CustomerSearchAssistant
 
         $this->sendCatalogCta(
             $session,
-            $header.' Смотрите их в каталоге по кнопке ниже — запрос уже подставлен, там же поиск и фильтры. Выберите подходящий — заявка сразу уйдёт поставщику.',
+            $header.' Смотрите их в каталоге по кнопке ниже — запрос уже подставлен, там же поиск и фильтры. Выберите подходящий — заявка сразу уйдёт поставщику. '.self::MENU_HINT,
             self::CATALOG_BUTTON_RESULTS,
             $header.' Выбирайте в каталоге — заявка сразу уйдёт поставщику.',
             $location !== null ? $subject : $query,
@@ -559,11 +739,12 @@ class CustomerSearchAssistant
         $state['phase'] = 'searching';
         $state['query'] = $query;
         $state['expand_location_id'] = null;
+        $state = $this->withOutcome($state, $query, $location, found: false);
         $this->persist($session, $state);
 
         $this->sendCatalogCta(
             $session,
-            sprintf('В «%s» пока пусто, но база пополняется каждый день. Посмотрите шире: в каталоге по кнопке ниже уже подставлены ваш запрос и «%s».', $location->name, $parent->name),
+            sprintf('В «%s» пока пусто, но база пополняется каждый день. Посмотрите шире: в каталоге по кнопке ниже уже подставлены ваш запрос и «%s».', $location->name, $parent->name).' '.self::MENU_HINT,
             self::CATALOG_BUTTON_DEAD_END,
             sprintf('В «%s» пока пусто. Посмотрите шире: в каталоге уже подставлены ваш запрос и «%s».', $location->name, $parent->name),
             (($state['subject'] ?? null) ?: $query),
@@ -591,6 +772,8 @@ class CustomerSearchAssistant
         $state['location_candidates'] = $candidates->pluck('id')->all();
         $state['offered'] = [];
         $state['expand_location_id'] = null;
+        // An open list waits for its pick however late it comes.
+        $state['outcome_at'] = null;
         $this->persist($session, $state);
 
         $this->sendLocationChoices($session, $candidates);
@@ -783,6 +966,7 @@ class CustomerSearchAssistant
 
         $state['phase'] = 'searching';
         $state['expand_location_id'] = null;
+        $state = $this->withOutcome($state, $query, $location, found: false);
         $this->persist($session, $state);
         $this->sendDeadEnd(
             $session,
@@ -798,14 +982,15 @@ class CustomerSearchAssistant
      * rephrase and, in the same message, the «Открыть каталог» URL button —
      * an empty выдача is exactly what browsing the full catalog fixes. No
      * prefill: this query just proved empty against the same matcher. The
-     * contact is not stuck without a button back: a worded menu request
-     * leaves, any other text is the rephrased query.
+     * contact is not stuck without a button back: the text tells them to
+     * write «меню» — a worded menu request leaves, any other text is the
+     * rephrased query.
      */
     protected function sendDeadEnd(BotSession $session, string $text, ?ListingKind $kind = null): void
     {
         $this->sendCatalogCta(
             $session,
-            $text.' Или загляните в каталог по кнопке ниже — там все объявления, база пополняется каждый день.',
+            $text.' Или загляните в каталог по кнопке ниже — там все объявления, база пополняется каждый день. '.self::MENU_HINT,
             self::CATALOG_BUTTON_DEAD_END,
             $text,
             kind: $kind,
@@ -819,9 +1004,10 @@ class CustomerSearchAssistant
      * button travel as ONE message — session messages above the free
      * monthly quota are paid since 01.10.2026, and WhatsApp cannot put a
      * reply button next to a URL button, so the outcome carries no «В
-     * меню». Always a session message: every send happens in the turn of
-     * an inbound customer message, so the 24-hour window is open by
-     * definition.
+     * меню» — the outcomes that leave the search open say in words how to
+     * leave (MENU_HINT). Always a session message: every send happens in
+     * the turn of an inbound customer message, so the 24-hour window is
+     * open by definition.
      *
      * A failed link or send must not leave the customer without the
      * outcome: with a fallback text, the former form goes out instead —
@@ -1220,6 +1406,8 @@ class CustomerSearchAssistant
             'expand_location_id' => null,
             'unresolved_location' => null,
             'last_question' => null,
+            'outcome_at' => null,
+            'last_search' => null,
         ];
     }
 

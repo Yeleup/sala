@@ -14,9 +14,10 @@ use App\Models\BotSession;
  * following inbound message while the contact waits at that block. A
  * Completed outcome releases the contact through the block's "continue"
  * output — the branch ran to its own end; Menu releases them through its
- * "menu" output — they asked for the menu; Back leads one level up (see
- * AiOutcome). The session carries the contact and the assistant's working
- * memory (BotSession::$state).
+ * "menu" output — they asked for the menu; Back leads one level up;
+ * Reroute (resume() only) hands the message back unread, to open a new
+ * dialog with (see AiOutcome). The session carries the contact and the
+ * assistant's working memory (BotSession::$state).
  */
 interface AiAssistant
 {

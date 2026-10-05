@@ -21,6 +21,11 @@ namespace App\Enums;
  *
  * Back — one level up, to the menu whose option leads into the node; only
  * where no such menu exists it is answered the way Menu is.
+ *
+ * Reroute — the block let the message go unread: what it waited on went
+ * stale (a customer search an hour past its outcome). The dialog ends, and
+ * the same message opens a new one, read the way a returning contact's
+ * message is read — through the menu navigator, not through either output.
  */
 enum AiOutcome
 {
@@ -28,4 +33,5 @@ enum AiOutcome
     case Completed;
     case Menu;
     case Back;
+    case Reroute;
 }

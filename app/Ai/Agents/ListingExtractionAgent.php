@@ -309,7 +309,7 @@ class ListingExtractionAgent implements Agent, HasStructuredOutput
             'clarifying_question' => $schema->string()->nullable()->required(),
             'clarifying_field' => $schema->string()->enum($this->clarifiableFields())->nullable()->required(),
             'summary' => $schema->string()->nullable()->required(),
-            'user_intent' => $schema->string()->enum(UserIntent::values())->required(),
+            'user_intent' => $schema->string()->enum(UserIntent::listingValues())->required(),
         ];
 
         $fields += match ($this->kind) {

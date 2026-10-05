@@ -22,6 +22,13 @@ enum UserIntent: string
     case MenuRequested = 'menu';
 
     /**
+     * Not about the search at all: a greeting, a meaningless string of
+     * characters, a remark unrelated to it. Only the customer search offers
+     * it — see searchValues(): the listing collector keeps its four.
+     */
+    case OffTopic = 'off_topic';
+
+    /**
      * A missing or unknown value is an ordinary task message: the schema
      * enum already constrains the model, and guessing an exit from a
      * malformed answer would be worse than continuing.
@@ -31,8 +38,27 @@ enum UserIntent: string
         return is_string($value) ? (self::tryFrom($value) ?? self::Task) : self::Task;
     }
 
-    /** @return list<string> */
-    public static function values(): array
+    /**
+     * The intents the listing extraction may return. «Not about the
+     * search» has no place there: a supplier's message is listing data
+     * unless it leaves, and the collector keeps its own exits.
+     *
+     * @return list<string>
+     */
+    public static function listingValues(): array
+    {
+        return array_column(array_filter(
+            self::cases(),
+            fn (self $intent): bool => $intent !== self::OffTopic,
+        ), 'value');
+    }
+
+    /**
+     * The intents the search query extraction may return.
+     *
+     * @return list<string>
+     */
+    public static function searchValues(): array
     {
         return array_column(self::cases(), 'value');
     }

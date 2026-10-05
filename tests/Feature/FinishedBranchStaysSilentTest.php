@@ -5,6 +5,7 @@ use App\Ai\Agents\SearchQueryExtractionAgent;
 use App\Enums\AiOperationType;
 use App\Enums\AiOutcome;
 use App\Enums\BotScenarioTrigger;
+use App\Enums\ListingMediaType;
 use App\Enums\ListingStatus;
 use App\Enums\RouteConfidence;
 use App\Models\AiOperation;
@@ -20,9 +21,11 @@ use App\Services\Bot\BotEngine;
 use App\Services\Bot\InboundMessage;
 use App\Services\Bot\MenuRoute;
 use App\Services\Bot\MenuRouter;
+use App\Services\DereuMediaDownloader;
 use App\Services\DereuMessenger;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Laravel\Ai\Embeddings;
+use Laravel\Ai\Transcription;
 use Mockery\MockInterface;
 
 uses(RefreshDatabase::class);
@@ -519,6 +522,12 @@ describe('просьба о меню по-прежнему показывает 
             'subject' => null, 'location' => null, 'location_any' => false,
             'clarifying_question' => '', 'user_intent' => 'menu',
         ]],
+        // Не просьба о меню, а сообщение не про поиск: тот же выход, без
+        // реплики и без поиска по прежнему запросу.
+        'сообщение не про поиск' => [new InboundMessage(text: 'ааааааа'), [
+            'subject' => 'кран', 'location' => null, 'location_any' => false,
+            'clarifying_question' => '', 'user_intent' => 'off_topic',
+        ]],
     ]);
 
     test('после выдачи одним сообщением «меню» словами показывает главное меню', function () {
@@ -538,7 +547,7 @@ describe('просьба о меню по-прежнему показывает 
         // Выдача — одно сообщение с кнопкой каталога, без отдельного
         // сообщения с «В меню»; поиск остаётся открытым и ждёт уточнения.
         expect(outboundTo($sent, $session->contact_id))->toBe([
-            ['cta', 'Нашлись варианты по запросу «автокран». Смотрите их в каталоге по кнопке ниже — запрос уже подставлен, там же поиск и фильтры. Выберите подходящий — заявка сразу уйдёт поставщику.'],
+            ['cta', 'Нашлись варианты по запросу «автокран». Смотрите их в каталоге по кнопке ниже — запрос уже подставлен, там же поиск и фильтры. Выберите подходящий — заявка сразу уйдёт поставщику. Чтобы вернуться в меню, напишите «меню».'],
         ])
             ->and($session->fresh())
             ->current_node_id->toBe('search_rental')
@@ -561,7 +570,7 @@ describe('просьба о меню по-прежнему показывает 
         pressInDialog($session, new InboundMessage(text: 'вертолёт'));
 
         expect(outboundTo($sent, $session->contact_id))->toBe([
-            ['cta', 'Пока по такому запросу пусто. Попробуйте сказать иначе — вид техники и город, например: «кран 25 тонн, Шымкент». Или загляните в каталог по кнопке ниже — там все объявления, база пополняется каждый день.'],
+            ['cta', 'Пока по такому запросу пусто. Попробуйте сказать иначе — вид техники и город, например: «кран 25 тонн, Шымкент». Или загляните в каталог по кнопке ниже — там все объявления, база пополняется каждый день. Чтобы вернуться в меню, напишите «меню».'],
         ])
             ->and($session->fresh())
             ->current_node_id->toBe('search_rental')
@@ -586,6 +595,111 @@ describe('просьба о меню по-прежнему показывает 
             ['buttons', 'Аренда спецтехники. Вы предлагаете технику или ищете?'],
         ])
             ->and($session->fresh()->current_node_id)->toBe('menu_rental');
+    });
+});
+
+describe('поиск после исхода: через час текст читается как от вернувшегося клиента', function () {
+    test('раздел, названный словами, ведёт сразу в ветку, и поиск начинается с чистого листа', function () {
+        SearchQueryExtractionAgent::fake([
+            ['subject' => 'автокран', 'location' => null, 'location_any' => true, 'clarifying_question' => ''],
+            ['subject' => 'экскаватор', 'location' => null, 'location_any' => true, 'clarifying_question' => ''],
+        ])->preventStrayPrompts();
+        Listing::factory()->published()->create([
+            'category_id' => categoryNamed('Автокран')->id, 'description' => 'Автокран 25 тонн', 'price' => 'договорная',
+        ]);
+        $scenario = typicalMainDialog();
+        $session = branchSessionInSearch($scenario, ['transcript' => []]);
+        $sent = recordOutbound();
+
+        pressInDialog($session, new InboundMessage(text: 'нужен автокран'));
+
+        $this->travel(2)->hours();
+
+        test()->mock(MenuRouter::class)->shouldReceive('route')->once()
+            ->withArgs(fn (BotSession $s, $definition, array $node, InboundMessage $m): bool => $node['id'] === 'main_menu'
+                && $m->text === 'нужен экскаватор')
+            ->andReturn(MenuRoute::toOption(['node_id' => 'menu_rental', 'option_id' => 'rent_seek'], RouteConfidence::High));
+
+        pressInDialog($session, new InboundMessage(text: 'нужен экскаватор'));
+
+        // Прежний запрос в новый поиск не попал: разбор видел одно новое
+        // сообщение, а счётчики начаты заново.
+        SearchQueryExtractionAgent::assertPrompted(fn ($prompt): bool => $prompt->contains('нужен экскаватор')
+            && ! $prompt->contains('автокран'));
+
+        expect(outboundTo($sent, $session->contact_id))->toBe([
+            ['cta', 'Нашлись варианты по запросу «автокран». Смотрите их в каталоге по кнопке ниже — запрос уже подставлен, там же поиск и фильтры. Выберите подходящий — заявка сразу уйдёт поставщику. Чтобы вернуться в меню, напишите «меню».'],
+            ['cta', 'Пока по такому запросу пусто. Попробуйте сказать иначе — вид техники и город, например: «кран 25 тонн, Шымкент». Или загляните в каталог по кнопке ниже — там все объявления, база пополняется каждый день. Чтобы вернуться в меню, напишите «меню».'],
+        ])
+            ->and($session->fresh()->current_node_id)->toBe('search_rental')
+            ->and($session->fresh()->state['transcript'])->toBe(['нужен экскаватор'])
+            ->and($session->fresh()->state['attempts'])->toBe(1);
+    });
+
+    test('приветствие через час после пустой выдачи получает главное меню, а не повтор поиска', function () {
+        // Второго разбора нет — приветствие не уточняет старый запрос.
+        SearchQueryExtractionAgent::fake([
+            ['subject' => 'вертолёт', 'location' => null, 'location_any' => true, 'clarifying_question' => ''],
+        ])->preventStrayPrompts();
+        $scenario = typicalMainDialog();
+        $session = branchSessionInSearch($scenario, ['transcript' => []]);
+        $sent = recordOutbound();
+        test()->mock(MenuRouter::class)->shouldReceive('route')->once()
+            ->withArgs(fn (BotSession $s, $definition, array $node, InboundMessage $m): bool => $node['id'] === 'main_menu'
+                && $m->text === 'Здравствуйте')
+            ->andReturnNull();
+
+        pressInDialog($session, new InboundMessage(text: 'вертолёт'));
+
+        $this->travel(90)->minutes();
+
+        pressInDialog($session, new InboundMessage(text: 'Здравствуйте'));
+
+        expect(outboundTo($sent, $session->contact_id))->toBe([
+            ['cta', 'Пока по такому запросу пусто. Попробуйте сказать иначе — вид техники и город, например: «кран 25 тонн, Шымкент». Или загляните в каталог по кнопке ниже — там все объявления, база пополняется каждый день. Чтобы вернуться в меню, напишите «меню».'],
+            ['buttons', MAIN_MENU_TEXT],
+        ])
+            ->and($session->fresh())
+            ->current_node_id->toBe('main_menu')
+            ->state->toBeNull();
+    });
+
+    test('голосовое через час расшифровывается один раз и уходит навигатору', function () {
+        SearchQueryExtractionAgent::fake()->preventStrayPrompts();
+        Transcription::fake(['нужен экскаватор']);
+        test()->mock(DereuMediaDownloader::class)
+            ->shouldReceive('download')->once()->with('voice-1')
+            ->andReturn(['contents' => 'OGG-BYTES', 'mime_type' => 'audio/ogg']);
+        $scenario = typicalMainDialog();
+        $session = branchSessionInSearch($scenario, [
+            'query' => 'кран',
+            'outcome_at' => now()->subHours(2)->toIso8601String(),
+        ]);
+        $sent = recordOutbound();
+        test()->mock(MenuRouter::class)->shouldReceive('route')->once()
+            ->withArgs(fn (BotSession $s, $definition, array $node, InboundMessage $m): bool => $m->text === 'нужен экскаватор')
+            ->andReturnNull();
+
+        pressInDialog($session, new InboundMessage(mediaType: ListingMediaType::Audio, mediaId: 'voice-1'));
+
+        expect(outboundTo($sent, $session->contact_id))->toBe([['buttons', MAIN_MENU_TEXT]])
+            ->and(AiOperation::query()->where('operation', AiOperationType::Transcription)->count())->toBe(1);
+    });
+
+    test('кнопка «В меню» прежнего сообщения через час — по-прежнему просто меню', function () {
+        SearchQueryExtractionAgent::fake()->preventStrayPrompts();
+        $scenario = typicalMainDialog();
+        $session = branchSessionInSearch($scenario, [
+            'query' => 'кран',
+            'outcome_at' => now()->subHours(2)->toIso8601String(),
+        ]);
+        $sent = recordOutbound();
+        test()->mock(MenuRouter::class)->shouldNotReceive('route');
+
+        pressInDialog($session, new InboundMessage(text: 'В меню', replyId: CustomerSearchAssistant::BUTTON_MENU));
+
+        expect(outboundTo($sent, $session->contact_id))->toBe([['buttons', MAIN_MENU_TEXT]])
+            ->and($session->fresh()->current_node_id)->toBe('main_menu');
     });
 });
 

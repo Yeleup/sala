@@ -30,6 +30,9 @@ use Stringable;
  * and clarifying_question names the single most important missing piece
  * (the need first, then the place) so the assistant can ask for it
  * before showing listings.
+ *
+ * user_intent knows one value the listing extraction does not: off_topic,
+ * a message that is not about the search at all (UserIntent::searchValues()).
  */
 #[Strict]
 #[Temperature(0.1)]
@@ -129,6 +132,11 @@ class SearchQueryExtractionAgent implements Agent, HasStructuredOutput
           раздел.
           "service_question" — вопрос про сам сервис и его условия (берёте ли комиссию, как
           это работает), а не про {$searchObject}.
+          "off_topic" — последнее сообщение вообще не про поиск: приветствие, бессмысленный набор
+          символов, реплика, никак не связанная с поиском, — на любом языке, в том числе
+          по-казахски или вперемешку. Если в нём есть хоть что-то о том, что нужно найти, где
+          или с какими условиями, — это "task", даже если рядом приветствие. Короткий ответ на
+          сообщение бота — тоже "task". При малейшем сомнении выбирай "task".
 
         Правила:
         - Никогда не выдумывай значения. Если данных нет — оставь поле null.
@@ -154,7 +162,7 @@ class SearchQueryExtractionAgent implements Agent, HasStructuredOutput
             'location' => $schema->string()->nullable()->required(),
             'location_any' => $schema->boolean()->required(),
             'clarifying_question' => $schema->string()->nullable()->required(),
-            'user_intent' => $schema->string()->enum(UserIntent::values())->required(),
+            'user_intent' => $schema->string()->enum(UserIntent::searchValues())->required(),
         ];
 
         if ($this->kind !== ListingKind::Rental) {

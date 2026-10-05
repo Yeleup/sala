@@ -328,9 +328,10 @@ class ListingForm
                     ->visible(fn (Get $get): bool => self::kindOf($get) === ListingKind::Driver),
                 TextInput::make('experience_years')
                     ->label('Стаж, лет')
-                    ->numeric()
+                    ->integer()
                     ->minValue(0)
                     ->maxValue(80)
+                    ->validationMessages(['integer' => 'Стаж указывается целым числом лет; меньше года — 0.'])
                     ->live(onBlur: true)
                     ->visible(fn (Get $get): bool => self::kindOf($get) === ListingKind::Driver),
                 Toggle::make('travels_to_other_cities')

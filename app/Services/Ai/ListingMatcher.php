@@ -125,6 +125,16 @@ class ListingMatcher
     }
 
     /**
+     * Whether the kind has anything to find at all: the very set every
+     * search of that kind ranks within, before a query, a place or a
+     * filter narrows it.
+     */
+    public function hasListings(ListingKind $kind): bool
+    {
+        return $this->baseQuery(null, $kind, [])->exists();
+    }
+
+    /**
      * @param  list<string>  $tokens
      * @param  array<string, string>  $corrections
      * @param  array{needs_travel?: bool}  $filters

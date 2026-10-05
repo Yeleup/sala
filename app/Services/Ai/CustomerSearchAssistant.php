@@ -141,11 +141,30 @@ class CustomerSearchAssistant
      * what was already written: the invitation asks what the contact is
      * looking for, and they have just said it.
      *
+     * A kind with nothing to find ends the block right here, whichever way
+     * the contact came in: any query, carried or yet to be asked, could
+     * only end empty. One honest message replaces the invitation — the
+     * operator's own text too, since it invites a query nobody can answer —
+     * and nothing else happens: no AI call, no fruitless attempt, no
+     * catalog button (the catalog of that kind is just as empty). Checked
+     * on entry only: a search already open keeps going.
+     *
      * @param  array<string, mixed>  $node
      */
     public function start(BotSession $session, array $node, ?InboundMessage $carried = null): AiOutcome
     {
         $kind = ListingKind::fromNode($node['kind'] ?? null);
+
+        if (! $this->matcher->hasListings($kind)) {
+            // str_replace, not sprintf: the operator edits the text, and a
+            // lone percent sign in it would make sprintf throw.
+            $this->messenger->sendText(
+                $session->contact,
+                str_replace('%s', $kind->label(), $this->replyTexts->get(BotReplyKey::SearchSectionEmpty)),
+            );
+
+            return AiOutcome::Completed;
+        }
 
         $session->state = ['kind' => $kind->value] + $this->defaultState();
         $session->save();

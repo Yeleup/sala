@@ -10,6 +10,7 @@ use App\Enums\CustomerRequestStatus;
 use App\Enums\ListingKind;
 use App\Enums\RouteConfidence;
 use App\Enums\ScenarioRunStatus;
+use App\Exceptions\HeldTextDeliveryUnknown;
 use App\Exceptions\SessionWindowClosed;
 use App\Jobs\ProcessDereuWebhookEvent;
 use App\Models\BotScenario;
@@ -44,6 +45,7 @@ use Illuminate\Http\Client\RequestException;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Sleep;
 use Illuminate\Support\Str;
 
 uses(RefreshDatabase::class);
@@ -1374,5 +1376,161 @@ describe('ответы ИИ-ассистента', function () {
         expect(collect(sentToDereu())->pluck('type')->all())->toBe(['interactive', 'text'])
             ->and(sentToDereu()[1]['payload'])->toBe(['body' => 'Этот вариант уже сняли с публикации. Сейчас поищем свежие.'])
             ->and($session->fresh()->state['phase'])->toBe('choosing');
+    });
+});
+
+describe('обрыв связи на склеенной отправке', function () {
+    /**
+     * Старт → меню → поиск заказчика (аренда).
+     */
+    function joinSearchScenario(): BotScenario
+    {
+        return BotScenario::factory()->published([
+            'nodes' => [
+                ['id' => 'start', 'type' => 'start'],
+                ['id' => 'main_menu', 'type' => 'buttons', 'text' => 'Что вас интересует?', 'options' => [
+                    ['id' => 'find', 'title' => 'Ищу технику'],
+                ]],
+                ['id' => 'search', 'type' => 'ai', 'task' => 'customer_search', 'kind' => 'rental'],
+            ],
+            'edges' => [
+                ['from' => 'start', 'output' => 'continue', 'to' => 'main_menu'],
+                ['from' => 'main_menu', 'output' => 'option:find', 'to' => 'search'],
+            ],
+        ])->create();
+    }
+
+    /**
+     * Заказчик в поиске главного диалога нажимает строку прежней чат-выдачи,
+     * чей вариант уже сняли с публикации; безрезультатных попыток к этому
+     * моменту — $attempts. Опубликованного по запросу нет: поиск свежих
+     * вариантов пуст.
+     *
+     * @return array{BotSession, DereuWebhookEvent}
+     */
+    function joinStaleRowPress(int $attempts): array
+    {
+        $scenario = joinSearchScenario();
+        $definition = $scenario->publishedDefinition();
+        $customer = Contact::factory()->withOpenSessionWindow()->create();
+        $listing = Listing::factory()->expired()->create([
+            'category_id' => categoryNamed('Автокран')->id,
+            'description' => 'Кран 25 тонн',
+            'price' => 'договорная',
+        ]);
+
+        $session = BotSession::factory()->waitingAt('search')->create([
+            'contact_id' => $customer->id,
+            'bot_scenario_id' => $scenario->id,
+            'scenario_version' => $scenario->published_version,
+            'current_node_fingerprint' => $definition->nodeFingerprint($definition->node('search')),
+            'state' => [
+                'kind' => 'rental', 'phase' => 'choosing', 'attempts' => $attempts, 'clarifications' => 0,
+                'transcript' => ['кран'], 'query' => 'кран', 'offered' => [$listing->id],
+            ],
+        ]);
+
+        $event = joinInboundEvent($customer, [
+            'type' => 'interactive',
+            'payload' => ['list_reply' => ['id' => "listing:{$listing->id}", 'title' => 'Кран 25 тонн']],
+        ]);
+
+        return [$session, $event];
+    }
+
+    /**
+     * Пока $connectionLost, соединение на сообщении с кнопкой-ссылкой
+     * обрывается, не дав ответа; остальное Dereu принимает. Каждая попытка
+     * отправки — тело запроса — попадает в $attempts: неудачные Http::recorded
+     * не видит.
+     *
+     * @param  list<array<string, mixed>>  $attempts
+     */
+    function fakeDereuLosingCtaConnection(bool &$connectionLost, array &$attempts): void
+    {
+        Http::fake(function (Request $request) use (&$connectionLost, &$attempts) {
+            $attempts[] = $request->data();
+
+            return $connectionLost && ($request['payload']['type'] ?? null) === 'cta_url'
+                ? Http::failedConnection()
+                : Http::response(['id' => (string) Str::uuid(), 'status' => 'queued'], 202);
+        });
+    }
+
+    test('обрыв на прощальной ссылке с репликой внутри не глотается: ход не засчитан, текст не повторяется, повтор очереди приносит то же', function () {
+        $this->freezeSecond();
+        Sleep::fake();
+        $connectionLost = true;
+        $attempts = [];
+        fakeDereuLosingCtaConnection($connectionLost, $attempts);
+        connectedDereuCompany();
+        [$session, $event] = joinStaleRowPress(attempts: 3);
+        $before = $session->fresh();
+
+        // Дошло ли сообщение — а с ним и обязательная реплика в его начале, —
+        // неизвестно. Это не сбой одной необязательной кнопки: ход
+        // обрывается, событие ждёт повтора, поиск стоит, где стоял.
+        expect(fn () => runJoinJob($event))->toThrow(HeldTextDeliveryUnknown::class);
+
+        expect($event->fresh()->processed_at)->toBeNull()
+            ->and($session->fresh()->current_node_id)->toBe('search')
+            ->and($session->fresh()->state)->toEqual($before->state);
+
+        // Реплика второй раз не отправлялась: каждая попытка — то же
+        // склеенное сообщение (клиент HTTP сам повторяет соединение).
+        expect(collect($attempts)->map(fn (array $sent): array => $sent['payload'])->unique()->values()->all())->toHaveCount(1)
+            ->and($attempts[0]['payload']['type'])->toBe('cta_url')
+            ->and($attempts[0]['payload']['body']['text'])->toStartWith("Этот вариант уже сняли с публикации. Сейчас поищем свежие.\n\nПодходящего сейчас не нашлось");
+
+        // Очередь повторяет то же событие — связь есть: реплика и прощание
+        // уходят одним сообщением, и только теперь поиск закрывается.
+        $connectionLost = false;
+        $failed = count($attempts);
+        runJoinJob($event);
+
+        $retry = array_slice($attempts, $failed);
+        expect($retry)->toHaveCount(1)
+            ->and($retry[0]['payload'])->toBe($attempts[0]['payload'])
+            ->and($event->fresh()->processed_at)->not->toBeNull()
+            ->and($session->fresh())
+            ->current_node_id->toBeNull()
+            ->state->toBeNull();
+    });
+
+    test('обрыв на исходе с запасной формой не глотается: запасная форма не уходит, исход не записан, повтор очереди приносит то же', function () {
+        $this->freezeSecond();
+        Sleep::fake();
+        $connectionLost = true;
+        $attempts = [];
+        fakeDereuLosingCtaConnection($connectionLost, $attempts);
+        connectedDereuCompany();
+        [$session, $event] = joinStaleRowPress(attempts: 0);
+        $before = $session->fresh();
+
+        expect(fn () => runJoinJob($event))->toThrow(HeldTextDeliveryUnknown::class);
+
+        // Ни запасной формы с «В меню» (она ушла бы без реплики — или с ней
+        // второй раз), ни реплики отдельно: только попытки самого склеенного.
+        expect(collect($attempts)->map(fn (array $sent): array => $sent['payload'])->unique()->values()->all())->toHaveCount(1)
+            ->and($attempts[0]['payload']['type'])->toBe('cta_url')
+            ->and($attempts[0]['payload']['body']['text'])->toStartWith("Этот вариант уже сняли с публикации. Сейчас поищем свежие.\n\nПока по такому запросу пусто.")
+            ->and($event->fresh()->processed_at)->toBeNull()
+            ->and($session->fresh()->current_node_id)->toBe('search')
+            ->and($session->fresh()->state)->toEqual($before->state);
+
+        $connectionLost = false;
+        $failed = count($attempts);
+        runJoinJob($event);
+
+        $retry = array_slice($attempts, $failed);
+        expect($retry)->toHaveCount(1)
+            ->and($retry[0]['payload'])->toBe($attempts[0]['payload'])
+            ->and($event->fresh()->processed_at)->not->toBeNull()
+            ->and($session->fresh()->current_node_id)->toBe('search')
+            ->and($session->fresh()->state)
+            ->phase->toBe('searching')
+            ->attempts->toBe(0)
+            ->outcome_at->not->toBeNull()
+            ->last_search->found->toBeFalse();
     });
 });

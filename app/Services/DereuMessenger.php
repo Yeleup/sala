@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Enums\ChannelDirection;
 use App\Enums\ChannelMessageStatus;
+use App\Exceptions\HeldTextDeliveryUnknown;
 use App\Exceptions\OutboundRequestBlocked;
 use App\Exceptions\SessionWindowClosed;
 use App\Models\ChannelMessage;
@@ -39,7 +40,9 @@ use Throwable;
  * interactive one when the joined body fits its WhatsApp limit. A text or
  * an interactive message that carries a paid template plan B is never
  * joined — the re-send through the template would carry only its own
- * wording.
+ * wording. A joined message left without an answer from Dereu throws
+ * HeldTextDeliveryUnknown, which a caller swallowing the failures of a
+ * best-effort message must let through.
  */
 class DereuMessenger
 {
@@ -240,20 +243,28 @@ class DereuMessenger
         // person, one row in the journal, one session message on the bill.
         $held = $this->reply->take();
 
+        // A failed send decides the text's fate by Dereu's answer, below.
+        // A failure neither catch takes comes after Dereu accepted the
+        // message — the HTTP client reports every failure of the exchange
+        // itself as one of the two — so the text is already out: it stays
+        // spent, and the failure of the bookkeeping propagates as it is.
         try {
             $this->deliver($company, $contact, 'interactive', $payload($joined));
         } catch (RequestException|OutboundRequestBlocked $e) {
             // Dereu answered with a refusal, or nothing left the machine:
             // the message was not accepted, so the text is still owed — on
             // its own or inside the next message, even when the caller
-            // swallows this failure (a best-effort link). Any other failure
-            // keeps it spent: a lost connection may have delivered it, and a
-            // failure of the bookkeeping after an accepted send means the
-            // message is already out — sending the text again would say it
-            // twice.
+            // swallows this failure (a best-effort link).
             $this->reply->putBack($held);
 
             throw $e;
+        } catch (ConnectionException $e) {
+            // No answer at all: the message may have been delivered, the
+            // text with it, so sending the text again could say it twice.
+            // Nor is this the failure of the interactive message alone — a
+            // caller that swallows the failures of its own best-effort
+            // message must not swallow the text's (HeldTextDeliveryUnknown).
+            throw new HeldTextDeliveryUnknown($e);
         }
     }
 

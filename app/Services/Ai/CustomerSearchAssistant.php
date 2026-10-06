@@ -9,6 +9,7 @@ use App\Enums\BotReplyKey;
 use App\Enums\CustomerRequestStatus;
 use App\Enums\ListingKind;
 use App\Enums\UserIntent;
+use App\Exceptions\HeldTextDeliveryUnknown;
 use App\Models\BotSession;
 use App\Models\Listing;
 use App\Models\Location;
@@ -1067,6 +1068,11 @@ class CustomerSearchAssistant
      * the outcome without the catalog sentence, with the «В меню» button —
      * and a failure of that propagates like any outcome message. Only the
      * farewell has no fallback: the block ends either way.
+     *
+     * The button is best effort, a line the bot said before it is not: when
+     * that line rode this message and nobody knows whether it arrived, the
+     * failure propagates — no fallback, nothing recorded — and the queue
+     * retries the turn.
      */
     protected function sendCatalogCta(BotSession $session, string $text, string $button, ?string $fallbackText = null, ?string $query = null, ?Location $location = null, ?ListingKind $kind = null): void
     {
@@ -1077,6 +1083,8 @@ class CustomerSearchAssistant
                 $button,
                 $this->links->catalogUrl($session->contact, $query, $location, $kind),
             );
+        } catch (HeldTextDeliveryUnknown $e) {
+            throw $e;
         } catch (Throwable $e) {
             Log::warning('Failed to send the catalog CTA.', [
                 'bot_session_id' => $session->id,

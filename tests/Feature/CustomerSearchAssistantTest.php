@@ -1942,7 +1942,9 @@ test('через оркестратор «Назад» на нетронутом
         ->resume($session, customerAiNode(), new InboundMessage(text: 'Назад', replyId: CustomerSearchAssistant::BUTTON_BACK));
 
     expect($outcome)->toBe(AiOutcome::Back)
-        ->and($session->fresh()->state)->toBeNull();
+        // Память стирается в сессии, которую движок сохраняет вместе со
+        // следующим шагом — уже после закрывающей реплики блока.
+        ->and($session->state)->toBeNull();
 });
 
 test('a service question before the first answer repeats the block greeting with «Назад»', function () {
@@ -2170,9 +2172,10 @@ test('an hour past the outcome a text is let go unread instead of refining the o
         ->resume($session, customerAiNode(), new InboundMessage(text: 'Сәлеметсіз бе'));
 
     // Ни разбора, ни повторной выдачи: память поиска стёрта, и следующий
-    // поиск начнётся с чистого листа, без прежнего запроса.
+    // поиск начнётся с чистого листа, без прежнего запроса. Стирается она в
+    // сессии, которую движок сохраняет, закрывая диалог перед новым.
     expect($outcome)->toBe(AiOutcome::Reroute)
-        ->and($session->refresh()->state)->toBeNull();
+        ->and($session->state)->toBeNull();
 });
 
 test('within the hour after the outcome a text still refines the search', function (int $minutes) {

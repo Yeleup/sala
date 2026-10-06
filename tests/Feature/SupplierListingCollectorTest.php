@@ -2630,7 +2630,9 @@ test('the scenario assistant clears the working memory once the AI releases the 
         ->resume($session, supplierAiNode(), new InboundMessage(replyId: SupplierListingCollector::BUTTON_SUBMIT));
 
     expect($outcome)->toBe(AiOutcome::Completed)
-        ->and($session->fresh()->state)->toBeNull();
+        // Память стирается в сессии, которую движок сохраняет вместе со
+        // следующим шагом — уже после закрывающей реплики блока.
+        ->and($session->state)->toBeNull();
 });
 
 test('an explicit refusal saves the partial draft and releases the supplier', function () {
@@ -3451,7 +3453,9 @@ test('через оркестратор «Назад» на нетронутой
         ->resume($session, supplierAiNode(), new InboundMessage(text: 'Назад', replyId: SupplierListingCollector::BUTTON_BACK));
 
     expect($outcome)->toBe(AiOutcome::Back)
-        ->and($session->fresh()->state)->toBeNull();
+        // Память стирается в сессии, которую движок сохраняет вместе со
+        // следующим шагом — уже после закрывающей реплики блока.
+        ->and($session->state)->toBeNull();
 });
 
 test('a pre-filled name keeps the greeting on «Назад», and «Назад» then leaves silently', function () {

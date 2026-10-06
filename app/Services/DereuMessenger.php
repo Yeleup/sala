@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Enums\ChannelDirection;
 use App\Enums\ChannelMessageStatus;
+use App\Exceptions\HeldTextDeliveryUnknown;
 use App\Exceptions\OutboundRequestBlocked;
 use App\Exceptions\SessionWindowClosed;
 use App\Models\ChannelMessage;
@@ -11,8 +12,10 @@ use App\Models\Contact;
 use App\Models\DereuCompany;
 use App\Models\WhatsappTemplate;
 use App\Support\WhatsappText;
+use Closure;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\PendingRequest;
+use Illuminate\Http\Client\RequestException;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
@@ -30,6 +33,16 @@ use Throwable;
  * Every journaled send carries a cost estimate: templates by category,
  * session messages by the service rate once the month's free tier is
  * used up (see WhatsappCostEstimator).
+ *
+ * Inside a bot reply (WhatsappReplyBuffer::collect) a plain text to the
+ * person being answered and the interactive message right after it go out
+ * as one message: the text is held back and opens the body of the
+ * interactive one when the joined body fits its WhatsApp limit. A text or
+ * an interactive message that carries a paid template plan B is never
+ * joined — the re-send through the template would carry only its own
+ * wording. A joined message left without an answer from Dereu throws
+ * HeldTextDeliveryUnknown, which a caller swallowing the failures of a
+ * best-effort message must let through.
  */
 class DereuMessenger
 {
@@ -48,11 +61,26 @@ class DereuMessenger
 
     private const int LIST_ROW_DESCRIPTION_LIMIT = 72;
 
-    public function __construct(private readonly WhatsappCostEstimator $costs) {}
+    public function __construct(
+        private readonly WhatsappCostEstimator $costs,
+        private readonly WhatsappReplyBuffer $reply,
+    ) {}
 
     public function sendText(Contact $contact, string $text, ?TemplateFallback $fallback = null): void
     {
-        $this->send($contact, 'text', ['body' => $text], fallback: $fallback);
+        if ($fallback !== null || ! $this->reply->isCollectingFor($contact)) {
+            $this->send($contact, 'text', ['body' => $text], fallback: $fallback);
+
+            return;
+        }
+
+        // Held back, not sent: whether it travels alone or inside the next
+        // message is up to that message. The refusals a send gives before
+        // reaching Dereu (closed window, number not connected) still come
+        // from here, exactly when the caller expects them.
+        $this->connectedCompany($contact, 'text');
+        $this->reply->flushFor($contact);
+        $this->reply->hold($contact, $text, fn () => $this->send($contact, 'text', ['body' => $text]));
     }
 
     /**
@@ -60,9 +88,9 @@ class DereuMessenger
      */
     public function sendButtons(Contact $contact, string $text, array $buttons, ?TemplateFallback $fallback = null): void
     {
-        $this->send($contact, 'interactive', fallback: $fallback, payload: [
+        $this->sendInteractive($contact, $text, self::BODY_LIMIT, $fallback, fn (string $body): array => [
             'type' => 'button',
-            'body' => ['text' => WhatsappText::clamp($text, self::BODY_LIMIT)],
+            'body' => ['text' => WhatsappText::clamp($body, self::BODY_LIMIT)],
             'action' => [
                 'buttons' => array_map(fn (array $button): array => [
                     'type' => 'reply',
@@ -83,9 +111,9 @@ class DereuMessenger
      */
     public function sendCtaUrl(Contact $contact, string $text, string $buttonText, string $url, ?TemplateFallback $fallback = null): void
     {
-        $this->send($contact, 'interactive', fallback: $fallback, payload: [
+        $this->sendInteractive($contact, $text, self::BODY_LIMIT, $fallback, fn (string $body): array => [
             'type' => 'cta_url',
-            'body' => ['text' => WhatsappText::clamp($text, self::BODY_LIMIT)],
+            'body' => ['text' => WhatsappText::clamp($body, self::BODY_LIMIT)],
             'action' => [
                 'name' => 'cta_url',
                 'parameters' => [
@@ -101,9 +129,9 @@ class DereuMessenger
      */
     public function sendList(Contact $contact, string $text, string $button, array $rows): void
     {
-        $this->send($contact, 'interactive', [
+        $this->sendInteractive($contact, $text, self::LIST_BODY_LIMIT, null, fn (string $body): array => [
             'type' => 'list',
-            'body' => ['text' => WhatsappText::clamp($text, self::LIST_BODY_LIMIT)],
+            'body' => ['text' => WhatsappText::clamp($body, self::LIST_BODY_LIMIT)],
             'action' => [
                 'button' => WhatsappText::clamp($button, self::BUTTON_TITLE_LIMIT),
                 'sections' => [
@@ -194,9 +222,89 @@ class DereuMessenger
     }
 
     /**
+     * An interactive message — with the reply's held text at the start of
+     * its body when the two fit together (see WhatsappReplyBuffer).
+     *
+     * @param  Closure(string): array<string, mixed>  $payload  The message around the given body text.
+     */
+    private function sendInteractive(Contact $contact, string $text, int $bodyLimit, ?TemplateFallback $fallback, Closure $payload): void
+    {
+        $joined = $fallback === null ? $this->joinedWithHeldText($contact, $text, $bodyLimit) : null;
+
+        if ($joined === null) {
+            $this->send($contact, 'interactive', $payload($text), fallback: $fallback);
+
+            return;
+        }
+
+        $company = $this->connectedCompany($contact, 'interactive');
+
+        // The held text travels inside this message: one bubble for the
+        // person, one row in the journal, one session message on the bill.
+        $held = $this->reply->take();
+
+        // A failed send decides the text's fate by Dereu's answer, below.
+        // A failure neither catch takes comes after Dereu accepted the
+        // message — the HTTP client reports every failure of the exchange
+        // itself as one of the two — so the text is already out: it stays
+        // spent, and the failure of the bookkeeping propagates as it is.
+        try {
+            $this->deliver($company, $contact, 'interactive', $payload($joined));
+        } catch (RequestException|OutboundRequestBlocked $e) {
+            // Dereu answered with a refusal, or nothing left the machine:
+            // the message was not accepted, so the text is still owed — on
+            // its own or inside the next message, even when the caller
+            // swallows this failure (a best-effort link).
+            $this->reply->putBack($held);
+
+            throw $e;
+        } catch (ConnectionException $e) {
+            // No answer at all: the message may have been delivered, the
+            // text with it, so sending the text again could say it twice.
+            // Nor is this the failure of the interactive message alone — a
+            // caller that swallows the failures of its own best-effort
+            // message must not swallow the text's (HeldTextDeliveryUnknown).
+            throw new HeldTextDeliveryUnknown($e);
+        }
+    }
+
+    /**
+     * The held text and this body as one body; null when no text is held
+     * for this contact or the two do not fit the field together — then
+     * both go out as they always did, one after the other, nothing cut.
+     */
+    private function joinedWithHeldText(Contact $contact, string $text, int $bodyLimit): ?string
+    {
+        $held = $this->reply->heldTextFor($contact);
+
+        if ($held === null) {
+            return null;
+        }
+
+        $joined = $held."\n\n".$text;
+
+        return mb_strlen($joined) <= $bodyLimit ? $joined : null;
+    }
+
+    /**
      * @param  array<string, mixed>  $payload
      */
     protected function send(Contact $contact, string $type, array $payload, ?WhatsappTemplate $template = null, ?TemplateFallback $fallback = null): void
+    {
+        $company = $this->connectedCompany($contact, $type);
+
+        // A text held back for this person was written before this
+        // message, so it goes out first, on its own.
+        $this->reply->flushFor($contact);
+
+        $this->deliver($company, $contact, $type, $payload, $template, $fallback);
+    }
+
+    /**
+     * The refusals given before anything reaches Dereu: a session message
+     * outside the contact's 24-hour window, a number that cannot send.
+     */
+    private function connectedCompany(Contact $contact, string $type): DereuCompany
     {
         if ($type !== 'template' && ! $contact->hasOpenSessionWindow()) {
             throw new SessionWindowClosed($contact);
@@ -208,6 +316,14 @@ class DereuMessenger
             throw new RuntimeException('WhatsApp number is not connected — cannot send messages.');
         }
 
+        return $company;
+    }
+
+    /**
+     * @param  array<string, mixed>  $payload
+     */
+    protected function deliver(DereuCompany $company, Contact $contact, string $type, array $payload, ?WhatsappTemplate $template = null, ?TemplateFallback $fallback = null): void
+    {
         try {
             $response = $this->request($company->api_key)
                 ->post('/messages/send', [

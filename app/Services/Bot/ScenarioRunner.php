@@ -16,6 +16,7 @@ use App\Models\WhatsappTemplate;
 use App\Services\Ai\CtaLinkBuilder;
 use App\Services\DereuMessenger;
 use App\Services\TemplateFallback;
+use App\Services\WhatsappReplyBuffer;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Facades\Log;
 use RuntimeException;
@@ -31,6 +32,16 @@ use Throwable;
  *
  * Runs never touch the contact's main dialog session, so a supplier can
  * simultaneously await answers about several requests and listings.
+ *
+ * A launch and a timeout are notifications by an event, not an answer to
+ * anybody: they send straight away even when they happen in the middle of
+ * a bot reply (a customer's pick launching «Новая заявка» for the
+ * supplier). A button reply of the run is an answer to the person who
+ * pressed it — there a text block followed by buttons goes out as one
+ * message — and the run answers for its own messages: the text held
+ * before it is sent first, and whatever it holds is sent before the run
+ * is left, on success and on failure alike, so a failed send marks the
+ * run that made it.
  */
 class ScenarioRunner
 {
@@ -43,6 +54,7 @@ class ScenarioRunner
         private readonly ScenarioConditionEvaluator $conditions,
         private readonly ScenarioActionExecutor $actions,
         private readonly CtaLinkBuilder $links,
+        private readonly WhatsappReplyBuffer $reply,
     ) {}
 
     /**
@@ -58,35 +70,24 @@ class ScenarioRunner
             return null;
         }
 
-        $run = new ScenarioRun([
-            'token' => ScenarioRun::generateToken(),
-            'bot_scenario_id' => $scenario->id,
-            'scenario_version' => $scenario->published_version,
-            'contact_id' => $contact->id,
-            'status' => ScenarioRunStatus::Active,
-        ]);
+        return $this->reply->outside(function () use ($scenario, $contact, $subject, $definition): ?ScenarioRun {
+            $run = new ScenarioRun([
+                'token' => ScenarioRun::generateToken(),
+                'bot_scenario_id' => $scenario->id,
+                'scenario_version' => $scenario->published_version,
+                'contact_id' => $contact->id,
+                'status' => ScenarioRunStatus::Active,
+            ]);
 
-        if ($subject !== null) {
-            $run->subject()->associate($subject);
-        }
+            if ($subject !== null) {
+                $run->subject()->associate($subject);
+            }
 
-        $run->save();
-        $run->setRelation('contact', $contact);
+            $run->save();
+            $run->setRelation('contact', $contact);
 
-        try {
-            $this->advance($run, $definition, $definition->startNodeId());
-        } catch (OutboundRequestBlocked $e) {
-            // The channel is barred on this machine, so nothing was
-            // attempted: recording a terminal failure would put a local
-            // block into the journal of a real supplier's run.
-            throw $e;
-        } catch (Throwable $e) {
-            $this->fail($run, $e);
-
-            return null;
-        }
-
-        return $run;
+            return $this->advanceOwnMessages($run, $definition, $definition->startNodeId()) ? $run : null;
+        });
     }
 
     /**
@@ -112,16 +113,10 @@ class ScenarioRunner
             return;
         }
 
-        try {
-            $this->advance($run, $definition, $definition->target($node['id'], ScenarioDefinition::optionOutput($optionId)));
-        } catch (OutboundRequestBlocked $e) {
-            // The channel is barred on this machine, so nothing was
-            // attempted: recording a terminal failure would put a local
-            // block into the journal of a real supplier's run.
-            throw $e;
-        } catch (Throwable $e) {
-            $this->fail($run, $e);
-        }
+        // A text the reply held before the run is the dialog's, not the run's.
+        $this->reply->flush();
+
+        $this->advanceOwnMessages($run, $definition, $definition->target($node['id'], ScenarioDefinition::optionOutput($optionId)));
     }
 
     /**
@@ -147,15 +142,34 @@ class ScenarioRunner
             return;
         }
 
+        $this->reply->outside(fn (): bool => $this->advanceOwnMessages($run, $definition, $target));
+    }
+
+    /**
+     * Advance the run, answering for its own messages: whatever text it
+     * still holds goes out before the run is left — also when advancing
+     * failed, because that text was written before the failure — and a
+     * failed send of it fails this run, never the next sender. A failure
+     * of that last send does not replace the one already being handled.
+     * False when the run failed.
+     */
+    private function advanceOwnMessages(ScenarioRun $run, ScenarioDefinition $definition, ?string $nodeId): bool
+    {
         try {
-            $this->advance($run, $definition, $target);
+            $this->advance($run, $definition, $nodeId);
+            $this->reply->flush();
+
+            return true;
         } catch (OutboundRequestBlocked $e) {
             // The channel is barred on this machine, so nothing was
             // attempted: recording a terminal failure would put a local
             // block into the journal of a real supplier's run.
             throw $e;
         } catch (Throwable $e) {
+            $this->reply->flushAfter($e);
             $this->fail($run, $e);
+
+            return false;
         }
     }
 
@@ -225,6 +239,11 @@ class ScenarioRunner
                     break;
 
                 case BotNodeType::Action:
+                    // A run's text before its action goes out before the
+                    // action is taken: a failed send must stop the run with
+                    // the request or listing untouched, as it always did.
+                    $this->reply->flush();
+
                     $action = ScenarioAction::tryFrom((string) ($node['action'] ?? ''));
 
                     $outcome = $action === null
@@ -351,6 +370,9 @@ class ScenarioRunner
 
     private function complete(ScenarioRun $run): void
     {
+        // The run's last text goes out before the run is recorded complete.
+        $this->reply->flush();
+
         $run->forceFill([
             'status' => ScenarioRunStatus::Completed,
             'current_node_id' => null,

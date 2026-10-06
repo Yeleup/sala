@@ -106,11 +106,17 @@ class ScenarioAiAssistant implements AiAssistant
      * asked for, one level up on «Назад» or back to the engine with the
      * message unread — leaves no working memory behind: the next block
      * starts from nothing, whichever way this one ended.
+     *
+     * Cleared, not yet saved: the engine saves the session with the step
+     * the contact lands on, after the block's closing message has gone out
+     * with whatever follows it. Saved here, ahead of that message, a failed
+     * send would leave the block without its memory, and the retry of the
+     * same message would answer a different dialog.
      */
     private function settle(BotSession $session, AiOutcome $outcome): AiOutcome
     {
-        if ($outcome !== AiOutcome::InProgress && $session->state !== null) {
-            $session->update(['state' => null]);
+        if ($outcome !== AiOutcome::InProgress) {
+            $session->state = null;
         }
 
         return $outcome;

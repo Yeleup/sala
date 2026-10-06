@@ -15,6 +15,7 @@ use App\Services\Bot\InboundMessage;
 use App\Services\DereuMessenger;
 use App\Services\DereuPlatformClient;
 use App\Services\OperatorHandoff;
+use App\Services\WhatsappReplyBuffer;
 use App\Support\PhoneNumber;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
@@ -126,7 +127,13 @@ class ProcessDereuWebhookEvent implements ShouldQueue
         }
 
         try {
-            $engine->handle($contact, InboundMessage::fromWebhookEvent($event));
+            // Everything the bot answers to this message is one reply: a
+            // text followed by buttons reaches the person as one message
+            // (scoped state, like the audit above).
+            app(WhatsappReplyBuffer::class)->collect(
+                $contact,
+                fn () => $engine->handle($contact, InboundMessage::fromWebhookEvent($event)),
+            );
         } catch (OutboundRequestBlocked $e) {
             // Nothing on this machine can reach the channel, so a retry
             // would only replay the engine — paid model calls included —

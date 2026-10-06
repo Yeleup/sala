@@ -17,6 +17,7 @@ use App\Services\Ai\VoiceTranscriber;
 use App\Services\DereuMediaDownloader;
 use App\Services\DereuMessenger;
 use App\Services\OperatorHandoff;
+use App\Services\WhatsappReplyBuffer;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\RateLimiter;
@@ -95,6 +96,7 @@ class BotEngine
         private readonly DereuMediaDownloader $mediaDownloader,
         private readonly VoiceTranscriber $transcriber,
         private readonly OperatorHandoff $handoff,
+        private readonly WhatsappReplyBuffer $reply,
     ) {}
 
     public function handle(Contact $contact, InboundMessage $message): void
@@ -279,7 +281,7 @@ class BotEngine
         // Waiting on a menu — repeat the step the contact is actually on.
         if ($node !== null && $type?->waitsForInput() === true) {
             $this->sendMenu($contact, $definition, $node);
-            $session->save();
+            $this->saveSession($session);
 
             return;
         }
@@ -425,23 +427,44 @@ class BotEngine
 
                 case BotNodeType::ButtonMenu:
                 case BotNodeType::ListMenu:
-                    if ($node['id'] !== $silentMenuAt) {
-                        $this->sendMenu($contact, $definition, $node);
+                    if ($node['id'] === $silentMenuAt) {
+                        // Parked, not saved yet: the answer to the opening
+                        // message comes next and saves the session with
+                        // it. Saved now, a failed send of the greeting
+                        // would leave the dialog already opened, and the
+                        // retry of the same message would skip the
+                        // greeting.
+                        $this->park($session, $node['id'], $definition->nodeFingerprint($node));
+
+                        return true;
                     }
 
+                    $this->sendMenu($contact, $definition, $node);
                     $this->waitAt($session, $node['id'], $definition->nodeFingerprint($node));
 
                     return true;
 
                 case BotNodeType::AiInput:
-                    $this->waitAt($session, $node['id'], $definition->nodeFingerprint($node));
+                    // Parked, saved once the block has spoken: its first
+                    // message goes out together with a text block right
+                    // before it, and only then is the step recorded.
+                    $this->park($session, $node['id'], $definition->nodeFingerprint($node));
 
                     $entering = $carried;
                     $carried = null;
 
+                    // A block entered with the person's message works on
+                    // that message first — reads it, writes the draft —
+                    // so whatever was said before it goes out now.
+                    if ($entering !== null) {
+                        $this->reply->flush();
+                    }
+
                     $outcome = $this->aiAssistant->start($session, $node, $entering);
 
                     if ($outcome === AiOutcome::InProgress) {
+                        $this->saveSession($session);
+
                         return true;
                     }
 
@@ -553,6 +576,13 @@ class BotEngine
         }
 
         $this->beginDialog($session, $scenario);
+
+        // A first-time contact gets the session row before anything is
+        // said — still on no step, so a retry opens the dialog all over
+        // again — and the navigator's audit can name it.
+        if (! $session->exists) {
+            $this->saveSession($session);
+        }
 
         // Everything before the menu — the greeting, any other text blocks
         // the operator put there — goes out now; the menu itself waits.
@@ -682,7 +712,7 @@ class BotEngine
             case MenuRouteKind::ServiceQuestion:
                 $this->messenger->sendText($contact, $this->replyTexts->get(BotReplyKey::ServiceQuestion));
                 $this->sendMenu($contact, $definition, $node);
-                $session->save();
+                $this->saveSession($session);
 
                 return true;
 
@@ -707,7 +737,7 @@ class BotEngine
                 // Шаг не повторяется: человек и жалуется на то, что бот
                 // водит его по кругу одним и тем же вопросом.
                 $this->messenger->sendText($contact, $this->replyTexts->get(BotReplyKey::OperatorRequested));
-                $session->save();
+                $this->saveSession($session);
 
                 return true;
 
@@ -791,7 +821,7 @@ class BotEngine
             'title' => $title,
             'expires_at' => now()->addMinutes(self::NAV_PROPOSAL_TTL_MINUTES)->toIso8601String(),
         ]];
-        $session->save();
+        $this->saveSession($session);
     }
 
     /**
@@ -814,7 +844,7 @@ class BotEngine
         // is asked again — that is a new event, not this one.
         if (! $this->confirmsNavRoute($proposal, $message)) {
             $session->state = null;
-            $session->save();
+            $this->saveSession($session);
 
             return false;
         }
@@ -1003,7 +1033,7 @@ class BotEngine
             return;
         }
 
-        $session->save();
+        $this->saveSession($session);
     }
 
     /**
@@ -1089,7 +1119,7 @@ class BotEngine
         $outcome = $this->aiAssistant->resume($session, $node, $message);
 
         if ($outcome === AiOutcome::InProgress) {
-            $session->save();
+            $this->saveSession($session);
 
             return $outcome;
         }
@@ -1185,7 +1215,7 @@ class BotEngine
             $this->messenger->sendText($contact, $this->replyTexts->get(BotReplyKey::MenuStuck));
         }
 
-        $session->save();
+        $this->saveSession($session);
     }
 
     /**
@@ -1253,6 +1283,25 @@ class BotEngine
      */
     private function waitAt(BotSession $session, string $nodeId, string $fingerprint): void
     {
+        $this->park($session, $nodeId, $fingerprint);
+        $this->saveSession($session);
+    }
+
+    /**
+     * Record where the dialog stands. What the bot has already said in
+     * this reply goes out first: if that send fails, the turn stops before
+     * the step is recorded, and the retry of the same message answers
+     * from the same place (see WhatsappReplyBuffer). Every session write of
+     * the engine goes through here.
+     */
+    private function saveSession(BotSession $session): void
+    {
+        $this->reply->flush();
+        $session->save();
+    }
+
+    private function park(BotSession $session, string $nodeId, string $fingerprint): void
+    {
         // Parking somewhere else is progress: whatever the contact could
         // not get past, they are past it now.
         if ($session->menuStreak($nodeId) === null) {
@@ -1262,7 +1311,6 @@ class BotEngine
         $session->current_node_id = $nodeId;
         $session->current_node_fingerprint = $fingerprint;
         $session->last_dialog_ended_at = now();
-        $session->save();
     }
 
     private function endDialog(BotSession $session): void
@@ -1271,6 +1319,6 @@ class BotEngine
         $session->current_node_id = null;
         $session->current_node_fingerprint = null;
         $session->last_dialog_ended_at = now();
-        $session->save();
+        $this->saveSession($session);
     }
 }

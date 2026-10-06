@@ -9,6 +9,7 @@ use App\Enums\BotReplyKey;
 use App\Enums\CustomerRequestStatus;
 use App\Enums\ListingKind;
 use App\Enums\UserIntent;
+use App\Exceptions\HeldTextDeliveryUnknown;
 use App\Models\BotSession;
 use App\Models\Listing;
 use App\Models\Location;
@@ -18,6 +19,7 @@ use App\Services\Bot\InboundMessage;
 use App\Services\CustomerRequestPlacer;
 use App\Services\DereuMessenger;
 use App\Services\Locations\LocationResolver;
+use App\Services\WhatsappReplyBuffer;
 use App\Support\WhatsappText;
 use Illuminate\Database\Eloquent\Collection as EloquentCollection;
 use Illuminate\Support\Carbon;
@@ -154,6 +156,7 @@ class CustomerSearchAssistant
         private readonly LocationResolver $locations,
         private readonly AiAudit $audit,
         private readonly BotReplyTexts $replyTexts,
+        private readonly WhatsappReplyBuffer $reply,
     ) {}
 
     /**
@@ -188,17 +191,22 @@ class CustomerSearchAssistant
         }
 
         $session->state = ['kind' => $kind->value] + $this->defaultState();
-        $session->save();
 
         if ($carried !== null) {
+            $this->saveSession($session);
+
             return $this->resume($session, $node, $carried);
         }
 
+        // The invitation goes out first and the fresh memory is saved after
+        // it: a text block right before the block rides the same message,
+        // and a failed send leaves nothing recorded to replay differently.
         $this->messenger->sendButtons(
             $session->contact,
             trim((string) ($node['text'] ?? '')) ?: $this->searchGreeting($kind),
             $this->exitButton($session->state),
         );
+        $this->saveSession($session);
 
         return AiOutcome::InProgress;
     }
@@ -507,6 +515,11 @@ class CustomerSearchAssistant
      * former behaviour, and the restart after a stale row refreshes a
      * выдача that went stale under the customer, not a repeated query.
      *
+     * Every outcome is sent first and recorded after: a reply that did not
+     * go out leaves the search where it stood, so the retry of the same
+     * message answers it again — and a line the bot said just before (the
+     * stale-row notice) can still open the outcome's own message.
+     *
      * @param  array<string, mixed>  $state
      */
     protected function runSearch(BotSession $session, array $state, string $query, ?Location $location = null, bool $countAttempt = true, bool $rerun = false): AiOutcome
@@ -531,13 +544,13 @@ class CustomerSearchAssistant
             }
 
             if ($state['attempts'] >= self::MAX_FRUITLESS_SEARCHES) {
-                $this->persist($session, $state);
                 $this->sendCatalogCta(
                     $session,
                     'Подходящего сейчас не нашлось — так бывает, база пополняется каждый день. Загляните в каталог: вдруг что-то уже появилось.',
                     self::CATALOG_BUTTON_DEAD_END,
                     kind: $this->kind($state),
                 );
+                $this->persist($session, $state);
 
                 return AiOutcome::Completed;
             }
@@ -1055,6 +1068,11 @@ class CustomerSearchAssistant
      * the outcome without the catalog sentence, with the «В меню» button —
      * and a failure of that propagates like any outcome message. Only the
      * farewell has no fallback: the block ends either way.
+     *
+     * The button is best effort, a line the bot said before it is not: when
+     * that line rode this message and nobody knows whether it arrived, the
+     * failure propagates — no fallback, nothing recorded — and the queue
+     * retries the turn.
      */
     protected function sendCatalogCta(BotSession $session, string $text, string $button, ?string $fallbackText = null, ?string $query = null, ?Location $location = null, ?ListingKind $kind = null): void
     {
@@ -1065,6 +1083,8 @@ class CustomerSearchAssistant
                 $button,
                 $this->links->catalogUrl($session->contact, $query, $location, $kind),
             );
+        } catch (HeldTextDeliveryUnknown $e) {
+            throw $e;
         } catch (Throwable $e) {
             Log::warning('Failed to send the catalog CTA.', [
                 'bot_session_id' => $session->id,
@@ -1485,6 +1505,17 @@ class CustomerSearchAssistant
     protected function persist(BotSession $session, array $state): void
     {
         $session->state = $state;
+        $this->saveSession($session);
+    }
+
+    /**
+     * Record the search's memory. What the bot has already said in this
+     * reply goes out first, so a failed send stops the turn before the
+     * memory moves on (see WhatsappReplyBuffer).
+     */
+    private function saveSession(BotSession $session): void
+    {
+        $this->reply->flush();
         $session->save();
     }
 }

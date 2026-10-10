@@ -106,10 +106,12 @@ enum ListingKind: string
     }
 
     /**
-     * Whether the questionnaire demands a document photo (the driver's
-     * licence) before the listing may be submitted.
+     * Whether the questionnaire takes a document photo (the driver's
+     * licence). It is never required — the listing is submitted and
+     * published without it; a snapshot the operator has checked is what
+     * earns the card the «Документ проверен» badge.
      */
-    public function requiresDocument(): bool
+    public function acceptsDocument(): bool
     {
         return $this === self::Driver;
     }

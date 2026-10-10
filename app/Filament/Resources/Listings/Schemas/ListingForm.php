@@ -15,6 +15,7 @@ use App\Models\Contact;
 use App\Models\Listing;
 use App\Models\ListingMedia;
 use App\Models\Location;
+use App\Models\User;
 use App\Services\Locations\LocationResolver;
 use App\Support\PhoneNumber;
 use Closure;
@@ -35,6 +36,7 @@ use Filament\Support\Icons\Heroicon;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Support\Arr;
+use Livewire\Features\SupportFileUploads\TemporaryUploadedFile;
 
 /**
  * Operator form for a listing's business fields — also the moderation
@@ -375,12 +377,34 @@ class ListingForm
                     ->visible(fn (Get $get, ?Listing $record): bool => self::kindOf($get) === ListingKind::Driver
                         && $record !== null
                         && $record->documents()->exists()),
+                // The licence photo is optional, and it arrives not only
+                // from the chat and the web form: a driver may send it to
+                // the operator in the WhatsApp app. The upload is kept as a
+                // temporary file and stored after the record is written —
+                // on the same non-public disk and path as the other two
+                // routes (Listing::replaceDocument()). Only a fresh upload
+                // counts: a path string in the state is client-controlled.
+                FileUpload::make('document_upload')
+                    ->label(fn (?Listing $record): string => $record?->documents()->exists() ? 'Заменить снимок удостоверения' : 'Снимок удостоверения')
+                    ->helperText('Необязательно. Снимок видит только оператор. Новый снимок снимает прежнюю отметку «Документ проверен» — поставьте её заново, если сверили его с анкетой.')
+                    ->image()
+                    ->acceptedFileTypes(['image/jpeg', 'image/png', 'image/webp'])
+                    ->maxSize(ListingMedia::MAX_PHOTO_KILOBYTES)
+                    ->storeFiles(false)
+                    ->dehydrated(false)
+                    ->live()
+                    ->saveRelationshipsUsing(fn (FileUpload $component, Listing $record, Get $get) => self::saveDocumentUpload($component, $record, (bool) $get('document_verified')))
+                    ->visible(fn (Get $get): bool => self::kindOf($get) === ListingKind::Driver),
                 // A virtual field: EditListing turns it into the
-                // document_verified_at/by audit columns on save.
+                // document_verified_at/by audit columns on save. The mark
+                // refers to a snapshot, so without one there is nothing to
+                // tick — and a disabled toggle is not saved, which clears
+                // a stale mark.
                 Toggle::make('document_verified')
                     ->label('Документ проверен')
-                    ->helperText('Отметка фиксирует, кто и когда сверил снимок удостоверения с анкетой.')
-                    ->hiddenOn('create')
+                    ->helperText('Отметка фиксирует, кто и когда сверил снимок удостоверения с анкетой; с ней карточка выходит с бейджем «Документ проверен». Без снимка отметку не поставить.')
+                    ->disabled(fn (Get $get, ?Listing $record): bool => blank($get('document_upload'))
+                        && ! ($record?->documents()->exists() ?? false))
                     ->visible(fn (Get $get): bool => self::kindOf($get) === ListingKind::Driver),
                 // Audio the supplier sent is not editable, but its
                 // transcription is what the operator moderates by.
@@ -391,6 +415,32 @@ class ListingForm
                     ->columnSpanFull()
                     ->hiddenOn('create'),
             ]);
+    }
+
+    /**
+     * Store the licence photo the operator attached, in place of the
+     * stored one. Ticking «Документ проверен» in the same save means the
+     * operator checked the very snapshot they attach: the mark stays,
+     * stamped with them and now. Without the tick the new snapshot is
+     * unchecked, like a replacement from the web form. The field is
+     * emptied afterwards — the temporary file is gone once stored, and a
+     * second save must not try to attach it again.
+     */
+    private static function saveDocumentUpload(FileUpload $component, Listing $record, bool $verified): void
+    {
+        $upload = collect(Arr::wrap($component->getRawState()))
+            ->first(fn (mixed $file): bool => $file instanceof TemporaryUploadedFile);
+
+        if ($upload === null) {
+            return;
+        }
+
+        $verifier = auth()->user();
+
+        $record->replaceDocument($upload, $verified && $verifier instanceof User ? $verifier : null);
+        $record->save();
+
+        $component->state([]);
     }
 
     /**
@@ -580,14 +630,6 @@ class ListingForm
             $values['category_id'] = $record->category_id;
         }
 
-        $missing = Listing::missingPublicationFields($kind, $values);
-
-        // The licence document arrives only in the chat with the bot —
-        // the form cannot attach it, so the saved record is the source.
-        if ($kind->requiresDocument() && ! $record?->documents()->exists()) {
-            $missing[] = 'фото документа';
-        }
-
-        return $missing;
+        return Listing::missingPublicationFields($kind, $values);
     }
 }

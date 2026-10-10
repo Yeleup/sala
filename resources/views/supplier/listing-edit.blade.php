@@ -196,12 +196,12 @@
                     </div>
                 @else
                     <div class="field">
-                        <label for="document">Фото удостоверения</label>
+                        <label for="document">Фото удостоверения (необязательно)</label>
                         @if ($hasDocument)
                             <p class="muted" style="margin: 0 0 0.375rem;">Документ загружен. Загрузите новый файл, чтобы заменить (проверка будет выполнена заново).</p>
                         @endif
                         <input type="file" id="document" name="document" accept="image/jpeg,image/png,image/webp">
-                        <p class="muted" style="margin: 0.25rem 0 0;">Снимок увидит только оператор — в объявлении он не показывается.</p>
+                        <p class="muted" style="margin: 0.25rem 0 0;">Оператор проверит снимок, и в объявлении появится отметка «Документ проверен». Сам снимок увидит только оператор — в объявлении он не показывается.</p>
                         @error('document') <p class="error">{{ $message }}</p> @enderror
                     </div>
                 @endif

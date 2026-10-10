@@ -28,6 +28,19 @@ class ListingMediaFactory extends Factory
         ];
     }
 
+    /**
+     * A driver's licence snapshot: on the non-public disk, like every
+     * route that stores one.
+     */
+    public function document(): static
+    {
+        return $this->state(fn (): array => [
+            'type' => ListingMediaType::Document,
+            'disk' => 'local',
+            'path' => 'listings/documents/'.fake()->uuid().'.jpg',
+        ]);
+    }
+
     public function audio(): static
     {
         return $this->state(fn (): array => [

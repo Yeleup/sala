@@ -676,20 +676,12 @@ class SupplierListingCollector
             $draft = $this->ensureDraft($session, $state);
             $this->saveDraft($draft, $state, $this->listingAttributes($state));
 
-            // A driver's licence document is mandatory but is not a field:
-            // the summary goes out without the submit button and asks for
-            // the photo instead, for free — like a button prompt, it is not
-            // a clarification attempt.
-            if ($kind->requiresDocument() && $draft->documents()->doesntExist()) {
-                $state['phase'] = 'confirming';
-                $state['awaiting_document'] = true;
-                $this->persist($session, $state);
-                $this->sendConfirmation($session, $state);
-
-                return AiOutcome::InProgress;
-            }
-
-            $state['awaiting_document'] = false;
+            // A driver's licence document is optional and is not a field:
+            // while the draft has none, the summary — submit button and all
+            // — also asks for the photo, for free (like a button prompt, it
+            // is not a clarification attempt). The flag marks that ask as
+            // the open one: the next photo is the document.
+            $state['awaiting_document'] = $kind->acceptsDocument() && $draft->documents()->doesntExist();
             $state['phase'] = 'confirming';
             $this->persist($session, $state);
             $this->sendConfirmation($session, $state);
@@ -1396,18 +1388,6 @@ class SupplierListingCollector
         $draft = $state['draft_id'] !== null ? Listing::find($state['draft_id']) : null;
 
         if ($this->matchesButton($message, self::BUTTON_SUBMIT, self::BUTTON_SUBMIT_TITLE)) {
-            // The submit button was never offered while the licence document
-            // is missing, but its title can be typed by hand: repeat the
-            // summary-plus-ask instead of letting an undocumented driver
-            // listing into moderation.
-            if ($this->kind($state)->requiresDocument() && ! ($draft?->documents()->exists() ?? false)) {
-                $state['awaiting_document'] = true;
-                $this->persist($session, $state);
-                $this->sendConfirmation($session, $state);
-
-                return AiOutcome::InProgress;
-            }
-
             $this->reply->flush();
             $draft?->submitForModeration();
             $this->messenger->sendText($session->contact, 'Готово! Объявление ушло на проверку. Как только модератор решит — сразу напишем.');
@@ -1525,14 +1505,14 @@ class SupplierListingCollector
 
         $draft = $this->ensureDraft($session, $state);
 
-        // The bot just asked for the licence document, so the next photo IS
-        // the document: stored on the non-public disk, never rendered to
-        // customers and never attached to extraction calls. Only while the
-        // summary-plus-ask is the open question: a wording correction can
-        // drop a required field and detour the dialog back to clarifying
-        // with awaiting_document still set — a photo answering THAT question
-        // is ordinary listing material, and the document gets asked for
-        // again on the next full summary.
+        // The summary just asked for the licence document, so the next photo
+        // IS the document: stored on the non-public disk, never rendered to
+        // customers and never attached to extraction calls. Only while that
+        // summary is the open question: a wording correction can drop a
+        // required field and detour the dialog back to clarifying with
+        // awaiting_document still set — a photo answering THAT question is
+        // ordinary listing material, and the document gets asked for again
+        // on the next full summary.
         if ($state['phase'] === 'confirming'
             && ($state['awaiting_document'] ?? false)
             && $draft->documents()->doesntExist()) {
@@ -1668,12 +1648,12 @@ class SupplierListingCollector
     private function currentBotMessageSummary(array $state): ?string
     {
         if ($state['phase'] === 'confirming') {
-            if ($state['awaiting_document'] ?? false) {
-                return 'показал сводку и попросил прислать фото удостоверения';
-            }
-
             return 'показал сводку объявления с кнопками «Да, отправить» и «Исправить», спросил «Всё верно?»'
-                .($this->hasPhotos($state) ? '' : ' и попросил прислать фотографии');
+                .match (true) {
+                    (bool) ($state['awaiting_document'] ?? false) => ' и предложил по желанию прислать фото удостоверения',
+                    $this->hasPhotos($state) => '',
+                    default => ' и попросил прислать фотографии',
+                };
         }
 
         if ($state['phase'] === 'locating') {
@@ -2083,6 +2063,10 @@ class SupplierListingCollector
      * line is a property of the summary rather than a one-off event — it
      * stands while the draft has no photos and disappears once it has one.
      *
+     * A driver's summary asks for the licence photo in the same way: never
+     * blocking, standing while the draft has no document, and in place of
+     * the pictures line — the photo that answers it is the document.
+     *
      * @param  array<string, mixed>  $state
      */
     private function sendConfirmation(BotSession $session, array $state): void
@@ -2126,34 +2110,20 @@ class SupplierListingCollector
             $place !== null ? 'Место: '.$place->label() : null,
         ]));
 
-        // The licence document is still missing: the summary goes out
-        // without the submit button — submitting is simply not offered
-        // until the document arrives — and asks for the photo instead of
-        // the optional-pictures line.
-        if ($state['awaiting_document'] ?? false) {
-            $body = implode("\n", array_filter([
-                $text,
-                'Остался обязательный шаг: пришлите фото удостоверения — без него объявление не выйдет. '
-                    .'Снимок увидит только наш оператор, в объявлении он не показывается.',
-            ]));
-
-            $this->messenger->sendButtons($session->contact, $body, [
-                ['id' => self::BUTTON_EDIT, 'title' => self::BUTTON_EDIT_TITLE],
-                ['id' => self::BUTTON_MENU, 'title' => self::BUTTON_MENU_TITLE],
-            ]);
-
-            return;
-        }
-
         $body = implode("\n", array_filter([
             $text,
             'Проверьте, всё ли верно. Если да — жмите «'.self::BUTTON_SUBMIT_TITLE.'», и объявление уйдёт на проверку.',
             // Last, after the call to action: put ahead of the question the
             // ask would leave it hanging on a request instead of on the
-            // collected data.
-            $this->hasPhotos($state)
-                ? null
-                : 'Фотографий пока нет — пришлите снимки, с фото объявление смотрят охотнее.',
+            // collected data. The licence ask takes the pictures line's
+            // place: the next photo is the document, so a second request
+            // for photos right beside it would contradict it.
+            match (true) {
+                (bool) ($state['awaiting_document'] ?? false) => 'По желанию пришлите фото удостоверения: оператор его проверит, и в объявлении появится отметка «Документ проверен». '
+                    .'Снимок увидит только оператор, в объявлении он не показывается.',
+                $this->hasPhotos($state) => null,
+                default => 'Фотографий пока нет — пришлите снимки, с фото объявление смотрят охотнее.',
+            },
         ]));
 
         $this->messenger->sendButtons($session->contact, $body, [

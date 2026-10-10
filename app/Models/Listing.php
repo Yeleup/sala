@@ -21,6 +21,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\HasOne;
+use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
@@ -252,6 +253,47 @@ class Listing extends Model
         return $this->media()->where('type', ListingMediaType::Document);
     }
 
+    /**
+     * Whether the card carries the «Документ проверен» badge: the
+     * operator's mark stands AND there is a snapshot it refers to. A mark
+     * alone — left on a listing that has no document — proves nothing.
+     * Reads the documents_exists aggregate when the query loaded it
+     * (withExists('documents')), so a catalog page costs no extra queries.
+     */
+    public function hasVerifiedDocument(): bool
+    {
+        if ($this->document_verified_at === null) {
+            return false;
+        }
+
+        return (bool) ($this->attributes['documents_exists'] ?? $this->documents()->exists());
+    }
+
+    /**
+     * Put a new licence snapshot in place of the stored one. The old file
+     * goes away with its row (the ListingMedia deleted hook); the new one
+     * lands on the non-public disk and is served to the operator only
+     * through the authenticated document route. The verification mark
+     * referred to the old shot, so it is voided — unless the one attaching
+     * the snapshot has checked it in the same step (the operator in the
+     * admin), who is then recorded as its verifier. The caller saves.
+     */
+    public function replaceDocument(UploadedFile $file, ?User $verifier = null): void
+    {
+        $this->documents()->get()->each(fn (ListingMedia $document) => $document->delete());
+
+        $this->documents()->create([
+            'type' => ListingMediaType::Document,
+            'disk' => 'local',
+            'path' => $file->store("listings/{$this->id}/documents", 'local'),
+        ]);
+
+        $this->fill([
+            'document_verified_at' => $verifier === null ? null : now(),
+            'document_verified_by' => $verifier?->id,
+        ]);
+    }
+
     /** @return HasMany<CustomerRequest, $this> */
     public function customerRequests(): HasMany
     {
@@ -332,17 +374,14 @@ class Listing extends Model
     }
 
     /**
+     * The driver's licence photo is not among them: it only earns the card
+     * the «Документ проверен» badge (hasVerifiedDocument()).
+     *
      * @return list<string>
      */
     public function missingForPublication(): array
     {
-        $missing = self::missingPublicationFields($this->kind, $this->only(array_keys($this->publicationFields())));
-
-        if ($this->kind->requiresDocument() && $this->documents()->doesntExist()) {
-            $missing[] = 'фото документа';
-        }
-
-        return $missing;
+        return self::missingPublicationFields($this->kind, $this->only(array_keys($this->publicationFields())));
     }
 
     public function isReadyForPublication(): bool

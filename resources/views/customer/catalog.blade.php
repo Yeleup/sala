@@ -99,7 +99,7 @@
                     @if ($listing->experience_years !== null)
                         <p class="listing-line">Стаж {{ $listing->experience_years }} лет (со слов исполнителя)</p>
                     @endif
-                    @if ($listing->document_verified_at)
+                    @if ($listing->hasVerifiedDocument())
                         <div class="card-badge">✅ Документ проверен</div>
                     @endif
                 @else

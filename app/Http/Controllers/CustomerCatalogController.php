@@ -212,6 +212,8 @@ class CustomerCatalogController extends Controller
         $query = Listing::query()
             ->searchable()
             ->with(['supplier', 'category', 'brand', 'location', 'photos', 'machineCategories'])
+            // The «Документ проверен» badge needs the snapshot, not only the mark.
+            ->withExists('documents')
             ->when($filters['kind'], fn (Builder $builder, ListingKind $kind): Builder => $builder->where('kind', $kind))
             ->when($filters['category'], fn (Builder $builder, Category $category): Builder => $builder->where('category_id', $category->id));
 

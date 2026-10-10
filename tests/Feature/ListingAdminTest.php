@@ -2,6 +2,7 @@
 
 use App\Enums\ListingKind;
 use App\Enums\ListingMediaType;
+use App\Enums\ListingStatus;
 use App\Enums\RepairPlace;
 use App\Filament\Resources\Listings\ListingResource;
 use App\Filament\Resources\Listings\Pages\CreateListing;
@@ -12,12 +13,17 @@ use App\Models\Contact;
 use App\Models\Listing;
 use App\Models\ListingMedia;
 use App\Models\User;
+use App\Services\Ai\CtaLinkBuilder;
+use App\Services\DereuMessenger;
+use Filament\Actions\Testing\TestAction;
 use Filament\Schemas\Components\Component;
 use Filament\Tables\Columns\TextColumn;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\Storage;
 use Livewire\Livewire;
+use Mockery\MockInterface;
 
 uses(RefreshDatabase::class);
 
@@ -47,16 +53,16 @@ describe('форма объявления по виду', function () {
         'аренда' => [
             'publishable',
             ['category_id', 'brand_id', 'price'],
-            ['person_name', 'services', 'repair_place', 'machine_categories', 'unlisted_machinery', 'licence_type', 'experience_years', 'travels_to_other_cities', 'document_verified'],
+            ['person_name', 'services', 'repair_place', 'machine_categories', 'unlisted_machinery', 'licence_type', 'experience_years', 'travels_to_other_cities', 'document_upload', 'document_verified'],
         ],
         'ремонт' => [
             'repair',
             ['person_name', 'services', 'repair_place', 'price'],
-            ['category_id', 'brand_id', 'machine_categories', 'unlisted_machinery', 'licence_type', 'experience_years', 'travels_to_other_cities', 'document_verified'],
+            ['category_id', 'brand_id', 'machine_categories', 'unlisted_machinery', 'licence_type', 'experience_years', 'travels_to_other_cities', 'document_upload', 'document_verified'],
         ],
         'водитель' => [
             'driver',
-            ['person_name', 'machine_categories', 'unlisted_machinery', 'licence_type', 'experience_years', 'travels_to_other_cities', 'document_verified'],
+            ['person_name', 'machine_categories', 'unlisted_machinery', 'licence_type', 'experience_years', 'travels_to_other_cities', 'document_upload', 'document_verified'],
             ['category_id', 'brand_id', 'price', 'services', 'repair_place'],
         ],
     ]);
@@ -177,20 +183,16 @@ describe('форма объявления по виду', function () {
     });
 
     test('подсказка «чего не хватает» считается по виду', function () {
-        // У водителя с заполненной анкетой не хватает только снимка
-        // удостоверения — он приходит в чате, форма его не загружает.
+        // Снимок удостоверения необязателен: водителю с заполненной анкетой
+        // для публикации без него хватает всего.
         $driver = Listing::factory()->driver()->create(['title' => 'Машинист экскаватора']);
 
         Livewire::test(EditListing::class, ['record' => $driver->id])
-            ->assertSee('Не хватает для публикации: фото документа.');
+            ->assertSee('Все поля заполнены — объявление можно публиковать.')
+            ->assertDontSee('фото документа');
 
-        ListingMedia::create([
-            'listing_id' => $driver->id, 'type' => ListingMediaType::Document,
-            'disk' => 'local', 'path' => "listings/{$driver->id}/documents/doc.jpg",
-        ]);
-
-        Livewire::test(EditListing::class, ['record' => $driver->id])
-            ->assertSee('Все поля заполнены — объявление можно публиковать.');
+        Livewire::test(EditListing::class, ['record' => Listing::factory()->driver()->create(['title' => 'Машинист экскаватора', 'licence_type' => null])->id])
+            ->assertSee('Не хватает для публикации: тип удостоверения.');
 
         // У ремонта своя анкета: цена диагностики публикации не мешает,
         // а вот пустые услуги — мешают.
@@ -256,7 +258,7 @@ describe('документ водителя и галочка проверки',
         $this->freezeTime();
         $operator = User::factory()->create();
         $this->actingAs($operator);
-        $listing = Listing::factory()->driver()->create();
+        $listing = Listing::factory()->driver()->has(ListingMedia::factory()->document(), 'media')->create();
 
         Livewire::test(EditListing::class, ['record' => $listing->id])
             ->assertFormSet(['document_verified' => false])
@@ -289,7 +291,7 @@ describe('документ водителя и галочка проверки',
     test('повторное сохранение с уже стоящей галочкой не переписывает след проверки', function () {
         $verifier = User::factory()->create();
         $verifiedAt = now()->subDay()->startOfSecond();
-        $listing = Listing::factory()->driver()->create([
+        $listing = Listing::factory()->driver()->has(ListingMedia::factory()->document(), 'media')->create([
             'document_verified_at' => $verifiedAt,
             'document_verified_by' => $verifier->id,
         ]);
@@ -302,6 +304,201 @@ describe('документ водителя и галочка проверки',
         expect($listing->refresh())
             ->document_verified_at->toDateTimeString()->toBe($verifiedAt->toDateTimeString())
             ->document_verified_by->toBe($verifier->id);
+    });
+});
+
+describe('снимок удостоверения от оператора', function () {
+    beforeEach(function () {
+        Storage::fake('local');
+        Storage::fake('public');
+        $this->operator = User::factory()->create();
+        $this->actingAs($this->operator);
+    });
+
+    test('без снимка галочку не поставить — отметка не сохраняется', function () {
+        $listing = Listing::factory()->driver()->create();
+
+        Livewire::test(EditListing::class, ['record' => $listing->id])
+            ->assertFormFieldDisabled('document_verified')
+            ->fillForm(['document_verified' => true])
+            ->call('save')
+            ->assertHasNoFormErrors();
+
+        expect($listing->refresh())
+            ->document_verified_at->toBeNull()
+            ->document_verified_by->toBeNull();
+    });
+
+    test('оператор прикладывает снимок — он ложится непубличным документом и открывается по закрытому маршруту', function () {
+        $listing = Listing::factory()->driver()->create();
+
+        Livewire::test(EditListing::class, ['record' => $listing->id])
+            ->assertSee('Снимок удостоверения')
+            ->fillForm(['document_upload' => UploadedFile::fake()->image('licence.jpg')])
+            ->call('save')
+            ->assertHasNoFormErrors()
+            // Временный файл уже перенесён: поле пустеет, повторное
+            // сохранение не пытается приложить его снова.
+            ->assertFormSet(['document_upload' => null]);
+
+        $document = $listing->documents()->sole();
+        expect($document)
+            ->disk->toBe('local')
+            ->path->toStartWith("listings/{$listing->id}/documents/")
+            ->and($listing->photos()->count())->toBe(0)
+            ->and($listing->refresh()->document_verified_at)->toBeNull();
+        Storage::disk('local')->assertExists($document->path);
+        Storage::disk('public')->assertMissing($document->path);
+
+        $this->get(route('moderation.listings.document', $listing))->assertSuccessful();
+    });
+
+    test('снимок и галочка в одном сохранении: проверил тот, кто приложил', function () {
+        $this->freezeTime();
+        $listing = Listing::factory()->driver()->create();
+
+        Livewire::test(EditListing::class, ['record' => $listing->id])
+            ->fillForm([
+                'document_upload' => UploadedFile::fake()->image('licence.jpg'),
+                'document_verified' => true,
+            ])
+            ->call('save')
+            ->assertHasNoFormErrors();
+
+        expect($listing->refresh())
+            ->document_verified_at->toDateTimeString()->toBe(now()->toDateTimeString())
+            ->document_verified_by->toBe($this->operator->id)
+            ->and($listing->documents()->count())->toBe(1);
+    });
+
+    test('замена снимка с галочкой переписывает след проверки на того, кто заменил', function () {
+        $this->freezeTime();
+        $listing = Listing::factory()->driver()->create([
+            'document_verified_at' => now()->subWeek(),
+            'document_verified_by' => User::factory()->create()->id,
+        ]);
+        Storage::disk('local')->put('listings/old/doc.jpg', 'JPEG');
+        ListingMedia::factory()->document()->for($listing)->create(['path' => 'listings/old/doc.jpg']);
+
+        Livewire::test(EditListing::class, ['record' => $listing->id])
+            ->assertSee('Заменить снимок удостоверения')
+            ->assertFormSet(['document_verified' => true])
+            ->fillForm(['document_upload' => UploadedFile::fake()->image('new.jpg')])
+            ->call('save')
+            ->assertHasNoFormErrors();
+
+        expect($listing->refresh())
+            ->document_verified_at->toDateTimeString()->toBe(now()->toDateTimeString())
+            ->document_verified_by->toBe($this->operator->id)
+            ->and($listing->documents()->sole()->path)->not->toBe('listings/old/doc.jpg');
+        Storage::disk('local')->assertMissing('listings/old/doc.jpg');
+    });
+
+    test('замена снимка без галочки снимает прежнюю отметку, старый снимок удаляется', function () {
+        $listing = Listing::factory()->driver()->create([
+            'document_verified_at' => now()->subWeek(),
+            'document_verified_by' => User::factory()->create()->id,
+        ]);
+        Storage::disk('local')->put('listings/old/doc.jpg', 'JPEG');
+        ListingMedia::factory()->document()->for($listing)->create(['path' => 'listings/old/doc.jpg']);
+
+        Livewire::test(EditListing::class, ['record' => $listing->id])
+            ->fillForm([
+                'document_upload' => UploadedFile::fake()->image('new.jpg'),
+                'document_verified' => false,
+            ])
+            ->call('save')
+            ->assertHasNoFormErrors();
+
+        $document = $listing->documents()->sole();
+        expect($listing->refresh())
+            ->document_verified_at->toBeNull()
+            ->document_verified_by->toBeNull()
+            ->and($document->path)->not->toBe('listings/old/doc.jpg');
+        Storage::disk('local')->assertExists($document->path);
+        Storage::disk('local')->assertMissing('listings/old/doc.jpg');
+    });
+
+    test('снимок принимается только картинкой в пределах лимита веб-формы', function () {
+        $listing = Listing::factory()->driver()->create();
+
+        Livewire::test(EditListing::class, ['record' => $listing->id])
+            ->fillForm(['document_upload' => UploadedFile::fake()->create('licence.pdf', 100, 'application/pdf')])
+            ->call('save')
+            ->assertHasFormErrors(['document_upload']);
+
+        Livewire::test(EditListing::class, ['record' => $listing->id])
+            ->fillForm(['document_upload' => UploadedFile::fake()->image('licence.jpg')->size(ListingMedia::MAX_PHOTO_KILOBYTES + 1)])
+            ->call('save')
+            ->assertHasFormErrors(['document_upload']);
+
+        expect($listing->documents()->count())->toBe(0);
+    });
+
+    test('при создании анкеты водителя оператор сразу прикладывает проверенный снимок', function () {
+        $this->freezeTime();
+
+        Livewire::test(CreateListing::class)
+            ->fillForm([
+                'contact_id' => Contact::factory()->create()->id,
+                'kind' => ListingKind::Driver->value,
+                'title' => 'Машинист экскаватора',
+            ])
+            ->fillForm([
+                'document_upload' => UploadedFile::fake()->image('licence.jpg'),
+                'document_verified' => true,
+            ])
+            ->call('create')
+            ->assertHasNoFormErrors();
+
+        $listing = Listing::sole();
+        expect($listing)
+            ->kind->toBe(ListingKind::Driver)
+            ->document_verified_at->toDateTimeString()->toBe(now()->toDateTimeString())
+            ->document_verified_by->toBe($this->operator->id)
+            ->and($listing->documents()->sole()->disk)->toBe('local');
+        Storage::disk('local')->assertExists($listing->documents()->sole()->path);
+    });
+});
+
+describe('публикация водителя без снимка удостоверения', function () {
+    beforeEach(function () {
+        $this->actingAs(User::factory()->create());
+        $this->mock(DereuMessenger::class, fn (MockInterface $mock) => $mock->shouldIgnoreMissing());
+    });
+
+    test('оператор публикует свою анкету водителя без снимка — карточка без бейджа', function () {
+        $listing = Listing::factory()->driver()->create(['title' => 'Машинист экскаватора']);
+
+        Livewire::test(EditListing::class, ['record' => $listing->id])
+            ->assertActionEnabled('publish')
+            ->callAction('publish')
+            ->assertNotified('Объявление опубликовано');
+
+        expect($listing->refresh())
+            ->status->toBe(ListingStatus::Published)
+            ->and($listing->documents()->count())->toBe(0)
+            ->and($listing->hasVerifiedDocument())->toBeFalse();
+
+        $this->get(app(CtaLinkBuilder::class)->listingUrl(Contact::factory()->create(), $listing))
+            ->assertOk()
+            ->assertSee('Машинист экскаватора')
+            ->assertDontSee('Документ проверен');
+    });
+
+    test('модератор одобряет анкету водителя без снимка из очереди — карточка без бейджа', function () {
+        $listing = Listing::factory()->driver()->pendingModeration()->create(['title' => 'Машинист экскаватора']);
+
+        Livewire::test(ListListings::class)
+            ->callAction(TestAction::make('approve')->table($listing));
+
+        expect($listing->refresh())
+            ->status->toBe(ListingStatus::Published)
+            ->and($listing->hasVerifiedDocument())->toBeFalse();
+
+        $this->get(app(CtaLinkBuilder::class)->listingUrl(Contact::factory()->create(), $listing))
+            ->assertOk()
+            ->assertDontSee('Документ проверен');
     });
 });
 

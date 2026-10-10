@@ -435,14 +435,37 @@ describe('анкета по виду', function () {
         Storage::fake('local');
     });
 
-    test('веб-форма водителя требует поля вида и документ, но не цену', function () {
+    test('веб-форма водителя требует поля вида, но не цену и не фото удостоверения', function () {
         $draft = Listing::factory()->driver()->create();
 
         $response = $this->post(portalLinks()->updateUrl($draft), ['title' => 'Машинист']);
 
-        $response->assertSessionHasErrors(['person_name', 'licence_type', 'experience_years', 'location_id', 'travels_to_other_cities', 'machine_categories', 'document'])
-            ->assertSessionDoesntHaveErrors(['price', 'category_id', 'description']);
+        $response->assertSessionHasErrors(['person_name', 'licence_type', 'experience_years', 'location_id', 'travels_to_other_cities', 'machine_categories'])
+            ->assertSessionDoesntHaveErrors(['price', 'category_id', 'description', 'document']);
         expect($draft->refresh())->status->toBe(ListingStatus::Draft);
+    });
+
+    test('анкета водителя без фото удостоверения сохраняется и уходит на модерацию', function () {
+        $draft = Listing::factory()->driver()->create(['person_name' => null]);
+
+        $this->post(portalLinks()->updateUrl($draft), validDriverPayload($draft))
+            ->assertRedirect()
+            ->assertSessionHasNoErrors();
+
+        expect($draft->refresh())
+            ->status->toBe(ListingStatus::PendingModeration)
+            ->person_name->toBe('Серик')
+            ->document_verified_at->toBeNull()
+            ->and($draft->documents()->count())->toBe(0);
+    });
+
+    test('поле фото удостоверения помечено необязательным и говорит, что даёт отметку', function () {
+        $draft = Listing::factory()->driver()->create();
+
+        $this->get(portalLinks()->editUrl($draft))
+            ->assertOk()
+            ->assertSee('Фото удостоверения (необязательно)')
+            ->assertSee('Оператор проверит снимок, и в объявлении появится отметка «Документ проверен».');
     });
 
     test('веб-форма мастера требует поля вида, но не цену и описание', function () {
@@ -628,7 +651,7 @@ describe('анкета по виду', function () {
             ->assertSee('Техника, на которой работаете')
             ->assertSee('name="machine_categories[]"', false)
             ->assertSee('name="unlisted_machinery"', false)
-            ->assertSee('Снимок увидит только оператор — в объявлении он не показывается.')
+            ->assertSee('Сам снимок увидит только оператор — в объявлении он не показывается.')
             ->assertDontSee('Цена / тариф')
             ->assertDontSee('name="category_id"', false)
             ->assertDontSee('name="price"', false);

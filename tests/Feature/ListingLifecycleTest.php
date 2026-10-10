@@ -2,7 +2,6 @@
 
 use App\Enums\LicenceType;
 use App\Enums\ListingKind;
-use App\Enums\ListingMediaType;
 use App\Enums\ListingStatus;
 use App\Http\Requests\UpdateSupplierListingRequest;
 use App\Models\Listing;
@@ -101,14 +100,40 @@ test('гейт публикации зависит от вида', function () {
         'travels_to_other_cities' => true,
     ]);
 
-    // Всё скалярное есть, документа нет — публиковать нельзя.
-    expect($driver->missingForPublication())->toBe(['фото документа']);
+    // Анкета заполнена, снимка удостоверения нет — публиковать можно:
+    // фото документа необязательно и в гейт публикации не входит.
+    expect($driver->missingForPublication())->toBe([])
+        ->and($driver->isReadyForPublication())->toBeTrue();
 
-    ListingMedia::create(['listing_id' => $driver->id, 'type' => ListingMediaType::Document,
-        'disk' => 'local', 'path' => 'x.jpg']);
+    $driver->publish();
 
-    expect($driver->fresh()->isReadyForPublication())->toBeTrue()
-        ->and($driver->fresh()->missingForPublication())->toBe([]);
+    expect($driver->refresh()->status)->toBe(ListingStatus::Published);
+
+    // А тип удостоверения — обязательное поле анкеты, как и было.
+    expect(Listing::factory()->driver()->create(['title' => 'Машинист', 'licence_type' => null])->missingForPublication())
+        ->toBe(['тип удостоверения']);
+});
+
+test('водитель без снимка удостоверения проходит одобрение из очереди', function () {
+    $driver = Listing::factory()->driver()->pendingModeration()->create(['title' => 'Машинист экскаватора']);
+
+    $driver->approve(User::factory()->create());
+
+    expect($driver->refresh()->status)->toBe(ListingStatus::Published)
+        ->and($driver->hasVerifiedDocument())->toBeFalse();
+});
+
+test('бейдж «Документ проверен» — только при снимке и отметке оператора вместе', function () {
+    $markOnly = Listing::factory()->driver()->create(['document_verified_at' => now()]);
+    $documentOnly = Listing::factory()->driver()->has(ListingMedia::factory()->document(), 'media')->create();
+    $both = Listing::factory()->driver()->has(ListingMedia::factory()->document(), 'media')->create(['document_verified_at' => now()]);
+
+    expect($markOnly->hasVerifiedDocument())->toBeFalse()
+        ->and($documentOnly->hasVerifiedDocument())->toBeFalse()
+        ->and($both->hasVerifiedDocument())->toBeTrue()
+        // Каталог подгружает наличие снимка одним запросом — правило то же.
+        ->and(Listing::query()->withExists('documents')->whereKey($markOnly->id)->sole()->hasVerifiedDocument())->toBeFalse()
+        ->and(Listing::query()->withExists('documents')->whereKey($both->id)->sole()->hasVerifiedDocument())->toBeTrue();
 });
 
 test('false в булевом поле — это ответ, а не пробел', function () {
@@ -121,13 +146,11 @@ test('false в булевом поле — это ответ, а не пробе
     expect($missing)->toBe([]);
 
     // Тот же ответ «не готов» через полный путь: сохранённая модель с
-    // travels=false и загруженным документом публикуема.
+    // travels=false публикуема.
     $driver = Listing::factory()->driver()->create([
         'title' => 'Машинист экскаватора',
         'travels_to_other_cities' => false,
     ]);
-    ListingMedia::create(['listing_id' => $driver->id, 'type' => ListingMediaType::Document,
-        'disk' => 'local', 'path' => 'x.jpg']);
 
     expect($driver->fresh()->missingForPublication())->toBe([]);
 });
@@ -142,10 +165,10 @@ test('требования к публикации совпадают у мод�
     $webFormRequired = collect((new UpdateSupplierListingRequest)->rulesFor($kind))
         ->filter(fn (array $rules): bool => in_array('required', $rules, true))
         ->keys()
-        // Техника (pivot) и документ (файл) — вне скалярного гейта: у
-        // водителя техника обязательна своей строкой формы, а документ —
-        // отдельной строкой «фото документа» в missingForPublication().
-        ->reject(fn (string $field): bool => in_array($field, ['document', 'machine_categories'], true))
+        // Техника (pivot) — вне скалярного гейта: у водителя она
+        // обязательна своей строкой формы. Фото удостоверения не
+        // обязательно нигде — ни в форме, ни для публикации.
+        ->reject(fn (string $field): bool => $field === 'machine_categories')
         ->sort()
         ->values()
         ->all();

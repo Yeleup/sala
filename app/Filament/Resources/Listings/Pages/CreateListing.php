@@ -16,11 +16,17 @@ class CreateListing extends CreateRecord
     protected static string $resource = ListingResource::class;
 
     /**
+     * The «Документ проверен» toggle is no column: a new listing has a
+     * verified document only when the operator attaches the snapshot
+     * with the tick, which the form stores after the record is written.
+     *
      * @param  array<string, mixed>  $data
      * @return array<string, mixed>
      */
     protected function mutateFormDataBeforeCreate(array $data): array
     {
+        unset($data['document_verified']);
+
         $data['origin'] = ListingOrigin::Operator;
         $data['created_by_user_id'] = auth()->id();
 

@@ -86,7 +86,7 @@
             @if ($listing->travels_to_other_cities === true)
                 <p class="listing-line">Готов выезжать в другие города</p>
             @endif
-            @if ($listing->document_verified_at)
+            @if ($listing->hasVerifiedDocument())
                 <div class="card-badge">✅ Документ проверен</div>
             @endif
         @endif

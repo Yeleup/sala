@@ -249,9 +249,9 @@ describe('виды объявлений в каталоге', function () {
 
     test('карточка водителя показывает стаж со слов и бейдж только у проверенного документа', function () {
         $contact = Contact::factory()->create();
-        Listing::factory()->driver()->published()->create([
-            'person_name' => 'Иван', 'experience_years' => 8, 'document_verified_at' => now(),
-        ]);
+        Listing::factory()->driver()->published()
+            ->has(ListingMedia::factory()->document(), 'media')
+            ->create(['person_name' => 'Иван', 'experience_years' => 8, 'document_verified_at' => now()]);
         $unverified = Listing::factory()->driver()->published()->create([
             'person_name' => 'Пётр', 'document_verified_at' => null,
         ]);
@@ -266,6 +266,39 @@ describe('виды объявлений в каталоге', function () {
         $this->get(catalogLinks()->listingUrl($contact, $unverified))
             ->assertOk()
             ->assertSee('Стаж 8 лет (со слов исполнителя)')
+            ->assertDontSee('Документ проверен');
+    });
+
+    test('отметка проверки без снимка удостоверения бейджа не даёт', function () {
+        // Бейдж говорит о проверенном снимке: отметка, оставшаяся у
+        // объявления без документа, не подтверждает ничего — ни в каталоге,
+        // ни на странице объявления.
+        $contact = Contact::factory()->create();
+        $driver = Listing::factory()->driver()->published()->create(['document_verified_at' => now()]);
+
+        $this->get(catalogLinks()->catalogUrl($contact).'&kind=driver')
+            ->assertOk()
+            ->assertSee('Серик')
+            ->assertDontSee('Документ проверен');
+
+        $this->get(catalogLinks()->listingUrl($contact, $driver))
+            ->assertOk()
+            ->assertDontSee('Документ проверен');
+    });
+
+    test('снимок без отметки оператора бейджа не даёт', function () {
+        $contact = Contact::factory()->create();
+        $driver = Listing::factory()->driver()->published()
+            ->has(ListingMedia::factory()->document(), 'media')
+            ->create(['document_verified_at' => null]);
+
+        $this->get(catalogLinks()->catalogUrl($contact).'&kind=driver')
+            ->assertOk()
+            ->assertSee('Серик')
+            ->assertDontSee('Документ проверен');
+
+        $this->get(catalogLinks()->listingUrl($contact, $driver))
+            ->assertOk()
             ->assertDontSee('Документ проверен');
     });
 
@@ -285,7 +318,9 @@ describe('виды объявлений в каталоге', function () {
 
     test('страница объявления водителя: удостоверение, стаж, готовность выезжать и бейдж', function () {
         $contact = Contact::factory()->create();
-        $driver = Listing::factory()->driver()->published()->create(['document_verified_at' => now()]);
+        $driver = Listing::factory()->driver()->published()
+            ->has(ListingMedia::factory()->document(), 'media')
+            ->create(['document_verified_at' => now()]);
         $driver->machineCategories()->attach(categoryNamed('Экскаватор')->id);
 
         $this->get(catalogLinks()->listingUrl($contact, $driver))

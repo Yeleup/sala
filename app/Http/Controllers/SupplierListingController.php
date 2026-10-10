@@ -200,10 +200,9 @@ class SupplierListingController extends Controller
     }
 
     /**
-     * A newly uploaded licence photo replaces the stored one — the old
-     * file goes away via the ListingMedia deleted hook — and voids the
-     * operator's verification mark: it referred to the old shot. The new
-     * document lands on the non-public disk, same as in the chat flow.
+     * A newly uploaded licence photo replaces the stored one and voids the
+     * operator's verification mark: it referred to the old shot. The photo
+     * is optional — a form without one keeps whatever is stored.
      */
     private function applyDocumentReplacement(UpdateSupplierListingRequest $request, Listing $listing): void
     {
@@ -211,15 +210,7 @@ class SupplierListingController extends Controller
             return;
         }
 
-        $listing->documents()->get()->each(fn (ListingMedia $document) => $document->delete());
-
-        $listing->documents()->create([
-            'type' => ListingMediaType::Document,
-            'disk' => 'local',
-            'path' => $request->file('document')->store("listings/{$listing->id}/documents", 'local'),
-        ]);
-
-        $listing->fill(['document_verified_at' => null, 'document_verified_by' => null]);
+        $listing->replaceDocument($request->file('document'));
     }
 
     /**

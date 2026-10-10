@@ -54,17 +54,24 @@ class EditListing extends EditRecord
     /**
      * Ticking the toggle stamps who verified and when; a re-save with the
      * mark already standing must not refresh the trail. Unticking clears
-     * both columns — the mark is either a full record or nothing.
+     * both columns — the mark is either a full record or nothing. The mark
+     * refers to a snapshot: with no document there is nothing verified, so
+     * the tick does not count (the form also disables it then). A snapshot
+     * attached in the same save is already stored by now (ListingForm
+     * saves it with the relationships, before this runs), its mark set by
+     * the very operator who attached it.
      *
      * @param  array<string, mixed>  $data
      * @return array<string, mixed>
      */
     protected function mutateFormDataBeforeSave(array $data): array
     {
-        if (($data['document_verified'] ?? false) && blank($this->record->document_verified_at)) {
+        $verified = ($data['document_verified'] ?? false) && $this->record->documents()->exists();
+
+        if ($verified && blank($this->record->document_verified_at)) {
             $data['document_verified_at'] = now();
             $data['document_verified_by'] = auth()->id();
-        } elseif (! ($data['document_verified'] ?? false)) {
+        } elseif (! $verified) {
             $data['document_verified_at'] = null;
             $data['document_verified_by'] = null;
         }

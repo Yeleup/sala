@@ -1574,17 +1574,46 @@ test('кнопка «Да/Нет» водителя пишет булеву го
     'текст «нет»' => [new InboundMessage(text: 'нет'), false],
 ]);
 
-test('водителю со всеми полями, но без документа, бот шлёт просьбу о фото, а не сводку с отправкой', function () {
+test('сводка водителя без документа сразу несёт «Да, отправить» и необязательную просьбу о фото удостоверения', function () {
+    // Фото удостоверения не обязательно: сводка не ждёт снимка, а просит
+    // его по желанию — вместо строки «Фотографий пока нет»: следующее фото
+    // считается документом, и вторая просьба о фото рядом ей бы противоречила.
     ListingExtractionAgent::fake([driverExtraction()]);   // всё заполнено
     $session = collectorSession(['kind' => 'driver']);
     fakeCollectorMessenger()->shouldReceive('sendButtons')->once()
-        ->withArgs(fn ($to, string $text, array $buttons) => str_contains($text, 'фото удостоверения')
-            && array_column($buttons, 'id') === [SupplierListingCollector::BUTTON_EDIT, SupplierListingCollector::BUTTON_MENU]);
+        ->withArgs(fn ($to, string $text, array $buttons) => str_contains($text, 'По желанию пришлите фото удостоверения')
+            && str_contains($text, 'отметка «Документ проверен»')
+            && str_contains($text, 'Снимок увидит только оператор')
+            && ! str_contains($text, 'Фотографий пока нет')
+            && array_column($buttons, 'id') === [SupplierListingCollector::BUTTON_SUBMIT, SupplierListingCollector::BUTTON_EDIT, SupplierListingCollector::BUTTON_MENU]);
 
     app(SupplierListingCollector::class)->resume($session, driverAiNode(), new InboundMessage(text: 'Иван, экскаватор, 8 лет, Алматы, выезжаю'));
 
-    expect($session->fresh()->state['awaiting_document'])->toBeTrue()
-        ->and($session->fresh()->state['attempts'])->toBe(0);   // просьба бесплатна
+    expect($session->fresh()->state)->toMatchArray([
+        'phase' => 'confirming',
+        'awaiting_document' => true,
+        'attempts' => 0,   // просьба бесплатна
+    ]);
+});
+
+test('водитель без документа проходит от рассказа до модерации: сводка с отправкой, затем «Да, отправить»', function () {
+    ListingExtractionAgent::fake([driverExtraction()]);
+    $session = collectorSession(['kind' => 'driver']);
+    $messenger = fakeCollectorMessenger();
+    $messenger->shouldReceive('sendButtons')->once()
+        ->withArgs(fn ($to, string $text, array $buttons) => in_array(SupplierListingCollector::BUTTON_SUBMIT, array_column($buttons, 'id'), true));
+    $messenger->shouldReceive('sendText')->once()
+        ->withArgs(fn ($to, string $text) => $text === 'Готово! Объявление ушло на проверку. Как только модератор решит — сразу напишем.');
+
+    app(SupplierListingCollector::class)->resume($session, driverAiNode(), new InboundMessage(text: 'Ерлан, экскаватор, 8 лет, Шымкент, не выезжаю'));
+    $outcome = app(SupplierListingCollector::class)->resume($session->fresh(), driverAiNode(),
+        new InboundMessage(text: 'Да, отправить', replyId: SupplierListingCollector::BUTTON_SUBMIT));
+
+    expect($outcome)->toBe(AiOutcome::Completed)
+        ->and(Listing::sole())
+        ->status->toBe(ListingStatus::PendingModeration)
+        ->kind->toBe(ListingKind::Driver)
+        ->and(Listing::sole()->documents()->count())->toBe(0);
 });
 
 test('фотография в ответ на просьбу о документе становится непубличным документом', function () {
@@ -1593,15 +1622,36 @@ test('фотография в ответ на просьбу о документ
     ListingExtractionAgent::fake([driverExtraction()]);
     $session = collectorSession(['kind' => 'driver', 'phase' => 'confirming', 'awaiting_document' => true,
         'fields' => driverExtraction(), 'draft_id' => ($draft = driverDraft())->id]);
+    // Документ есть — просьба о нём уходит из сводки, а её место снова
+    // занимает строка о фотографиях объявления.
     fakeCollectorMessenger()->shouldReceive('sendButtons')->once()
-        ->withArgs(fn ($to, $text, array $buttons) => count($buttons) === 3);   // полная сводка: документ есть
+        ->withArgs(fn ($to, string $text, array $buttons) => count($buttons) === 3
+            && ! str_contains($text, 'фото удостоверения')
+            && str_contains($text, 'Фотографий пока нет'));
 
     app(SupplierListingCollector::class)->resume($session, driverAiNode(),
         new InboundMessage(mediaId: 'wamid-doc', mediaType: ListingMediaType::Photo));
 
     expect($draft->fresh()->documents()->count())->toBe(1)
         ->and($draft->fresh()->photos()->count())->toBe(0)
-        ->and($draft->fresh()->documents()->first()->disk)->toBe('local');
+        ->and($draft->fresh()->documents()->first()->disk)->toBe('local')
+        ->and($session->fresh()->state)->toMatchArray(['awaiting_document' => false, 'attempts' => 0]);
+    Storage::disk('local')->assertExists($draft->fresh()->documents()->first()->path);
+});
+
+test('короткий ответ на сводку водителя читается против необязательной просьбы о документе', function () {
+    // «Без фото» под сводкой — отказ от снимка, а не от объявления: модель
+    // видит, что бот предлагал удостоверение по желанию, при «Да, отправить».
+    ListingExtractionAgent::fake([driverExtraction()]);
+    $draft = driverDraft();
+    $session = collectorSession(['kind' => 'driver', 'phase' => 'confirming', 'awaiting_document' => true,
+        'fields' => driverExtraction(), 'draft_id' => $draft->id]);
+    fakeCollectorMessenger()->shouldReceive('sendButtons')->once();   // сводка снова
+
+    app(SupplierListingCollector::class)->resume($session, driverAiNode(), new InboundMessage(text: 'без фото'));
+
+    ListingExtractionAgent::assertPrompted(fn ($prompt): bool => $prompt->contains('кнопками «Да, отправить» и «Исправить»')
+        && $prompt->contains('предложил по желанию прислать фото удостоверения'));
 });
 
 test('фото на уточняющем крюке остаётся обычным снимком, а не документом', function () {
@@ -1648,25 +1698,27 @@ test('документ водителя не попадает во вложен�
     ListingExtractionAgent::assertPrompted(fn ($prompt): bool => $prompt->attachments->count() === 0);
 });
 
-test('набранное руками «Да, отправить» без документа не отправляет водителя на модерацию', function () {
-    // Кнопки отправки в сообщении-просьбе нет, но её заголовок можно
-    // набрать текстом: бот повторяет сводку-просьбу, а не шлёт на проверку.
+test('«Да, отправить» под сводкой с просьбой о документе отправляет водителя без снимка на модерацию', function (InboundMessage $press) {
+    // Снимок необязателен: и нажатие, и набранный заголовок кнопки — та же
+    // отправка, что у любого объявления. Модель не вызывается.
     ListingExtractionAgent::fake()->preventStrayPrompts();
     $draft = driverDraft();
     $session = collectorSession(['kind' => 'driver', 'phase' => 'confirming', 'awaiting_document' => true,
         'fields' => driverExtraction(), 'draft_id' => $draft->id]);
 
-    fakeCollectorMessenger()->shouldReceive('sendButtons')->once()
-        ->withArgs(fn ($to, string $text, array $buttons) => str_contains($text, 'фото удостоверения')
-            && count($buttons) === 2);
+    fakeCollectorMessenger()->shouldReceive('sendText')->once()
+        ->withArgs(fn ($to, string $text) => $text === 'Готово! Объявление ушло на проверку. Как только модератор решит — сразу напишем.');
 
-    $outcome = app(SupplierListingCollector::class)
-        ->resume($session, driverAiNode(), new InboundMessage(text: 'Да, отправить'));
+    $outcome = app(SupplierListingCollector::class)->resume($session, driverAiNode(), $press);
 
-    expect($outcome)->toBe(AiOutcome::InProgress)
-        ->and($draft->fresh()->status)->toBe(ListingStatus::Draft);
+    expect($outcome)->toBe(AiOutcome::Completed)
+        ->and($draft->fresh()->status)->toBe(ListingStatus::PendingModeration)
+        ->and($draft->fresh()->documents()->count())->toBe(0);
     ListingExtractionAgent::assertNeverPrompted();
-});
+})->with([
+    'кнопка' => [new InboundMessage(text: 'Да, отправить', replyId: SupplierListingCollector::BUTTON_SUBMIT)],
+    'набранное руками' => [new InboundMessage(text: 'Да, отправить')],
+]);
 
 test('фолбэк-сводка водителя собирается из полей анкеты', function () {
     // Повтор сводки после вопроса про сервис — удобный способ дернуть

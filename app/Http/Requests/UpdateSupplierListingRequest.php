@@ -110,8 +110,8 @@ class UpdateSupplierListingRequest extends FormRequest
                     'keep_new_machinery.*' => ['integer', Rule::in($this->ownNewMachineryIds())],
                     'unlisted_machinery' => ['nullable', 'string', 'max:120'],
                     'description' => ['nullable', 'string', 'max:2000'],
-                    // Required only while the listing has no stored document —
-                    // decided in after(), where the DB is the source of truth.
+                    // Optional: the listing is submitted without a licence
+                    // photo too; one the operator checks earns the badge.
                     'document' => ['nullable', 'file', 'image', 'mimes:jpg,jpeg,png,webp', 'max:'.ListingMedia::MAX_PHOTO_KILOBYTES],
                 ],
             },
@@ -154,7 +154,6 @@ class UpdateSupplierListingRequest extends FormRequest
     {
         return [
             fn (Validator $validator) => $this->validatePhotoCap($validator),
-            fn (Validator $validator) => $this->validateDocumentPresence($validator),
         ];
     }
 
@@ -180,29 +179,6 @@ class UpdateSupplierListingRequest extends FormRequest
                 'photos',
                 'У объявления может быть не более '.Listing::MAX_PHOTOS.' фотографий.',
             );
-        }
-    }
-
-    /**
-     * A driver's licence photo is required until the listing carries one:
-     * the stored media rows are checked rather than a form flag, so a
-     * tampered request cannot talk its way past the document.
-     */
-    private function validateDocumentPresence(Validator $validator): void
-    {
-        if (! $this->kind()->requiresDocument()) {
-            return;
-        }
-
-        if ($this->hasFile('document') || $validator->errors()->has('document')) {
-            return;
-        }
-
-        /** @var Listing $listing */
-        $listing = $this->route('listing');
-
-        if ($listing->documents()->doesntExist()) {
-            $validator->errors()->add('document', 'Прикрепите фото удостоверения — без него объявление не будет опубликовано.');
         }
     }
 
